@@ -6,6 +6,7 @@ import transformers
 from datasets import load_dataset, load_metric
 import random, copy
 import torch
+import evaluate
 # torch.autograd.set_detect_anomaly(True)
 
 from transformers.models.bert import modeling_bert as berts
@@ -26,7 +27,7 @@ task_to_keys = {
     "wnli": ("sentence1", "sentence2"),
 }
 
-task_to_epochs = {
+task_to_epochs = { 
     "cola": 100,
     "mnli": 4,
     "mrpc": 200,
@@ -39,9 +40,9 @@ task_to_epochs = {
     "bert": 200,
 }
 
-task_to_batch_size = {
+task_to_batch_size = { #TODO: changed mnli from 4 to 2
     "cola": 64,
-    "mnli": 4,
+    "mnli": 2,
     "mrpc": 32,
     "qnli": 4,
     "qqp":  16,
@@ -379,9 +380,9 @@ class Trainer:
         model.eval()
         
         if self.subset == 'bert':
-            metric = load_metric('glue', 'cola')
+            metric = evaluate.load('glue', 'cola')
         else:
-            metric = load_metric('glue', self.subset)
+            metric = evaluate.load('glue', self.subset)
         
         loader = self.valid_loader
         if split == 'train':
@@ -478,7 +479,7 @@ if __name__ == '__main__':
     trainer = Trainer(
         subset='mnli'
     )
-    trainer.load('./saves/trainer/kd_trainer/checkpoint_mnli_ep48.pth')
+    trainer.load('./saves/trainer/kd_trainer/checkpoint_mnli_ep48.pth') #<<< TODO: it was this but I think it should be checkpoint_mnli.pth
     # trainer.load('./saves/trainer/kd_trainer/checkpoint_mnli_ep5_sinkhorn.pth')
     # trainer.load_state_from_base()
     # trainer.load('./saves/trainer/kd_trainer/checkpoint_mnli.pth')
