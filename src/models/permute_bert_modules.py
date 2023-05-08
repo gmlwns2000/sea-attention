@@ -407,7 +407,7 @@ class BertSelfAttention(nn.Module):
 
         if self.running_type=="DenseAttention":
             d_k=config.hidden_size//config.num_attention_heads
-            self.dense_attn = DenseAttention(config.max_position_embeddings, d_k
+            self.dense_attn = DenseAttention(config.max_position_embeddings, d_k)
         elif self.running_type=="FactrDenseAttention":
             d_k=config.hidden_size//config.num_attention_heads # TODO
             self.fdense_attn = FactorizedDenseAttention(config.max_position_embeddings, d_k, 4)
