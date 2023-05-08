@@ -154,7 +154,7 @@ class Trainer:
         self.amp_enabled = True
         self.device = 0
         
-        self.batch_size = task_to_batch_size[self.subset] * 2
+        self.batch_size = task_to_batch_size[self.subset] #* 2
         
         self.epochs = 100
         self.lr = 1e-5

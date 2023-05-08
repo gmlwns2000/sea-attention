@@ -12,6 +12,8 @@ from transformers.models.bert.configuration_bert import BertConfig
 
 from .vae import *
 
+#TODO : permute_bert_modules에서 Trainer input value hard coding된 것들 check
+
 class LearnablePermutation(nn.Module):
     def __init__(self, hidden_size=768, dropout=0.1, outch=256):
         super().__init__()
@@ -403,7 +405,11 @@ class BertSelfAttention(nn.Module):
         ### synthesizer
         self.synthesizer_enabled = False
 
-        self.running_type=None # TODO!! have to get from trainer <<<< hardcoded
+        self.running_type="head_permutation" # TODO!! have to get from trainer <<<< hardcoded
+        
+        # print("RUNNING TYPE::: ",self.running_type)
+        # if self.running_type=="head_permutation":
+        #     print("RUNNING TYPE IS head_permutation :: bert_modules")
 
         if self.running_type=="DenseAttention":
             d_k=config.hidden_size//config.num_attention_heads
@@ -416,7 +422,8 @@ class BertSelfAttention(nn.Module):
         elif self.running_type=="FactrRandomAttention":
             self.frandom_attn = FactorizedRandomAttention(1, config.num_attention_heads, 4, config.max_position_embeddings)
         else:
-            raise Exception(f"unknown type, {self.running_type}")
+            # raise Exception(f"unknown type, {self.running_type}")
+            print(f"Not using synthesizer, rather using [{self.running_type}]")
 
         self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
         self.position_embedding_type = position_embedding_type or getattr(
