@@ -15,6 +15,7 @@
 # limitations under the License.
 """PyTorch BERT model."""
 
+from turtle import hideturtle
 import torch.nn.functional as F
 
 import math
@@ -275,25 +276,34 @@ class BertSelfAttention(nn.Module):
             # nb_features = 256,
             causal=False
         )
-        self.perlin_performer_out = nn.Linear(self.attention_head_size, self.attention_head_size)
-        self.perlin_attention_predictor = nn.Sequential(
-            # nn.Dropout(0.1),
+        self.perlin_performer_out = nn.Sequential(
+            nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size*2),
-            # nn.LayerNorm(config.hidden_size*2),
-            nn.ReLU(),
-            # nn.Dropout(0.1),
+            nn.LayerNorm(config.hidden_size*2),
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(config.hidden_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            nn.ReLU(),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
+            nn.Linear(config.hidden_size, config.hidden_size),
+        )
+        self.perlin_attention_predictor = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size*2),
+            nn.LayerNorm(config.hidden_size*2),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(config.hidden_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
             nn.Linear(config.hidden_size, self.num_attention_heads * 128),
         )
         self.perlin_attention_scaler = nn.Sequential(
-            # nn.Dropout(0.1),
+            nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
-            nn.ReLU(),
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size, config.hidden_size),
-            # nn.ReLU(),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
+            nn.Dropout(0.1),
             nn.Linear(config.hidden_size, self.num_attention_heads),
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
@@ -315,6 +325,11 @@ class BertSelfAttention(nn.Module):
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[torch.Tensor]:
+        if self.training and self.perlin_layerwise:
+            hidden_states_std, hidden_states_mean = torch.std_mean(hidden_states.view(-1))
+            noise = torch.randn_like(hidden_states) * hidden_states_std * 0.1
+            hidden_states = hidden_states + noise
+        
         mixed_query_layer = self.query(hidden_states)
 
         # If this is instantiated as a cross-attention module, the keys
@@ -429,18 +444,23 @@ class BertSelfAttention(nn.Module):
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             # in layerwise, train perlin attention predictor
-            loss = F.kl_div(
-                F.log_softmax((estimated_attention_score - attention_mask).view(-1, T), dim=-1),
-                F.softmax((attention_scores_truth - attention_mask).view(-1, T), dim=-1),
-                reduction='batchmean'
-            ) * 2
+            _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
+            # loss = F.kl_div(
+            #     F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
+            #     F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
+            #     reduction='batchmean'
+            # ) * 2
+            loss = F.mse_loss(
+                estimated_attention_score.view(-1, T) * _amask,
+                attention_scores_truth.view(-1, T) * _amask,
+            ) * 4
             # (N, H, T, K)
             
             k = min(max(16, int(T*0.01)), T)
-            k_flatten = False
+            k_flatten = True
             if not k_flatten:
                 value, indices = torch.topk(
-                    estimated_attention_probs, 
+                    estimated_attention_probs, # estimation gradient is cut here
                     k=k, dim=-1
                 )
                 # (N, H, T, T)
@@ -451,7 +471,20 @@ class BertSelfAttention(nn.Module):
                     -1, indices, partial_attention_scores_gathered
                 )
             else:
-                raise Exception()
+                # (N, H, T, T)
+                partial_attention_scores = attention_scores_truth
+                N, H, T, T = partial_attention_scores.shape
+                partial_attention_scores = partial_attention_scores.view(N, H, T*T)
+                value, indices = torch.topk(
+                    estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
+                    k=k*T, dim=-1
+                )
+                partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
+                partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
+                partial_attention_scores.scatter_(
+                    -1, indices, partial_attention_scores_gathered
+                )
+                partial_attention_scores = partial_attention_scores.view(N, H, T, T)
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
@@ -461,12 +494,16 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
-            # partial_context_layer = partial_context_layer + performer_context_layer
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
             partial_context_layer = partial_context_layer.view(new_context_layer_shape)
-            # partial_context_layer = self.perlin_norm(partial_context_layer)
+            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            
+            partial_context_layer = self.perlin_performer_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))
+            partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
             loss += F.mse_loss(context_layer_truth, partial_context_layer)

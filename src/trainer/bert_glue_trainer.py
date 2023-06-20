@@ -27,12 +27,12 @@ task_to_keys = {
 
 task_to_epochs = {
     "cola": 100,
-    "mnli": 4,
+    "mnli": 40,
     "mrpc": 200,
-    "qnli": 3,
-    "qqp":  4,
+    "qnli": 30,
+    "qqp":  40,
     "rte":  200,
-    "sst2": 15,
+    "sst2": 150,
     "stsb": 200,
     "wnli": 200,
     "bert": 200,
@@ -167,7 +167,10 @@ class Trainer:
         trainer_name = 'bert_glue_trainer',
         running_type = None,
         using_kd = True,
+        using_loss = True,
         eval_steps = 1500,
+        lr = 1e-5,
+        epochs = 100
     ) -> None:
         seed()
         
@@ -176,15 +179,16 @@ class Trainer:
         self.subset = subset
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
+        self.using_loss = using_loss
         
         self.amp_enabled = amp_enabled
         self.device = 0
         
-        self.batch_size = task_to_batch_size[self.subset] * 2
+        self.batch_size = task_to_batch_size[self.subset]
         
         self.eval_steps = eval_steps
-        self.epochs = 100
-        self.lr = 1e-5
+        self.epochs = epochs
+        self.lr = lr
         self.wd = 1e-2
         
         self.base_model, self.tokenizer = get_base_model(subset)
@@ -274,9 +278,8 @@ class Trainer:
             with torch.no_grad():
                 output_base = self.base_model(**batch)
         
-        if not self.subset == 'bert':
+        if not self.subset == 'bert' and self.using_loss:
             loss_model = output.loss
-            # loss_model = 0.0
         else:
             loss_model = 0.0
         
@@ -296,8 +299,8 @@ class Trainer:
         
         self.scaler.scale(loss).backward()
         
-        self.scaler.unscale_(self.optimizer)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        # self.scaler.unscale_(self.optimizer)
+        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
         self.scaler.step(self.optimizer)
         self.scaler.update()
