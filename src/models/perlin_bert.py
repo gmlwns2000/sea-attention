@@ -275,15 +275,16 @@ class BertSelfAttention(nn.Module):
             # nb_features = 256,
             causal=False
         )
+        self.perlin_performer_out = nn.Linear(self.attention_head_size, self.attention_head_size)
         self.perlin_attention_predictor = nn.Sequential(
             # nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size*2),
-            nn.LayerNorm(config.hidden_size*2),
-            nn.GELU(),
+            # nn.LayerNorm(config.hidden_size*2),
+            nn.ReLU(),
             # nn.Dropout(0.1),
             nn.Linear(config.hidden_size*2, config.hidden_size),
-            nn.LayerNorm(config.hidden_size),
-            nn.GELU(),
+            # nn.LayerNorm(config.hidden_size),
+            nn.ReLU(),
             nn.Linear(config.hidden_size, self.num_attention_heads * 128),
         )
         self.perlin_attention_scaler = nn.Sequential(
@@ -297,7 +298,7 @@ class BertSelfAttention(nn.Module):
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
         self.last_loss = None
-        self.perlin_layerwise = True
+        self.perlin_layerwise = False
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -429,39 +430,38 @@ class BertSelfAttention(nn.Module):
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             # in layerwise, train perlin attention predictor
             loss = F.kl_div(
-                F.log_softmax(estimated_attention_score.view(-1, T), dim=-1),
-                F.softmax(attention_scores_truth.view(-1, T), dim=-1),
+                F.log_softmax((estimated_attention_score - attention_mask).view(-1, T), dim=-1),
+                F.softmax((attention_scores_truth - attention_mask).view(-1, T), dim=-1),
                 reduction='batchmean'
             ) * 2
-            # print(q[0,0,0], k[0,0,0], v[0,0,0], performer_context_layer[0,0,0], estimated_attention_score[0,0])
-            # input()
             # (N, H, T, K)
-            k = min(max(7, int(T*0.01)), T)
-            value, indices = torch.topk(
-                estimated_attention_probs, 
-                k=k, dim=-1
-            )
-            # (N, H, T, T)
-            partial_attention_scores = attention_scores_truth
-            partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-            partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
-            partial_attention_scores.scatter_(
-                -1, indices, partial_attention_scores_gathered
-            )
+            
+            k = min(max(16, int(T*0.01)), T)
+            k_flatten = False
+            if not k_flatten:
+                value, indices = torch.topk(
+                    estimated_attention_probs, 
+                    k=k, dim=-1
+                )
+                # (N, H, T, T)
+                partial_attention_scores = attention_scores_truth
+                partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
+                partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
+                partial_attention_scores.scatter_(
+                    -1, indices, partial_attention_scores_gathered
+                )
+            else:
+                raise Exception()
+            
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
             estimated_scale = self.perlin_attention_scaler(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
-            # partial_attention_probs = torch.softmax(partial_attention_scores, -1)
-            # partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
-            exp = torch.exp(partial_attention_scores - torch.max(partial_attention_scores, dim=-1, keepdim=True)[0])
-            partial_attention_probs = exp / (torch.sum(exp, dim=-1, keepdim=True))
-            # partial_attention_probs = exp / (torch.sum(exp, dim=-1, keepdim=True) + torch.sigmoid(estimated_scale))
-            # print(estimated_scale[0])
-            # input()
+            partial_attention_probs = torch.softmax(partial_attention_scores, -1)
+            partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
-            partial_context_layer = partial_context_layer * torch.sigmoid(estimated_scale)
+            # partial_context_layer = partial_context_layer + performer_context_layer
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)

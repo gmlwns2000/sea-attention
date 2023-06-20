@@ -275,8 +275,8 @@ class Trainer:
                 output_base = self.base_model(**batch)
         
         if not self.subset == 'bert':
-            # loss_model = output.loss
-            loss_model = 0.0
+            loss_model = output.loss
+            # loss_model = 0.0
         else:
             loss_model = 0.0
         
