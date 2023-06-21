@@ -531,7 +531,7 @@ class BertSelfAttention(nn.Module):
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':
-            pass
+            self.last_loss = 0
         else:
             raise Exception(self.perlin_mode)
 

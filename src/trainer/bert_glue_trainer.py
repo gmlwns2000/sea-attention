@@ -341,7 +341,6 @@ class Trainer:
                 )
                 
                 if ((istep+1) % self.eval_steps) == 0:
-                # if ((istep+1) % 500) == 0:
                     self.evaluate()
                     self.save()
                     self.model.train()

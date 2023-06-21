@@ -16,7 +16,7 @@ class Trainer(BaseTrainer):
             model_cls=perlin.BertForSequenceClassification,
             amp_enabled=False,
             trainer_name='perlin_trainer',
-            using_kd=(not PERLIN_LAYERWISE) and (PERLIN_MODE != 'performer'),
+            using_kd=(not PERLIN_LAYERWISE) and (PERLIN_MODE != 'performer_'),
             using_loss=not PERLIN_LAYERWISE,
             eval_steps=2000,
             lr = 1e-4,
