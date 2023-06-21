@@ -2,7 +2,8 @@ from .bert_glue_trainer import Trainer as BaseTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
 
-PERLIN_LAYERWISE = True
+PERLIN_LAYERWISE = False
+PERLIN_MODE = 'performer'
 
 task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
 
@@ -15,12 +16,16 @@ class Trainer(BaseTrainer):
             model_cls=perlin.BertForSequenceClassification,
             amp_enabled=False,
             trainer_name='perlin_trainer',
-            using_kd=not PERLIN_LAYERWISE,
+            using_kd=(not PERLIN_LAYERWISE) and (PERLIN_MODE != 'performer'),
             using_loss=not PERLIN_LAYERWISE,
             eval_steps=2000,
             lr = 1e-4,
-            epochs = 200
+            epochs = 20
         )
+        
+        for module in self.model.modules():
+            if isinstance(module, perlin.BertSelfAttention):
+                module.perlin_mode = PERLIN_MODE
         
         if PERLIN_LAYERWISE:
             for module in self.model.modules():
