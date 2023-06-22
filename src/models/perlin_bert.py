@@ -456,8 +456,8 @@ class BertSelfAttention(nn.Module):
             ) * 4
             # (N, H, T, K)
             
-            k = min(max(16, int(T*0.01)), T)
-            k_flatten = True
+            k = min(max(7, int(T*0.01)), T * 0.5)
+            k_flatten = False
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here

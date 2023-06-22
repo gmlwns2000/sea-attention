@@ -3,7 +3,7 @@ from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
 
 PERLIN_LAYERWISE = False
-PERLIN_MODE = 'performer'
+PERLIN_MODE = 'perlin'
 
 task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
 
