@@ -9,6 +9,7 @@ import random, copy
 import torch
 
 from transformers.models.bert import modeling_bert as berts
+from ..models import perlin_bert as plberts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
@@ -408,6 +409,35 @@ class Trainer:
         except Exception as ex:
             print('error while load', ex)
     
+    def debug_plot_perlim(self):
+        os.makedirs('./saves/trainer/bert_glue_trainer/bertM/', exist_ok=True)
+        os.makedirs('./saves/trainer/bert_glue_trainer/perlimM/', exist_ok=True)
+        idx = 0
+        idx_attn = 0
+        for module in self.model.modules():
+            if isinstance(module, plberts.BertSelfAttention):
+                if module.bert_attention_probs is not None:
+                    # breakpoint()
+                    img = module.bert_attention_probs[0, 0, :, :] # only the first layer's first head??
+                    img = img.detach().cpu().numpy()
+                    
+                    idx += 1
+                    
+                    plt.clf()
+                    plt.imshow(img)
+                    plt.colorbar()
+                    plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{idx}.png', dpi=160)
+                    
+                if  module.perlin_attention_probs is not None:       
+                    img = module.perlin_attention_probs[0, 0, :, :]
+                    img = img.detach().cpu().numpy()
+                    idx_attn += 1
+                    
+                    plt.clf()
+                    plt.imshow(img)
+                    plt.colorbar()
+                    plt.savefig(f'./saves/trainer/bert_glue_trainer/perlimM/attn_{idx}.png', dpi=160)
+    
     def main(self):
         self.epoch = 0
         self.step = 0
@@ -416,6 +446,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
+            self.debug_plot_perlim()
             self.evaluate(split='train')
             self.save()
 

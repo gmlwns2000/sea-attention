@@ -309,6 +309,9 @@ class BertSelfAttention(nn.Module):
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
         self.last_loss = None
         self.perlin_layerwise = False
+        
+        self.bert_attention_probs=None
+        self.perlin_attention_probs=None
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -413,19 +416,26 @@ class BertSelfAttention(nn.Module):
 
         context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(new_context_layer_shape)
+        context_layer = context_layer.view(new_context_layer_shape) # [16, 203, 768]
+        
+        # for visualizing bert attention_probs
+        self.bert_attention_probs=attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+        # breakpoint()
         
         # if perlin, overwrite attention_probs, context_layer
         if self.perlin_mode == 'perlin':
+            #breakpoint()
             attention_scores_truth = attention_scores
             attention_probs_truth = attention_probs
             context_layer_truth = context_layer
             
             q = query_layer
             k = key_layer
-            v = value_layer
+            v = value_layer # [16, 12, 203, 64]
+            #breakpoint()
             N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # [16, 12, 203, 64]*[16, 1, 203, 1] = [16, 12, 203, 64]   # ?? 
+            #breakpoint()
             if self.perlin_layerwise:
                 q = q.detach()
                 k = k.detach()
@@ -434,17 +444,23 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            performer_context_layer = self.perlin_performer(q, k, v)
-            performer_value = torch.cat([performer_context_layer, v], dim=-1)
-            N, H, T, HID = performer_value.shape
+            performer_context_layer = self.perlin_performer(q, k, v) # [16, 12, 203, 64]    # ??
+            performer_value = torch.cat([performer_context_layer, v], dim=-1) # [16, 12, 203, 128]
+            N, H, T, HID = performer_value.shape # [16, 12, 203, 128]
+            #breakpoint()
             # (N, H, T, P)
             estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
-            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
-            estimated_attention_score = estimated_attention_score + attention_mask
-            estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+                .view(N, T, H, -1).permute(0, 2, 1, 3) # [16, 203, 1536] -> [16, 12, 203, 128]
+            #breakpoint()
+            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear') # [16, 12, 203, 203]
+            #breakpoint()
+            estimated_attention_score = estimated_attention_score + attention_mask # [16, 12, 203, 203] + [16, 1, 1, 203] -> [16, 12, 203, 203] # ??_attention_mask
+            #breakpoint()
+            estimated_attention_probs = torch.softmax(estimated_attention_score, -1) # [16, 12, 203, 203]
+            #breakpoint()
             # in layerwise, train perlin attention predictor
-            _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
+            _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T) # [38976, 203]
+            #breakpoint()
             # loss = F.kl_div(
             #     F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
             #     F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
@@ -453,8 +469,9 @@ class BertSelfAttention(nn.Module):
             loss = F.mse_loss(
                 estimated_attention_score.view(-1, T) * _amask,
                 attention_scores_truth.view(-1, T) * _amask,
-            ) * 4
+            ) * 4 # 3.2676
             # (N, H, T, K)
+            #breakpoint()
             
             k = min(max(7, int(T*0.01)), T * 0.5)
             k_flatten = False
@@ -472,48 +489,79 @@ class BertSelfAttention(nn.Module):
                 )
             else:
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_truth
+                #breakpoint()
+                partial_attention_scores = attention_scores_truth # [16, 12, 203, 203]
+                #breakpoint()
                 N, H, T, T = partial_attention_scores.shape
-                partial_attention_scores = partial_attention_scores.view(N, H, T*T)
+                partial_attention_scores = partial_attention_scores.view(N, H, T*T) # [16, 12, 41209]
+                #breakpoint()
                 value, indices = torch.topk(
                     estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
                     k=k*T, dim=-1
-                )
-                partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
+                ) # [16, 12, 3248] : k*T == 3248
+                #breakpoint()
+                partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices) # [16, 12, 3248]
+                #breakpoint()
+                partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000) # [16, 12, 41209]
+                #breakpoint()
                 partial_attention_scores.scatter_(
                     -1, indices, partial_attention_scores_gathered
-                )
-                partial_attention_scores = partial_attention_scores.view(N, H, T, T)
+                ) # ??
+                #breakpoint()
+                partial_attention_scores = partial_attention_scores.view(N, H, T, T) # [16, 12, 203, 203]
+                #breakpoint()
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
+            #breakpoint()
             estimated_scale = self.perlin_attention_scaler(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
+                .view(N, T, H, -1).permute(0, 2, 1, 3) # [16, 203, 12] \-> [16, 12, 203, 1] # ??
+            #breakpoint()
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
-            partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
+            #breakpoint()
+            partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale) # [16, 12, 203, 203]*[16, 12, 203, 1]=[16, 12, 203, 203]
+            #breakpoint()
             
-            partial_context_layer = torch.matmul(partial_attention_probs, v)
+            partial_context_layer = torch.matmul(partial_attention_probs, v) # [16, 12, 203, 203] m [16, 12, 203, 64] -> [16, 12, 203, 64]
+            #breakpoint()
 
-            partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
-            partial_context_layer = partial_context_layer.view(new_context_layer_shape)
-            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous() # [16, 203, 12, 64]
+            #breakpoint()
+            new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,) # [16, 203] + (768,) -> [16, 203, 768]
+            #breakpoint()
+            partial_context_layer = partial_context_layer.view(new_context_layer_shape) # [16, 203, 768]
+            #breakpoint()
+            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous() # [16, 203, 12, 64]
+            #breakpoint()
+            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,) # [16, 203, 768]
+            #breakpoint()
+            performer_context_layer = performer_context_layer.view(new_context_layer_shape) # [16, 203, 768]
+            #breakpoint()
             
-            partial_context_layer = self.perlin_performer_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))
-            partial_context_layer = self.perlin_norm(partial_context_layer)
+            partial_context_layer = self.perlin_performer_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1)) # [16, 203, 768]
+            #breakpoint()
+            partial_context_layer = self.perlin_norm(partial_context_layer) # [16, 203, 768]
+            #breakpoint()
             
             # in layerwise train only norm
             loss += F.mse_loss(context_layer_truth, partial_context_layer)
-            self.last_loss = loss
+            #breakpoint()
+            self.last_loss = loss # 4.3064
+            #breakpoint()
             
-            attention_probs = partial_attention_probs
-            context_layer = partial_context_layer
+            attention_probs = partial_attention_probs # [16, 12, 203, 203]
+            #breakpoint()
+            context_layer = partial_context_layer # [16, 203, 768]
+            #breakpoint()
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
+            #breakpoint()
+            
+            # for visualizing perlin attention_probs
+            self.perlin_attention_probs=attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+            # breakpoint()
+            
         elif self.perlin_mode == 'performer':
             q = query_layer
             k = key_layer
