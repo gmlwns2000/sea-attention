@@ -4,6 +4,9 @@ from .bert_glue_trainer import task_to_batch_size
 
 PERLIN_LAYERWISE = False
 PERLIN_MODE = 'perlin'#'performer'
+PERLIN_Q_R = 7
+PERLIN_K_R = 7
+PERLIN_V_R = 7
 
 task_to_batch_size['mnli'] = 4 if not PERLIN_LAYERWISE else 32 #16 32
 
@@ -31,6 +34,9 @@ class Trainer(BaseTrainer):
             for module in self.model.modules():
                 if isinstance(module, perlin.BertSelfAttention):
                     module.perlin_layerwise = True
+                    module.perlin_q_r = PERLIN_Q_R
+                    module.perlin_k_r = PERLIN_K_R
+                    module.perlin_v_r = PERLIN_V_R
             
             for name, param in self.model.named_parameters():
                 if 'perlin' in name:

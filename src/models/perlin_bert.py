@@ -310,8 +310,29 @@ class BertSelfAttention(nn.Module):
         self.last_loss = None
         self.perlin_layerwise = False
         
-        self.bert_attention_probs=None
-        self.perlin_attention_probs=None
+        # for bert & perlin attention_probs visualization
+        self.bert_attention_probs = None
+        self.perlin_attention_probs = None ### check for requires_grad !!!!
+        
+        # # BERT LoRA TODO r as hyperparameter
+        # # 'perlin' not in q, k, v -> requires_grad = False
+        # # q
+        # self.q_r= self.perlin_q_r # no perlin 학습되지 않아야 하니까?
+        # self.q_num_embeddings = self.num_embeddings # same for q, k, v ??
+        # self.q_embedding_dim = self.embedding_dim
+        # assert self.perlin_q_r >0
+        
+        # self.lora_A = nn.Parameter(self.weight.new_zeros((self.q_r, self.q_num_embeddings)))
+        # self.lora_B = nn.Parameter(self.weight.new_zeros((self.q_embedding_dim, self.q_r)))
+        
+        
+        
+        
+        # k
+        
+        
+        # v
+        
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -334,7 +355,7 @@ class BertSelfAttention(nn.Module):
             hidden_states = hidden_states + noise
         
         mixed_query_layer = self.query(hidden_states)
-
+        
         # If this is instantiated as a cross-attention module, the keys
         # and values come from an encoder; the attention mask needs to be
         # such that the encoder's padding tokens are not attended to.

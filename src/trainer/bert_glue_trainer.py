@@ -270,7 +270,9 @@ class Trainer:
         return optim_cls(params, **kwargs)
     
     def train_step(self, batch):
+        breakpoint()
         self.optimizer.zero_grad()
+        breakpoint()
         
         with torch.autocast('cuda', torch.float16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
@@ -278,11 +280,13 @@ class Trainer:
             output = self.model(**batch)
             with torch.no_grad():
                 output_base = self.base_model(**batch)
+        breakpoint()
         
         if not self.subset == 'bert' and self.using_loss:
             loss_model = output.loss
         else:
             loss_model = 0.0
+        breakpoint()
         
         loss_kd = 0
         if self.using_kd:
@@ -290,29 +294,40 @@ class Trainer:
                 loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
+        breakpoint()
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
             warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
+        breakpoint()
         
         loss = loss_model + loss_kd + loss_special
+        breakpoint()
         
         self.scaler.scale(loss).backward()
+        breakpoint()
         
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
         self.scaler.step(self.optimizer)
+        breakpoint()
         self.scaler.update()
+        breakpoint()
         
         self.loss = loss.item()
+        breakpoint()
         self.loss_details = {
             'loss': loss.item(), 
             'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
         }
+        breakpoint()
+        
+        # self.debug_plot_perlim()
+        
     
     def train_epoch(self):
         # self.model = torch.compile(self.model_unwrap)
@@ -325,14 +340,16 @@ class Trainer:
         smooth_loss_count = 0
         
         m = Metric()
-        
+        breakpoint()
         with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
             for istep, batch in enumerate(pbar):
                 batch = batch_to(batch, self.device)
                 self.train_step(batch)
+                breakpoint()
                 
                 smooth_loss_sum += self.loss
                 smooth_loss_count += 1
+                breakpoint()
                 pbar.set_description(
                     f'[{self.epoch+1}/{self.epochs}] '
                     f'({self.running_type}) ' if self.running_type is not None else ''
@@ -340,6 +357,7 @@ class Trainer:
                     f'Lsp:{m.update(self.loss_details["loss_sp"], "loss_sp"):.4f} '
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
+                breakpoint()
                 
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
@@ -347,24 +365,29 @@ class Trainer:
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
+                breakpoint()
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
             return {'accuracy': 0.0}
+        breakpoint()
         
         # seed()
         if model is None:
             model = self.model
         model.eval()
+        breakpoint()
         
         if self.subset == 'bert':
             metric = load_metric('glue', 'cola')
         else:
             metric = load_metric('glue', self.subset)
+        breakpoint()
         
         loader = self.valid_loader
         if split == 'train':
             loader = self.train_loader
+        breakpoint()
         for i, batch in enumerate(tqdm.tqdm(loader, desc=f'({self.subset}[{split}])', dynamic_ncols=True)):
             if i > max_step: break
 
@@ -379,9 +402,11 @@ class Trainer:
             if self.subset != 'stsb': 
                 predictions = torch.argmax(predictions, dim=-1)
             metric.add_batch(predictions=predictions, references=labels)
+        breakpoint()
         
         score = metric.compute()
         self.last_metric_score = score
+        breakpoint()
         if show_messages:
             print('metric score', score)
         return score
@@ -414,11 +439,19 @@ class Trainer:
         os.makedirs('./saves/trainer/bert_glue_trainer/perlimM/', exist_ok=True)
         idx = 0
         idx_attn = 0
+        layer_list = [] # check!
         for module in self.model.modules():
             if isinstance(module, plberts.BertSelfAttention):
                 if module.bert_attention_probs is not None:
-                    # breakpoint()
-                    img = module.bert_attention_probs[0, 0, :, :] # only the first layer's first head??
+                    layer_list.append(module.bert_attention_probs)
+        
+        layerwise_attention = torch.stack(layer_list,dim=1) # batch_size, layer, head, length, length
+        
+        # bert : input same as        
+        for i in range(self.batch_size): # check!~bert에서!!
+            for j in range(12): # hard coded head size!
+                for k in range(12): # hard coded head size!
+                    img = layerwise_attention[i, j, k, : , :] # batch_size meaning???
                     img = img.detach().cpu().numpy()
                     
                     idx += 1
@@ -426,17 +459,19 @@ class Trainer:
                     plt.clf()
                     plt.imshow(img)
                     plt.colorbar()
-                    plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{idx}.png', dpi=160)
-                    
-                if  module.perlin_attention_probs is not None:       
-                    img = module.perlin_attention_probs[0, 0, :, :]
-                    img = img.detach().cpu().numpy()
-                    idx_attn += 1
-                    
-                    plt.clf()
-                    plt.imshow(img)
-                    plt.colorbar()
-                    plt.savefig(f'./saves/trainer/bert_glue_trainer/perlimM/attn_{idx}.png', dpi=160)
+                    plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{i}_{j}_{k}_{idx}.png', dpi=160)
+                        
+                    if  module.perlin_attention_probs is not None:
+                        for i in range(self.batch_size):
+                            for j in range(12):           
+                                img = module.perlin_attention_probs[i, j, :, :]
+                                img = img.detach().cpu().numpy()
+                                idx_attn += 1
+                                
+                                plt.clf()
+                                plt.imshow(img)
+                                plt.colorbar()
+                                plt.savefig(f'./saves/trainer/bert_glue_trainer/perlimM/{i}_{j}_attn_{idx}.png', dpi=160)
     
     def main(self):
         self.epoch = 0
@@ -446,7 +481,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.debug_plot_perlim()
+            # self.debug_plot_perlim()
             self.evaluate(split='train')
             self.save()
 
