@@ -66,19 +66,25 @@ task_to_valid = {
 }
 
 def get_dataloader(subset, tokenizer, batch_size, split='train'):
+    breakpoint()
     if subset == 'bert':
         subset = "cola" #return dummy set
+    breakpoint()
     
-    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
+    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets') # glue, mnli, train
+    breakpoint()
     
     sentence1_key, sentence2_key = task_to_keys[subset]
+    breakpoint()
 
     def encode(examples):
         # Tokenize the texts
         args = (
             (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*args, padding=True, max_length=256, truncation=True)
+        ) # get examples containing 'premise', 'hypothesis', 'label', 'idx', 'labels'
+        # breakpoint()
+        result = tokenizer(*args, padding=True, max_length=256, truncation=True) # get result with 'input_ids', 'token_type', 'attention_mask'
+        # breakpoint()
         # result = tokenizer(*args, padding="max_length", max_length=512, truncation=True)
         # Map labels to IDs (not necessary for GLUE tasks)
         # if label_to_id is not None and "label" in examples:
@@ -86,17 +92,24 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
         return result
     
     if split.startswith('train'): #shuffle when train set
-        dataset = dataset.sort('label')
+        breakpoint()
+        dataset = dataset.sort('label') # sort data according to column
+        breakpoint()
         dataset = dataset.shuffle(seed=random.randint(0, 10000))
-    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=128)
-    dataset = dataset.map(encode, batched=True, batch_size=128)
+        breakpoint()
+    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=128) # added labels as key
+    breakpoint()
+    dataset = dataset.map(encode, batched=True, batch_size=128) # iterates with each batch_size(128) # 여기 batch_size는 그냥 map할 때만 쓰는 거지 실제 batch_size(4)와 무관하며 의미없지?
+    breakpoint() # how does dataset change?
     dataset.set_format(type='torch', columns=['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
+    breakpoint()
 
     dataloader = torch.utils.data.DataLoader(
-        dataset, 
-        batch_size=batch_size, 
+        dataset, # features: ['premise', 'hypothesis', 'label', 'idx', 'labels', 'input_ids', 'token_type_ids', 'attention_mask'], num_rows: 392702
+        batch_size=batch_size, # 4
         num_workers=0,
     )
+    breakpoint()
     return dataloader
 
 def get_base_model(dataset, only_tokenizer=False):
@@ -174,6 +187,7 @@ class Trainer:
         epochs = 100
     ) -> None:
         seed()
+        breakpoint()
         
         self.running_type = running_type
         self.trainer_name = trainer_name
@@ -195,25 +209,32 @@ class Trainer:
         self.base_model, self.tokenizer = get_base_model(subset)
         self.base_model.to(self.device)
         
+        breakpoint()
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
+        breakpoint()
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
         self.model.to(self.device)
 
+        breakpoint()
         self.load_state_from_base()
         
         self.optimizer = self.get_optimizer(self.model, lr=self.lr, weight_decay=self.wd)
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
-    
+        breakpoint()
+        
     def reset_trainloader(self):
+        breakpoint()
         if self.subset != 'bert':
             self.train_loader = get_dataloader(self.subset, self.tokenizer, self.batch_size, split='train')
+            breakpoint()
         else:
             self.train_loader = WikitextBatchLoader(self.batch_size)
+            breakpoint()
     
     def load_state_from_base(self):
         load_result = self.model.load_state_dict(self.base_model.state_dict(), strict=False)
@@ -270,9 +291,9 @@ class Trainer:
         return optim_cls(params, **kwargs)
     
     def train_step(self, batch):
-        breakpoint()
+        # breakpoint()
         self.optimizer.zero_grad()
-        breakpoint()
+        # breakpoint()
         
         with torch.autocast('cuda', torch.float16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
@@ -280,58 +301,59 @@ class Trainer:
             output = self.model(**batch)
             with torch.no_grad():
                 output_base = self.base_model(**batch)
-        breakpoint()
+        # breakpoint()
         
         if not self.subset == 'bert' and self.using_loss:
-            loss_model = output.loss
+            loss_model = output.loss # output type(dictionary, list etc) consider해야 하지 않나???
         else:
             loss_model = 0.0
-        breakpoint()
+        # breakpoint()
         
         loss_kd = 0
         if self.using_kd:
-            for ilayer in range(len(output_base.hidden_states)):
-                loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
+            for ilayer in range(len(output_base.hidden_states)): # len 13 tuple, each element with [batch_size(2), 203, 768]
+                loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer]) # 각 [2, 203, 768]를 비교
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
-        breakpoint()
+        # breakpoint()
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
             warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
-        breakpoint()
+        # breakpoint()
         
         loss = loss_model + loss_kd + loss_special
-        breakpoint()
+        # breakpoint()
         
         self.scaler.scale(loss).backward()
-        breakpoint()
+        # breakpoint()
         
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
 
         self.scaler.step(self.optimizer)
-        breakpoint()
+        # breakpoint()
         self.scaler.update()
-        breakpoint()
+        # breakpoint()
         
         self.loss = loss.item()
-        breakpoint()
+        # breakpoint()
         self.loss_details = {
             'loss': loss.item(), 
             'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
         }
-        breakpoint()
+        # breakpoint()
         
         # self.debug_plot_perlim()
-        
     
     def train_epoch(self):
         # self.model = torch.compile(self.model_unwrap)
-        self.reset_trainloader()
+        breakpoint()
+        self.reset_trainloader() # train_loader는 매 epoch 마다 change하는 거임? <- 매번 다르게 shuffle해야 하므로?
+        breakpoint()
         
         self.model.train()
         self.base_model.eval()
@@ -342,14 +364,16 @@ class Trainer:
         m = Metric()
         breakpoint()
         with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
-            for istep, batch in enumerate(pbar):
-                batch = batch_to(batch, self.device)
+            for istep, batch in enumerate(pbar): # batch containing batch_size amounts of 'labels', 'imput_ids', 'token_type_ids', 'attention_mask"
+                # breakpoint()
+                batch = batch_to(batch, self.device) # with cuda
+                # breakpoint()
                 self.train_step(batch)
-                breakpoint()
+                # breakpoint()
                 
                 smooth_loss_sum += self.loss
                 smooth_loss_count += 1
-                breakpoint()
+                # breakpoint()
                 pbar.set_description(
                     f'[{self.epoch+1}/{self.epochs}] '
                     f'({self.running_type}) ' if self.running_type is not None else ''
@@ -357,15 +381,16 @@ class Trainer:
                     f'Lsp:{m.update(self.loss_details["loss_sp"], "loss_sp"):.4f} '
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
-                breakpoint()
+                # breakpoint()
                 
-                if ((istep+1) % self.eval_steps) == 0:
+                if ((istep+1) % self.eval_steps) == 0: # cross validation??
                     self.evaluate()
                     self.save()
                     self.model.train()
-                    self.base_model.eval()
+                    self.base_model.eval() # base_model은 계속 eval이었음에도 그냥 적어준 것?
                     m = Metric()
-                breakpoint()
+                # breakpoint()
+            breakpoint() # *** 확인은 못 했으나 istep은 iteration 개수 즉 epoch / batch_size일듯
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -385,7 +410,7 @@ class Trainer:
         breakpoint()
         
         loader = self.valid_loader
-        if split == 'train':
+        if split == 'train': #why???
             loader = self.train_loader
         breakpoint()
         for i, batch in enumerate(tqdm.tqdm(loader, desc=f'({self.subset}[{split}])', dynamic_ncols=True)):
@@ -397,6 +422,7 @@ class Trainer:
             
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=self.amp_enabled):
                 outputs = model(**batch)
+            breakpoint()
             predictions = outputs[0]
 
             if self.subset != 'stsb': 
@@ -486,7 +512,9 @@ class Trainer:
             self.save()
 
 if __name__ == '__main__':
+    breakpoint()
     trainer = Trainer(
         subset='mnli'
     )
+    breakpoint()
     trainer.main()

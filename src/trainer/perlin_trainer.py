@@ -8,7 +8,7 @@ PERLIN_Q_R = 7
 PERLIN_K_R = 7
 PERLIN_V_R = 7
 
-task_to_batch_size['mnli'] = 4 if not PERLIN_LAYERWISE else 32 #16 32
+task_to_batch_size['mnli'] = 2 if not PERLIN_LAYERWISE else 32 #16 32
 
 class Trainer(BaseTrainer):
     def __init__(
