@@ -309,6 +309,10 @@ class BertSelfAttention(nn.Module):
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
         self.last_loss = None
         self.perlin_layerwise = False
+        
+        # for bert & perlin attention_probs visualization
+        self.bert_attention_probs = None
+        self.perlin_attention_probs = None ### TODO check for requires_grad !!!!
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -415,6 +419,9 @@ class BertSelfAttention(nn.Module):
         new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
         context_layer = context_layer.view(new_context_layer_shape)
         
+        # for visualizing bert attention_probs
+        self.bert_attention_probs = attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+        
         # if perlin, overwrite attention_probs, context_layer
         if self.perlin_mode == 'perlin':
             attention_scores_truth = attention_scores
@@ -514,6 +521,10 @@ class BertSelfAttention(nn.Module):
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
+            
+            # for visualizing perlin attention_probs
+            self.perlin_attention_probs=attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+            
         elif self.perlin_mode == 'performer':
             q = query_layer
             k = key_layer

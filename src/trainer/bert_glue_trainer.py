@@ -9,6 +9,7 @@ import random, copy
 import torch
 
 from transformers.models.bert import modeling_bert as berts
+from ..models import perlin_bert as plberts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
@@ -196,6 +197,7 @@ class Trainer:
         
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
+        breakpoint()
         
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -207,6 +209,12 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
+        
+        for batch in self.valid_loader:
+            self.viz_batch = batch
+            break
+        
+        self.input_data = self.valid_loader.dataset
     
     def reset_trainloader(self):
         if self.subset != 'bert':
@@ -275,6 +283,7 @@ class Trainer:
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
             output = self.model(**batch)
+            
             with torch.no_grad():
                 output_base = self.base_model(**batch)
         
@@ -339,9 +348,11 @@ class Trainer:
                     f'Lsp:{m.update(self.loss_details["loss_sp"], "loss_sp"):.4f} '
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
-                
+                # breakpoint()
+                # self.debug_plot_perlin(current_state=f"train_epoch_TESTING!!_{self.epoch+1}_{istep+1}")
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
+                    self.plot_perlin_attention(current_state=f"train_epoch_{self.epoch+1}_{istep+1}") # call in model.eval() mode
                     self.save()
                     self.model.train()
                     self.base_model.eval()
@@ -408,6 +419,102 @@ class Trainer:
         except Exception as ex:
             print('error while load', ex)
     
+    def plot_perlin_attention(self, current_state):
+        os.makedirs('./saves/trainer/bert_glue_trainer/bertM/', exist_ok=True)
+        os.makedirs('./saves/trainer/bert_glue_trainer/perlimM/', exist_ok=True)
+        idx = 0
+        idx_attn = 0
+        bert_layer = []
+        perlin_layer = []
+        
+        self.biz_batch['output_hidden_states'] = True
+        self.biz_batch['output_attentions'] = True
+            
+        with torch.no_grad():
+            self.model(**self.biz_batch)
+        
+        for module in self.model.modules():
+            if isinstance(module, plberts.BertSelfAttention):
+                if module.bert_attention_probs is not None:
+                    bert_layer.append(module.bert_attention_probs) # [4(16), 12, 203, 203] = batch_size, head, length, length
+                if  module.perlin_attention_probs is not None:
+                    perlin_layer.append(module.perlin_attention_probs)         
+        # len(bert_list) == 12 : seems it contains all layer for forward
+        
+        self.bert_layerwise_attention = torch.stack(bert_layer,dim=1) # batch_size, layer, head, length, length
+        self.bert_batch_size = self.bert_layerwise_attention.shape[0]
+        self.bert_layer_count = self.bert_layerwise_attention.shape[1]
+        self.bert_head_count = self.bert_layerwise_attention.shape[2]
+        assert self.bert_layer_count == len(bert_layer)
+        assert self.bert_head_count % 2 == 0 # TODO check! ~ generalization
+        breakpoint()
+        
+        self.perlin_layerwise_attention = torch.stack(perlin_layer,dim=1) # batch_size, layer, head, length, length
+        breakpoint()
+        self.perlin_batch_size = self.perlin_layerwise_attention.shape[0]
+        self.perlin_layer_count = self.perlin_layerwise_attention.shape[1]
+        self.perlin_head_count = self.perlin_layerwise_attention.shape[2]
+        assert self.perlin_layer_count == len(perlin_layer)
+        assert self.perlin_head_count % 2 == 0 # TODO check! ~ generalization
+        
+        # bert
+        for b in range(self.bert_batch_size):
+            for l in range(self.bert_layer_count):
+                breakpoint()
+                bert_layerwise_matrix=[]
+                for h in range(self.bert_head_count):
+                    img = self.bert_layerwise_attention[b, l, h, : , :] # batch_size 2나 4 인거 맞음...?
+                    breakpoint()
+                    img = img.detach().cpu().numpy()
+                    
+                    idx += 1
+                    
+                    plt.clf()
+                    bert_layerwise_matrix.append(img)
+                nrows=2
+                ncols=self.bert_head_count//2
+                fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 5)) # nrows*ncols==self.head_count
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(bert_layerwise_matrix[i])
+                    # plt.imshow(img)
+                    # plt.colorbar()
+                for i in range(nrows):
+                    for j in range(ncols):
+                        axes[i,j].set_title(f"Head:{ncols*i+j+1}")
+                plt.suptitle(current_state+f":{b+1}_{l+1}", fontsize=16)
+                plt.tight_layout()
+                plt.show()
+                plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{b+1}_{l+1}.png', dpi=160)
+        
+        # perlin
+        for b in range(self.perlin_batch_size):
+            for l in range(self.perlin_layer_count):
+                breakpoint()
+                perlin_layerwise_matrix=[]
+                for h in range(self.perlin_head_count):
+                    img = self.perlin_layerwise_attention[b, l, h, : , :] #batch_size 2나 4 인거 맞음...?
+                    breakpoint()
+                    img = img.detach().cpu().numpy()
+                    
+                    idx += 1
+                    
+                    plt.clf()
+                    perlin_layerwise_matrix.append(img)
+                nrows=2
+                ncols=self.perlin_head_count//2
+                fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 5)) # nrows*ncols==self.head_count
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(perlin_layerwise_matrix[i])
+                    # plt.imshow(img)
+                    # plt.colorbar()
+                for i in range(nrows):
+                    for j in range(ncols):
+                        axes[i,j].set_title(f"Head:{ncols*i+j+1}")
+                plt.suptitle(current_state+f":{b+1}_{l+1}", fontsize=16)
+                plt.tight_layout()
+                plt.show()
+                plt.savefig(f'./saves/trainer/bert_glue_trainer/perlinM/{b+1}_{l+1}.png', dpi=160)
+    
     def main(self):
         self.epoch = 0
         self.step = 0
@@ -416,7 +523,8 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.evaluate(split='train')
+            self.plot_perlin_attention(current_state=f"main_epoch_{self.epoch+1}")
+            self.evaluate(split='train') # for checking overfitting
             self.save()
 
 if __name__ == '__main__':
