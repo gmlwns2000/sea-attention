@@ -5,12 +5,14 @@ from .bert_glue_trainer import task_to_batch_size
 PERLIN_LAYERWISE = False
 PERLIN_MODE = 'perlin'
 
-task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
-
 class Trainer(BaseTrainer):
     def __init__(
         self, subset = 'mnli'
     ):
+        global PERLIN_LAYERWISE, PERLIN_MODE
+
+        task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
+
         super().__init__(
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
@@ -39,6 +41,14 @@ class Trainer(BaseTrainer):
                     param.requires_grad = False
 
 if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--layerwise', action='store_true', default=False)
+    args = parser.parse_args()
+    
+    PERLIN_LAYERWISE = args.layerwise
+    
     trainer = Trainer(
         subset='mnli'
     )
