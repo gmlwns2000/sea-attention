@@ -9,7 +9,7 @@ _wandb:
     huggingface_version: 4.27.2
     is_jupyter_run: false
     is_kaggle_kernel: false
-    start_time: 1687693296.635627
+    start_time: 1687693972.289973
     t:
       1:
       - 1
@@ -20,12 +20,10 @@ _wandb:
       - 55
       2:
       - 1
-      - 5
       - 11
       - 40
       - 49
       - 51
-      - 53
       - 55
       3:
       - 23

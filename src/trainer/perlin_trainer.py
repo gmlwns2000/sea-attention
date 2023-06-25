@@ -63,7 +63,7 @@ class Trainer(BaseTrainer):
             self.model(**self.viz_batch)
         
         for module in self.model.modules():
-            if isinstance(module, plberts.BertSelfAttention):
+            if isinstance(module, perlin.BertSelfAttention):
                 if module.bert_attention_probs is not None:
                     bert_layer.append(module.bert_attention_probs) # [4(16), 12, 203, 203] = batch_size, head, length, length
                 if  module.perlin_attention_probs is not None:
