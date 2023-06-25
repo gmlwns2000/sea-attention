@@ -1,0 +1,156 @@
+{
+    "os": "Linux-4.15.0-196-generic-x86_64-with-glibc2.27",
+    "python": "3.9.16",
+    "heartbeatAt": "2023-06-25T02:22:23.397299",
+    "startedAt": "2023-06-25T02:22:22.336945",
+    "docker": null,
+    "cuda": "10.1.105",
+    "args": [],
+    "state": "running",
+    "program": "-m src.trainer.perlin_trainer",
+    "git": {
+        "remote": "git@github.com:gmlwns2000/permutation-learning.git",
+        "commit": "e3c9b9d35e5a409e996fd49c3f2f936a63f31613"
+    },
+    "email": "jk020218@gmail.com",
+    "root": "/d1/jinakim/permutation-learning",
+    "host": "ai16",
+    "username": "jinakim",
+    "executable": "/d1/jinakim/anaconda3/envs/torch1/bin/python",
+    "cpu_count": 10,
+    "cpu_count_logical": 20,
+    "cpu_freq": {
+        "current": 1001.52495,
+        "min": 1000.0,
+        "max": 3200.0
+    },
+    "cpu_freq_per_core": [
+        {
+            "current": 1000.157,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.248,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.615,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1049.768,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.366,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.102,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.756,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.982,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.116,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.505,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1001.062,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.929,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.712,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1068.451,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.045,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.998,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.003,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 997.549,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.688,
+            "min": 1000.0,
+            "max": 3200.0
+        },
+        {
+            "current": 1000.504,
+            "min": 1000.0,
+            "max": 3200.0
+        }
+    ],
+    "disk": {
+        "total": 227.67641830444336,
+        "used": 56.545799255371094
+    },
+    "gpu": "NVIDIA TITAN RTX",
+    "gpu_count": 4,
+    "gpu_devices": [
+        {
+            "name": "NVIDIA TITAN RTX",
+            "memory_total": 25396838400
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3080",
+            "memory_total": 10504699904
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        },
+        {
+            "name": "NVIDIA GeForce RTX 3090",
+            "memory_total": 25447170048
+        }
+    ],
+    "memory": {
+        "total": 313.54890060424805
+    }
+}
