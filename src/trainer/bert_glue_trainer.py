@@ -170,10 +170,12 @@ class Trainer:
         using_loss = True,
         eval_steps = 1500,
         lr = 1e-5,
-        epochs = 100
+        epochs = 100,
+        load_ignore_keys = ['perlin', 'pbert', 'permute']
     ) -> None:
         seed()
         
+        self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
         self.trainer_name = trainer_name
         self.subset = subset
@@ -219,7 +221,8 @@ class Trainer:
         for it in load_result.unexpected_keys:
             print('Trainer.init: unexpected', it)
         for it in load_result.missing_keys:
-            print('Trainer.init: missing', it)
+            if not any([k in it for k in self.load_ignore_keys]):
+                print('Trainer.init: missing', it)
     
     def get_optimizer(
         self,
