@@ -1,3 +1,5 @@
+import warnings
+import torch
 from .bert_glue_trainer import Trainer as BaseTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
@@ -37,6 +39,7 @@ class Trainer(BaseTrainer):
             for module in self.model.modules():
                 if isinstance(module, perlin.BertSelfAttention):
                     module.perlin_layerwise = True
+                    module.perlin_lora_enabled = True
             
             for name, param in self.model.named_parameters():
                 if 'perlin' in name:

@@ -8,7 +8,8 @@ from datasets import load_dataset, load_metric
 import random, copy
 import torch
 
-from transformers.models.bert import modeling_bert as berts
+# from transformers.models.bert import modeling_bert as berts
+from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
@@ -113,6 +114,7 @@ def get_base_model(dataset, only_tokenizer=False):
         "bert": "bert-base-uncased",
     }[dataset]
 
+    # NOTE(HJ): this bert models has special hooks
     model = {
         "cola": berts.BertForSequenceClassification,
         "mnli": berts.BertForSequenceClassification,
@@ -277,9 +279,10 @@ class Trainer:
         with torch.autocast('cuda', torch.float16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
-            output = self.model(**batch)
             with torch.no_grad():
                 output_base = self.base_model(**batch)
+            batch['teacher'] = self.base_model
+            output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
             loss_model = output.loss
@@ -375,6 +378,8 @@ class Trainer:
             del batch['labels']
             
             with torch.no_grad(), torch.cuda.amp.autocast(enabled=self.amp_enabled):
+                self.base_model(**batch)
+                batch['teacher'] = self.base_model
                 outputs = model(**batch)
             predictions = outputs[0]
 
