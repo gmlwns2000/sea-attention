@@ -431,7 +431,7 @@ class Trainer:
     def main(self):
         # wandb.login()
         wandb.init( # TODO change
-            project="visualize_bert_perlin"
+            project="[token_wise]: visualize_bert_perlin"
         )
         
         self.epoch = 0

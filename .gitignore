@@ -22,3 +22,4 @@ output*.txt
 saves/
 cache/
 .torch/
+wandb/

@@ -8,7 +8,7 @@ import wandb
 
 from ..eda.viz_eda import register_event, dispatch
 
-PERLIN_K_FLATTEN = True
+PERLIN_K_FLATTEN = True # token_wise if True
 PERLIN_LAYERWISE = False
 PERLIN_MODE = 'perlin'
 
@@ -133,15 +133,16 @@ class Trainer(BaseTrainer):
                 plt.suptitle(current_state+f":{self.batch_index+1}_{l+1}", fontsize=16)
                 plt.tight_layout()
                 plt.show()
-                plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{self.batch_index+1}_{l+1}.png', dpi=160)
-                wandb_all_layers.append(wandb.Image(f'./saves/trainer/bert_glue_trainer/bertM/{self.batch_index+1}_{l+1}.png'))    
+                self.save_bert_path = f'./saves/trainer/bert_glue_trainer/bertM/{self.batch_index+1}_{l+1}.png'
+                plt.savefig(self.save_bert_path, dpi=160)
+                wandb_all_layers.append(wandb.Image(self.save_bert_path))    
             wandb.log({"bertM": wandb_all_layers})
         
         # perlin
         for b in range(1): # self.batch_for_viz: using only some among self.perlin_batch_size
             wandb_all_layers = []
             # self.batch_index = self.batch_size-b-1
-            self.batch_index = 14 # mnli_includes long sequence - TODO change to dictionary
+            self.batch_index = 14 # mnli_includes long sequence - TODO change to dictionary TODO rename from difference with bert
             self.perlin_attention_mask_indx = self.viz_batch['attention_mask'][self.batch_index].shape[0] # inlcude padding
             for l in range(self.perlin_layer_count):
                 # breakpoint()
@@ -171,8 +172,14 @@ class Trainer(BaseTrainer):
                 plt.suptitle(current_state+f":{self.batch_index+1}_{l+1}", fontsize=16)
                 plt.tight_layout()
                 plt.show()
-                plt.savefig(f'./saves/trainer/bert_glue_trainer/perlinM/{self.batch_index+1}_{l+1}.png', dpi=160)
-                wandb_all_layers.append(wandb.Image(f'./saves/trainer/bert_glue_trainer/perlinM/{self.batch_index+1}_{l+1}.png'))    
+                self.save_perlin_path = './saves/trainer/bert_glue_trainer/perlinM/'
+                if not PERLIN_K_FLATTEN: # column_wise
+                    self.save_perlin_path += f'column_wise/{self.batch_index+1}_{l+1}.png'
+                else: # token_wise
+                    self.save_perlin_path += f'token_wise/{self.batch_index+1}_{l+1}.png'
+                    
+                plt.savefig(self.save_perlin_path, dpi=160)
+                wandb_all_layers.append(wandb.Image(self.save_perlin_path))
             wandb.log({"perlinM": wandb_all_layers})
     
 

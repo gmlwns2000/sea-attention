@@ -466,7 +466,7 @@ class BertSelfAttention(nn.Module):
             # (N, H, T, K)
             
             k = min(max(7, int(T*0.01)), T * 0.5)
-            k_flatten = self.perlin_k_flatten
+            k_flatten = self.perlin_k_flatten # token_wise if True
             warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:
                 value, indices = torch.topk(
