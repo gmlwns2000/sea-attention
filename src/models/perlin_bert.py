@@ -313,34 +313,39 @@ class BertSelfAttention(nn.Module):
         )
         self.perlin_performer_out = nn.Sequential(
             nn.Dropout(0.1),
-            nn.Linear(self.all_head_size*2, config.hidden_size*2),
-            nn.LayerNorm(config.hidden_size*2),
-            
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(config.hidden_size*2, config.hidden_size),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
+            
+            # nn.Dropout(0.1),
+            # nn.Linear(config.hidden_size*2, config.hidden_size),
+            # nn.LayerNorm(config.hidden_size),
+            # nn.GELU(),
+            
             nn.Linear(config.hidden_size, config.hidden_size),
         )
         self.perlin_attention_predictor = nn.Sequential(
             nn.Dropout(0.1),
-            nn.Linear(self.all_head_size*2, config.hidden_size*2),
-            nn.LayerNorm(config.hidden_size*2),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(config.hidden_size*2, config.hidden_size),
-            nn.LayerNorm(config.hidden_size),
-            nn.GELU(),
-            nn.Linear(config.hidden_size, self.num_attention_heads * 128),
-        )
-        self.perlin_attention_scaler = nn.Sequential(
-            nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(config.hidden_size, self.num_attention_heads),
+            
+            # nn.Dropout(0.1),
+            # nn.Linear(config.hidden_size*2, config.hidden_size),
+            # nn.LayerNorm(config.hidden_size),
+            # nn.GELU(),
+            
+            nn.Linear(config.hidden_size, self.num_attention_heads * 128),
+        )
+        self.perlin_attention_scaler = nn.Sequential(
+            # nn.Dropout(0.1),
+            # nn.Linear(self.all_head_size*2, config.hidden_size),
+            # nn.LayerNorm(config.hidden_size),
+            # nn.GELU(),
+            # nn.Dropout(0.1),
+            # nn.Linear(config.hidden_size, self.num_attention_heads),
+            
+            nn.Linear(self.all_head_size*2, self.num_attention_heads),
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
         self.perlin_k_flatten = True
@@ -450,7 +455,7 @@ class BertSelfAttention(nn.Module):
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
-                    k=k, dim=-1
+                    k=k, dim=-1,
                 )
                 # (N, H, T, T)
                 partial_attention_scores = attention_scores_truth
