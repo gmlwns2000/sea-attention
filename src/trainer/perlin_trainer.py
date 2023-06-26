@@ -16,7 +16,7 @@ class Trainer(BaseTrainer):
     ):
         global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN
 
-        task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
+        task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 24
 
         super().__init__(
             subset=subset,

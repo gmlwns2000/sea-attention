@@ -88,8 +88,8 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if split.startswith('train'): #shuffle when train set
         dataset = dataset.sort('label')
         dataset = dataset.shuffle(seed=random.randint(0, 10000))
-    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=128)
-    dataset = dataset.map(encode, batched=True, batch_size=128)
+    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=384)
+    dataset = dataset.map(encode, batched=True, batch_size=384)
     dataset.set_format(type='torch', columns=['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
 
     dataloader = torch.utils.data.DataLoader(
@@ -276,7 +276,7 @@ class Trainer:
     def train_step(self, batch):
         self.optimizer.zero_grad()
         
-        with torch.autocast('cuda', torch.float16, enabled=self.amp_enabled):
+        with torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
             with torch.no_grad():
@@ -377,7 +377,7 @@ class Trainer:
             labels = batch['labels']
             del batch['labels']
             
-            with torch.no_grad(), torch.cuda.amp.autocast(enabled=self.amp_enabled):
+            with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
                 self.base_model(**batch)
                 batch['teacher'] = self.base_model
                 outputs = model(**batch)

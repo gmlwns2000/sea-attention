@@ -242,8 +242,10 @@ class BertEmbeddings(nn.Module):
         embeddings = self.dropout(embeddings)
         return embeddings
 
-class LoraLinear(nn.Linear):
+class LoraLinear(nn.Module):
     def __init__(self, inch, outch, dim_r):
+        super().__init__()
+        
         self.lora_a = nn.Parameter(torch.zeros((dim_r, inch)))
         self.lora_b = nn.Parameter(torch.zeros((outch, dim_r)))
         torch.nn.init.kaiming_uniform_(self.lora_a, a=math.sqrt(5))
@@ -430,11 +432,12 @@ class BertSelfAttention(nn.Module):
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             # in layerwise, train perlin attention predictor
             _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
-            loss = F.kl_div(
-                F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
-                F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
-                reduction='batchmean'
-            ) * 2
+            with torch.autocast('cuda', enabled=False):
+                loss = F.kl_div(
+                    F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
+                    F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
+                    reduction='batchmean'
+                ) * 2
             # loss = F.mse_loss(
             #     estimated_attention_score.view(-1, T) * _amask,
             #     attention_scores_truth.view(-1, T) * _amask,
@@ -492,7 +495,7 @@ class BertSelfAttention(nn.Module):
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer)
+            loss += F.mse_loss(context_layer_truth, partial_context_layer) * 2
             self.last_loss = loss
             
             attention_probs = partial_attention_probs
