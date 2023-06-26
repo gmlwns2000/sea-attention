@@ -10,7 +10,7 @@ from ..eda.viz_eda import register_event, dispatch
 
 PERLIN_K_FLATTEN = True # token_wise if True
 PERLIN_LAYERWISE = False
-PERLIN_MODE = 'perlin'
+PERLIN_MODE = 'performer'
 
 bool2int = lambda x: 1 if x else 0
 

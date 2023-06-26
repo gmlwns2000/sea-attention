@@ -312,6 +312,7 @@ class BertSelfAttention(nn.Module):
         self.perlin_layerwise = False
         
         # for bert & perlin attention_probs visualization
+        self.base_model_attention_probs =None
         self.bert_attention_probs = None
         self.perlin_attention_probs = None ### TODO check for requires_grad !
         self.performer_attention_probs = None
@@ -422,7 +423,7 @@ class BertSelfAttention(nn.Module):
         context_layer = context_layer.view(new_context_layer_shape)
         
         # for visualizing bert attention_probs
-        self.bert_attention_probs = attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+        self.bert_attention_probs = attention_probs.detach().cpu() # [4(16), 12, 203, 203] = batch_size, head, length, length
         
         # if perlin, overwrite attention_probs, context_layer
         if self.perlin_mode == 'perlin':
@@ -533,6 +534,7 @@ class BertSelfAttention(nn.Module):
             k = key_layer
             v = value_layer
             N, H, T, HID = q.shape
+            breakpoint()
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
             performer_context_layer = self.perlin_performer(q, k, v)
@@ -544,6 +546,19 @@ class BertSelfAttention(nn.Module):
             context_layer = performer_context_layer # V'
             
             # for visualizing performer attention_probs
+            
+            # base_model attention probs
+            # self.base_model_attention_probs = 
+            # v_for_viz : one-hot indicators for each position index
+            t3 = self.viz_batch['attention_mask'][self.batch_index]
+            self.performer_attention_mask_indx = (t3==0).nonzero()[0].squeeze().item()
+
+            self.v_for_viz = torch.eye(self.performer_attention_mask_indx) # TODO check implementation : real sequence length
+            
+            
+            
+            
+            
             
         # self.performer_attention_probs = attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
             
