@@ -390,7 +390,7 @@ class Trainer:
         score = metric.compute()
         self.last_metric_score = score
         if show_messages:
-            tqdm.tqdm.write('metric score', score)
+            tqdm.tqdm.write(f'metric score {score}')
         return score
 
     def save(self):
