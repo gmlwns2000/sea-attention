@@ -1,6 +1,8 @@
 import os
+from typing import Callable, Generic, TypeVar
 import warnings
 from matplotlib import pyplot as plt
+from dataclasses import dataclass
 import numpy as np
 import tqdm
 import transformers
@@ -352,10 +354,13 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 # breakpoint()
+                # dispatch('plot_perlin_attention_called', current_state=f"Testing!!!_{self.epoch+1}_{istep+1}")
                 
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
                     dispatch('plot_perlin_attention_called', current_state=f"train_epoch_{self.epoch+1}_{istep+1}")
+                    # TODO plot train graph
+                    
                     # self.plot_perlin_attention(current_state=f"train_epoch_{self.epoch+1}_{istep+1}") # call in model.eval() mode
                     self.save()
                     self.model.train()
@@ -425,7 +430,7 @@ class Trainer:
     
     def main(self):
         # wandb.login()
-        wandb.init(
+        wandb.init( # TODO change
             project="visualize_bert_perlin"
         )
         
@@ -440,6 +445,35 @@ class Trainer:
             # self.plot_perlin_attention(current_state=f"main_epoch_{self.epoch+1}")
             self.evaluate(split='train') # for checking overfitting
             self.save()
+
+# TODO
+'''
+T = TypeVar("T")
+class EventHandler(Generic[T]):
+    def __init__(self) -> None:
+        self.cbs = []
+    
+    def invoke(self, *args, **kwargs):
+        for cb in self.cbs:
+            cb(*args, **kwargs)
+    
+    def add(self, cb: Callable[[T], None]):
+        self.cbs.append(cb)
+
+@dataclass
+class TrainerCallbacks:
+    train_finished = EventHandler[float]()
+    epoch_finished = EventHandler[float]()
+    on_evaluate = EventHandler[float]()
+    
+# outside
+callback = TrainerCallbacks()
+callback.on_evaluate.add(lambda msg, loss, acc: print(msg))
+# Trainer(callback=callback)
+
+# def evaluate() ...
+callback.on_evaluate.invoke("message", loss=0.1, accuracy=0.9)
+'''
 
 if __name__ == '__main__':
     trainer = Trainer(

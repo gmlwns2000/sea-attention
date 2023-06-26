@@ -202,8 +202,6 @@ class Trainer:
 
             # if isinstance(module, torch.nn.Dropout):
             #     module.p = 0.5
-            
-            
         
         for param_name, param in self.model.named_parameters():
             if 'permutation' in param_name:

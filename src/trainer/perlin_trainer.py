@@ -60,14 +60,17 @@ class Trainer(BaseTrainer):
         self.viz_batch['output_attentions'] = True
             
         with torch.no_grad():
-            self.model(**self.viz_batch)
+            self.model(**self.viz_batch) # (['labels'[16(batch_size)], 'input_ids'[16, 161], 'token_type_ids'[16, 161], 'attention_mask', 'output_hidden_states', 'output_attentions']
+        # breakpoint()
         
         for module in self.model.modules():
             if isinstance(module, perlin.BertSelfAttention):
                 if module.bert_attention_probs is not None:
                     bert_layer.append(module.bert_attention_probs) # [4(16), 12, 203, 203] = batch_size, head, length, length
+                    # breakpoint()
                 if  module.perlin_attention_probs is not None:
-                    perlin_layer.append(module.perlin_attention_probs)         
+                    perlin_layer.append(module.perlin_attention_probs)  
+                    # breakpoint()       
         # len(bert_list) == 12 : seems it contains all layer for forward
         
         self.bert_layerwise_attention = torch.stack(bert_layer,dim=1) # batch_size, layer, head, length, length
@@ -85,17 +88,28 @@ class Trainer(BaseTrainer):
         self.perlin_head_count = self.perlin_layerwise_attention.shape[2]
         assert self.perlin_layer_count == len(perlin_layer)
         assert self.perlin_head_count % 2 == 0 # TODO check! ~ generalization
+        if self.batch_size > 4:
+            self.batch_for_viz = 5
+        else:
+            self.batch_for_viz = self.batch_size
         
         # bert
-        for b in range(self.bert_batch_size):
+        for b in range(1): # self.batch_for_viz: using only some among self.bert_batch_size
+            wandb_all_layers = []
+            # self.batch_index = self.batch_size-b-1
+            self.batch_index = 14 # mnli_includes long sequence - TODO change to dictionary
+            self.bert_attention_mask_indx = self.viz_batch['attention_mask'][self.batch_index].shape[0] # inlcude padding
             for l in range(self.bert_layer_count):
                 # breakpoint()
                 bert_layerwise_matrix=[]
                 for h in range(self.bert_head_count):
-                    img = self.bert_layerwise_attention[b, l, h, : , :] # batch_size 2나 4 인거 맞음...?
+                    t1 = self.viz_batch['attention_mask'][self.batch_index]
+                    self.bert_attention_mask_indx = (t1==0).nonzero()[0].squeeze().item()
+                    
+                    img = self.bert_layerwise_attention[self.batch_index, l, h, :self.bert_attention_mask_indx , :self.bert_attention_mask_indx]
                     # breakpoint()
                     img = img.detach().cpu().numpy()
-                    
+                    # breakpoint()
                     idx += 1
                     
                     plt.clf()
@@ -110,19 +124,27 @@ class Trainer(BaseTrainer):
                 for i in range(nrows):
                     for j in range(ncols):
                         axes[i,j].set_title(f"Head:{ncols*i+j+1}")
-                plt.suptitle(current_state+f":{b+1}_{l+1}", fontsize=16)
+                plt.suptitle(current_state+f":{self.batch_index+1}_{l+1}", fontsize=16)
                 plt.tight_layout()
                 plt.show()
-                plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{b+1}_{l+1}.png', dpi=160)
-                wandb.log({"bertM": [wandb.Image(f'./saves/trainer/bert_glue_trainer/bertM/{b+1}_{l+1}.png')]})
+                plt.savefig(f'./saves/trainer/bert_glue_trainer/bertM/{self.batch_index+1}_{l+1}.png', dpi=160)
+                wandb_all_layers.append(wandb.Image(f'./saves/trainer/bert_glue_trainer/bertM/{self.batch_index+1}_{l+1}.png'))    
+            wandb.log({"bertM": wandb_all_layers})
         
         # perlin
-        for b in range(self.perlin_batch_size):
+        for b in range(1): # self.batch_for_viz: using only some among self.perlin_batch_size
+            wandb_all_layers = []
+            # self.batch_index = self.batch_size-b-1
+            self.batch_index = 14 # mnli_includes long sequence - TODO change to dictionary
+            self.perlin_attention_mask_indx = self.viz_batch['attention_mask'][self.batch_index].shape[0] # inlcude padding
             for l in range(self.perlin_layer_count):
                 # breakpoint()
                 perlin_layerwise_matrix=[]
                 for h in range(self.perlin_head_count):
-                    img = self.perlin_layerwise_attention[b, l, h, : , :] #batch_size 2나 4 인거 맞음...?
+                    t2 = self.viz_batch['attention_mask'][self.batch_index]
+                    self.perlin_attention_mask_indx = (t2==0).nonzero()[0].squeeze().item()
+                    
+                    img = self.perlin_layerwise_attention[self.batch_index, l, h, :self.perlin_attention_mask_indx , :self.perlin_attention_mask_indx]
                     # breakpoint()
                     img = img.detach().cpu().numpy()
                     
@@ -140,11 +162,12 @@ class Trainer(BaseTrainer):
                 for i in range(nrows):
                     for j in range(ncols):
                         axes[i,j].set_title(f"Head:{ncols*i+j+1}")
-                plt.suptitle(current_state+f":{b+1}_{l+1}", fontsize=16)
+                plt.suptitle(current_state+f":{self.batch_index+1}_{l+1}", fontsize=16)
                 plt.tight_layout()
                 plt.show()
-                plt.savefig(f'./saves/trainer/bert_glue_trainer/perlinM/{b+1}_{l+1}.png', dpi=160)
-                wandb.log({"perlinM": [wandb.Image(f'./saves/trainer/bert_glue_trainer/perlinM/{b+1}_{l+1}.png')]})
+                plt.savefig(f'./saves/trainer/bert_glue_trainer/perlinM/{self.batch_index+1}_{l+1}.png', dpi=160)
+                wandb_all_layers.append(wandb.Image(f'./saves/trainer/bert_glue_trainer/perlinM/{self.batch_index+1}_{l+1}.png'))    
+            wandb.log({"perlinM": wandb_all_layers})
     
 
 if __name__ == '__main__':

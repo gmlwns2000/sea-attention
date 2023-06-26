@@ -312,7 +312,8 @@ class BertSelfAttention(nn.Module):
         
         # for bert & perlin attention_probs visualization
         self.bert_attention_probs = None
-        self.perlin_attention_probs = None ### TODO check for requires_grad !!!!
+        self.perlin_attention_probs = None ### TODO check for requires_grad !
+        self.performer_attention_probs = None
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -538,7 +539,11 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            context_layer = performer_context_layer
+            context_layer = performer_context_layer # V'
+            
+            # for visualizing performer attention_probs
+            
+        # self.performer_attention_probs = attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':
