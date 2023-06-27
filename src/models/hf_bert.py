@@ -374,6 +374,7 @@ class BertSelfAttention(nn.Module):
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
         
+        # 1. for base_model visualization        
         self.perlin_last_attention_prob = attention_probs
         self.perlin_last_context_layer = context_layer
 

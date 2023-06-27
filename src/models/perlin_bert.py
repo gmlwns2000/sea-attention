@@ -375,6 +375,12 @@ class BertSelfAttention(nn.Module):
         self.perlin_k_flatten = True
         self.last_loss = None
         self.perlin_layerwise = False
+        
+        # for bert & perlin attention_probs visualization
+        self.bert_attention_probs = None
+        self.perlin_attention_probs_before_k = None
+        self.perlin_attention_probs = None ### TODO check for requires_grad !
+        self.performer_attention_probs = None
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -474,8 +480,11 @@ class BertSelfAttention(nn.Module):
             # ) * 4
             # (N, H, T, K)
             
+            # 2-1. for perlin attention_probs(performer estimation) before top k
+            self.perlin_attention_probs_before_k = estimated_attention_probs
+            
             k = min(max(7, int(T*0.01)), T * 0.5)
-            k_flatten = self.perlin_k_flatten
+            k_flatten = self.perlin_k_flatten # token_wise if True
             warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:
                 value, indices = torch.topk(
@@ -512,6 +521,7 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
+            
             partial_context_layer = torch.matmul(partial_attention_probs, v)
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
@@ -533,11 +543,16 @@ class BertSelfAttention(nn.Module):
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
+            
+            # 2-2. for perlin attention_probs after top k
+            self.perlin_attention_probs=attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
+            
         elif self.perlin_mode == 'performer':
             q = query_layer
             k = key_layer
             v = value_layer
             N, H, T, HID = q.shape
+            # breakpoint()
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
             performer_context_layer = self.perlin_performer(q, k, v)
@@ -547,7 +562,21 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            context_layer = performer_context_layer
+            context_layer = performer_context_layer # V'
+            
+            # 4. for performer paper's attention visualization
+            # v_for_viz : one-hot indicators for each position index
+            t3 = self.viz_batch['attention_mask'][self.batch_index]
+            self.performer_attention_mask_indx = (t3==0).nonzero()[0].squeeze().item()
+
+            v_identity = torch.eye(self.performer_attention_mask_indx) # TODO check implementation : real sequence length
+            self.performer_attention_probs = self.perlin_performer(q, k, v_identity)
+            
+            
+            
+            
+            
+        # self.performer_attention_probs = attention_probs # [4(16), 12, 203, 203] = batch_size, head, length, length
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':

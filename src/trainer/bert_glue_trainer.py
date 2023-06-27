@@ -1,12 +1,16 @@
 import os
+from typing import Callable, Generic, TypeVar
 import warnings
 from matplotlib import pyplot as plt
+from dataclasses import dataclass
 import numpy as np
 import tqdm
 import transformers
 from datasets import load_dataset, load_metric
 import random, copy
 import torch
+import wandb
+from ..eda.viz_eda import dispatch
 
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
@@ -200,6 +204,7 @@ class Trainer:
         
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
+        # breakpoint()
         
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -211,6 +216,13 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
+        
+        for batch in self.valid_loader:
+            batch = batch_to(batch, self.device)
+            self.viz_batch = batch
+            break
+        
+        self.input_data = self.valid_loader.dataset
     
     def reset_trainloader(self):
         if self.subset != 'bert':
@@ -284,6 +296,7 @@ class Trainer:
             batch['teacher'] = self.base_model
             output = self.model(**batch)
         
+        
         if not self.subset == 'bert' and self.using_loss:
             loss_model = output.loss
         else:
@@ -300,7 +313,7 @@ class Trainer:
         if hasattr(self.model, 'calc_loss_special'):
             warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
-        
+            
         loss = loss_model + loss_kd + loss_special
         
         self.scaler.scale(loss).backward()
@@ -345,9 +358,15 @@ class Trainer:
                     f'Lsp:{m.update(self.loss_details["loss_sp"], "loss_sp"):.4f} '
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
+                # breakpoint()
+                # dispatch('plot_perlin_attention_called', current_state=f"Testing!!!_{self.epoch+1}_{istep+1}")
                 
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
+                    dispatch('plot_perlin_attention_called', current_state=f"train_epoch_{self.epoch+1}_{istep+1}")
+                    # TODO plot train graph
+                    
+                    # self.plot_perlin_attention(current_state=f"train_epoch_{self.epoch+1}_{istep+1}") # call in model.eval() mode
                     self.save()
                     self.model.train()
                     self.base_model.eval()
@@ -416,7 +435,74 @@ class Trainer:
         except Exception as ex:
             print('error while load', ex)
     
+    def plot_base_attention(self, current_state):
+        os.makedirs('./saves/trainer/bert_glue_trainer/base_model/', exist_ok=True)
+        
+        base_layer = []
+        
+        with torch.no_grad():
+            output_base = self.base_model(**self.viz_batch)
+        
+        for module in self.base_model.modules():
+            if isinstance(module, berts.BertSelfAttention):
+                if self.perlin_last_attention_prob is not None:
+                    base_layer.append(module.perlin_last_attention_prob)
+        
+        self.base_layerwise_attention = torch.stack(base_layer,dim=1) # batch_size, layer, head, length, length
+        self.base_batch_size = self.base_layerwise_attention.shape[0]
+        self.base_layer_count = self.base_layerwise_attention.shape[1]
+        self.base_head_count = self.base_layerwise_attention.shape[2]
+        assert self.base_layer_count == len(base_layer)
+        assert self.base_head_count % 2 == 0 # TODO check! ~ generalization
+        
+        for b in range(1): # self.batch_for_viz: using only some among self.bert_batch_size
+            wandb_all_layers = []
+            # self.batch_index = self.batch_size-b-1
+            self.batch_index = 14 # mnli_includes long sequence - TODO change to dictionary
+            self.base_attention_mask_indx = self.viz_batch['attention_mask'][self.batch_index].shape[0] # inlcude padding
+            for l in range(self.base_layer_count):
+                # breakpoint()
+                base_layerwise_matrix=[]
+                for h in range(self.base_head_count):
+                    t1 = self.viz_batch['attention_mask'][self.batch_index]
+                    self.base_attention_mask_indx = (t1==0).nonzero()[0].squeeze().item()
+                    
+                    img = self.base_layerwise_attention[self.batch_index, l, h, :self.base_attention_mask_indx , :self.base_attention_mask_indx]
+                    # breakpoint()
+                    img = img.detach().cpu().numpy()
+                    # breakpoint()
+                    idx += 1
+                    
+                    plt.clf()
+                    base_layerwise_matrix.append(img)
+                nrows=2
+                ncols=self.base_head_count//2
+                fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(15, 5)) # nrows*ncols==self.head_count
+                for i, ax in enumerate(axes.flat):
+                    ax.imshow(base_layerwise_matrix[i])
+                    # plt.imshow(img)
+                    # plt.colorbar()
+                for i in range(nrows):
+                    for j in range(ncols):
+                        axes[i,j].set_title(f"Head:{ncols*i+j+1}")
+                plt.suptitle(current_state+f":{self.batch_index+1}_{l+1}", fontsize=16)
+                plt.tight_layout()
+                plt.show()
+                self.save_base_path = f'./saves/trainer/bert_glue_trainer/baseM/{self.batch_index+1}_{l+1}.png'
+                plt.savefig(self.save_base_path, dpi=160)
+                wandb_all_layers.append(wandb.Image(self.save_base_path))    
+            wandb.log({"baseM": wandb_all_layers})
+    
+    
     def main(self):
+        # wandb.login()
+        wandb.init( # TODO change
+            project="[base_performer] visualize_bert_perlin"
+        )
+        
+        # plot_base_model
+        self.plot_base_attention(current_state="baseM_main")
+        
         self.epoch = 0
         self.step = 0
         
@@ -424,8 +510,39 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.evaluate(split='train')
+            dispatch('plot_perlin_attention_called', current_state=f"main_epoch_{self.epoch+1}")
+            # self.plot_perlin_attention(current_state=f"main_epoch_{self.epoch+1}")
+            self.evaluate(split='train') # for checking overfitting
             self.save()
+
+# TODO
+'''
+T = TypeVar("T")
+class EventHandler(Generic[T]):
+    def __init__(self) -> None:
+        self.cbs = []
+    
+    def invoke(self, *args, **kwargs):
+        for cb in self.cbs:
+            cb(*args, **kwargs)
+    
+    def add(self, cb: Callable[[T], None]):
+        self.cbs.append(cb)
+
+@dataclass
+class TrainerCallbacks:
+    train_finished = EventHandler[float]()
+    epoch_finished = EventHandler[float]()
+    on_evaluate = EventHandler[float]()
+    
+# outside
+callback = TrainerCallbacks()
+callback.on_evaluate.add(lambda msg, loss, acc: print(msg))
+# Trainer(callback=callback)
+
+# def evaluate() ...
+callback.on_evaluate.invoke("message", loss=0.1, accuracy=0.9)
+'''
 
 if __name__ == '__main__':
     trainer = Trainer(
