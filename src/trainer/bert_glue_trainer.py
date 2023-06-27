@@ -311,7 +311,7 @@ class Trainer:
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
-            warnings.warn('special loss found!')
+            # warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
             
         loss = loss_model + loss_kd + loss_special
@@ -441,7 +441,7 @@ class Trainer:
         base_layer = []
         
         with torch.no_grad():
-            output_base = self.base_model(**self.viz_batch)
+            output_base = self.base_model(**self.viz_batch) # why not using output base..?
         
         for module in self.base_model.modules():
             if isinstance(module, berts.BertSelfAttention):
@@ -497,11 +497,11 @@ class Trainer:
     def main(self):
         # wandb.login()
         wandb.init( # TODO change
-            project="[base_performer] visualize_bert_perlin"
+            project="[baseM] visualize_bert_perlin"
         )
-        
         # plot_base_model
         self.plot_base_attention(current_state="baseM_main")
+        print("All done!!")
         
         self.epoch = 0
         self.step = 0

@@ -268,12 +268,11 @@ def lora_forward(linear: nn.Linear, lora: LoraLinear, x: torch.Tensor, enabled: 
 def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: torch.Tensor, log_target: bool = False):
     assert torch.max(attention_mask).item() <= 0
     assert attention_mask.ndim == 4
-    assert attention_mask.shape == input.shape
     
-    N, H, T, T = attention_mask.shape
+    N, H, T, T = input.shape
     
     if not log_target: # default
-        loss_pointwise = target * (target.log() - input)
+        loss_pointwise = target * ((target + 1e-12).log() - input)
     else:
         loss_pointwise = target.exp() * (target - input)
     
@@ -281,9 +280,45 @@ def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: 
     mask = mask * mask.transpose(-1, -2)
     
     loss_pointwise = loss_pointwise * mask
-    loss = loss_pointwise.sum() / 11
+    loss = loss_pointwise.sum() / (one_mask[:, :, 0, :].sum() + 1e-8)
     
     return loss
+
+from performer_pytorch import FastAttention
+
+class ProjectionUpdater(nn.Module):
+    def __init__(self, instance, feature_redraw_interval):
+        super().__init__()
+        self.instance = instance
+        self.feature_redraw_interval = feature_redraw_interval
+        self.register_buffer('calls_since_last_redraw', torch.tensor(0))
+
+    def fix_projections_(self):
+        self.feature_redraw_interval = None
+
+    def redraw_projections(self, device):
+        def exists(val):
+            return val is not None
+        def find_modules(nn_module, type):
+            return [module for module in nn_module.modules() if isinstance(module, type)]
+        
+        model = self.instance
+
+        if not self.training:
+            return
+
+        if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
+            fast_attentions = find_modules(model, FastAttention)
+            for fast_attention in fast_attentions:
+                fast_attention.redraw_projection_matrix(device)
+
+            self.calls_since_last_redraw.zero_()
+            return
+
+        self.calls_since_last_redraw += 1
+
+    def forward(self, x):
+        raise NotImplemented
 
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
@@ -313,8 +348,6 @@ class BertSelfAttention(nn.Module):
         self.is_decoder = config.is_decoder
         
         # perlin
-        from performer_pytorch import FastAttention, ProjectionUpdater
-        
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
@@ -456,24 +489,32 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            self.perlin_performer_proj_updater.redraw_projections()
+            self.perlin_performer_proj_updater.redraw_projections(q.device)
             performer_context_layer = self.perlin_performer(q, k, v)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
             estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
-            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
+            with torch.autocast('cuda', torch.float32):
+                if estimated_attention_score.dtype != torch.float32:
+                    estimated_attention_score = estimated_attention_score.to(torch.float32)
+                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             # in layerwise, train perlin attention predictor
             _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
-            with torch.autocast('cuda', enabled=False):
-                loss = F.kl_div(
-                    F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
-                    F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
-                    reduction='batchmean'
-                ) * 2
+            with torch.autocast('cuda', torch.float32):
+                # loss = F.kl_div(
+                #     F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
+                #     F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
+                #     reduction='batchmean'
+                # ) * 2
+                loss = kl_div_attention(
+                    F.log_softmax(estimated_attention_score, dim=-1),
+                    F.softmax(attention_scores_truth, dim=-1),
+                    attention_mask,
+                ) * 0.2
             # loss = F.mse_loss(
             #     estimated_attention_score.view(-1, T) * _amask,
             #     attention_scores_truth.view(-1, T) * _amask,
@@ -485,7 +526,7 @@ class BertSelfAttention(nn.Module):
             
             k = min(max(7, int(T*0.01)), T * 0.5)
             k_flatten = self.perlin_k_flatten # token_wise if True
-            warnings.warn(f'k_flatten {k_flatten}')
+            # warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
@@ -555,6 +596,7 @@ class BertSelfAttention(nn.Module):
             # breakpoint()
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
+            self.perlin_performer_proj_updater.redraw_projections(q.device)
             performer_context_layer = self.perlin_performer(q, k, v)
             attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
             
