@@ -265,6 +265,26 @@ def lora_forward(linear: nn.Linear, lora: LoraLinear, x: torch.Tensor, enabled: 
         x = x + linear.bias
     return x
 
+def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: torch.Tensor, log_target: bool = False):
+    assert torch.max(attention_mask).item() <= 0
+    assert attention_mask.ndim == 4
+    assert attention_mask.shape == input.shape
+    
+    N, H, T, T = attention_mask.shape
+    
+    if not log_target: # default
+        loss_pointwise = target * (target.log() - input)
+    else:
+        loss_pointwise = target.exp() * (target - input)
+    
+    one_mask = mask = (attention_mask > -1) * 1.0
+    mask = mask * mask.transpose(-1, -2)
+    
+    loss_pointwise = loss_pointwise * mask
+    loss = loss_pointwise.sum() / 11
+    
+    return loss
+
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
