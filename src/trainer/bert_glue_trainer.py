@@ -298,7 +298,7 @@ class Trainer:
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
-            warnings.warn('special loss found!')
+            # warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
         
         loss = loss_model + loss_kd + loss_special

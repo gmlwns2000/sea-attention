@@ -21,7 +21,7 @@ class Trainer(BaseTrainer):
         super().__init__(
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
-            amp_enabled=not (PERLIN_MODE == 'perlin'),
+            amp_enabled=not (PERLIN_MODE == 'perlin1'),
             trainer_name=f'perlin_trainer_kf{bool2int(PERLIN_K_FLATTEN)}_lw{bool2int(PERLIN_LAYERWISE)}_{PERLIN_MODE}',
             using_kd=(not PERLIN_LAYERWISE) and (PERLIN_MODE != 'performer_'),
             using_loss=not PERLIN_LAYERWISE,

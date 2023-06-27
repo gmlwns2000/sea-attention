@@ -508,7 +508,7 @@ class BertSelfAttention(nn.Module):
                     F.log_softmax(estimated_attention_score, dim=-1),
                     F.softmax(attention_scores_truth, dim=-1),
                     attention_mask,
-                ) * 2
+                ) * 0.2
             # loss = F.mse_loss(
             #     estimated_attention_score.view(-1, T) * _amask,
             #     attention_scores_truth.view(-1, T) * _amask,
@@ -517,7 +517,7 @@ class BertSelfAttention(nn.Module):
             
             k = min(max(7, int(T*0.01)), T * 0.5)
             k_flatten = self.perlin_k_flatten
-            warnings.warn(f'k_flatten {k_flatten}')
+            # warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
@@ -581,6 +581,7 @@ class BertSelfAttention(nn.Module):
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
+            self.perlin_performer_proj_updater.redraw_projections(q.device)
             performer_context_layer = self.perlin_performer(q, k, v)
             attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
             
