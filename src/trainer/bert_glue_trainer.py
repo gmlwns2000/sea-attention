@@ -496,12 +496,12 @@ class Trainer:
     
     def main(self):
         # wandb.login()
-        wandb.init( # TODO change
-            project="[baseM] visualize_bert_perlin"
-        )
+        # wandb.init( # TODO change
+        #     project="[baseM] visualize_bert_perlin"
+        # )
         # plot_base_model
-        self.plot_base_attention(current_state="baseM_main")
-        print("All done!!")
+        # self.plot_base_attention(current_state="baseM_main")
+        # print("All done!!")
         
         self.epoch = 0
         self.step = 0

@@ -593,26 +593,38 @@ class BertSelfAttention(nn.Module):
             k = key_layer
             v = value_layer
             N, H, T, HID = q.shape
-            # breakpoint()
+            breakpoint()
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            breakpoint()
             
             self.perlin_performer_proj_updater.redraw_projections(q.device)
+            breakpoint()
             performer_context_layer = self.perlin_performer(q, k, v)
+            breakpoint()
             attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+            breakpoint()
+            
             
             performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+            breakpoint()
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+            breakpoint()
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            breakpoint()
             
             context_layer = performer_context_layer # V'
+            breakpoint()
             
             # 4. for performer paper's attention visualization
+            
+            
+            
             # v_for_viz : one-hot indicators for each position index
-            t3 = self.viz_batch['attention_mask'][self.batch_index]
-            self.performer_attention_mask_indx = (t3==0).nonzero()[0].squeeze().item()
+            # t3 = self.viz_batch['attention_mask'][self.batch_index]
+            # self.performer_attention_mask_indx = (t3==0).nonzero()[0].squeeze().item()
 
-            v_identity = torch.eye(self.performer_attention_mask_indx) # TODO check implementation : real sequence length
-            self.performer_attention_probs = self.perlin_performer(q, k, v_identity)
+            # v_identity = torch.eye(self.performer_attention_mask_indx) # TODO check implementation : real sequence length
+            # self.performer_attention_probs = self.perlin_performer(q, k, v_identity)
             
             
             
