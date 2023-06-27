@@ -1,3 +1,5 @@
+import warnings
+import torch
 from .bert_glue_trainer import Trainer as BaseTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
@@ -20,7 +22,7 @@ class Trainer(BaseTrainer):
     ):
         global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN
 
-        task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 32
+        task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 24
 
         super().__init__(
             subset=subset,
@@ -43,6 +45,7 @@ class Trainer(BaseTrainer):
             for module in self.model.modules():
                 if isinstance(module, perlin.BertSelfAttention):
                     module.perlin_layerwise = True
+                    module.perlin_lora_enabled = True
             
             for name, param in self.model.named_parameters():
                 if 'perlin' in name:
