@@ -272,7 +272,7 @@ def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: 
     N, H, T, T = input.shape
     
     if not log_target: # default
-        loss_pointwise = target * (target.log() - input)
+        loss_pointwise = target * ((target + 1e-12).log() - input)
     else:
         loss_pointwise = target.exp() * (target - input)
     
