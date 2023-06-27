@@ -293,7 +293,7 @@ class BertSelfAttention(nn.Module):
         self.is_decoder = config.is_decoder
         
         # perlin
-        from performer_pytorch import FastAttention
+        from performer_pytorch import FastAttention, ProjectionUpdater
         
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
@@ -310,6 +310,10 @@ class BertSelfAttention(nn.Module):
             dim_heads = self.attention_head_size,
             # nb_features = 256,
             causal=False
+        )
+        self.perlin_performer_proj_updater = ProjectionUpdater(
+            self.perlin_performer, 
+            1000,
         )
         self.perlin_performer_out = nn.Sequential(
             nn.Dropout(0.1),
@@ -426,6 +430,7 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
+            self.perlin_performer_proj_updater.redraw_projections()
             performer_context_layer = self.perlin_performer(q, k, v)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
