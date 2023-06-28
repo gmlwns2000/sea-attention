@@ -320,6 +320,33 @@ class ProjectionUpdater(nn.Module):
     def forward(self, x):
         raise NotImplemented
 
+# template for attention synthesizers
+class SynthesizerDenseAttention(nn.Module):
+    def __init__(self, max_seq_len, d_k, d_hid = 64, attn_dropout = 0.1):
+        #d_hid = 8*(128/8)/2
+        super().__init__()
+        self.w_1 = nn.Linear(d_k, d_hid)
+        self.w_2 = nn.Linear(d_hid, max_seq_len)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(attn_dropout)
+
+    def forward(self, q, v, mask=None):
+        N, H, T, HID = q.shape
+
+        # b x n x lq x dq -> b x n x lq x lq #
+        dense_attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:T]
+        # print('Attn: ', dense_attn.shape)
+        # print('Mask: ', mask.shape)
+        # print('V: ', v.shape)
+
+        if mask is not None:
+            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
+
+        dense_attn = self.dropout(F.softmax(dense_attn, dim=-1))
+        output = torch.matmul(dense_attn, v)
+        
+        return output, dense_attn
+
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
@@ -408,6 +435,11 @@ class BertSelfAttention(nn.Module):
         self.perlin_k_flatten = True
         self.last_loss = None
         self.perlin_layerwise = False
+        
+        self.perlin_synth_atten = SynthesizerDenseAttention(
+            max_seq_len=512,
+            d_k=self.attention_head_size,
+        )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -590,6 +622,24 @@ class BertSelfAttention(nn.Module):
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
             context_layer = performer_context_layer
+            
+            self.last_loss = 0
+        elif self.perlin_mode == 'synthesizer':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            
+            binary_mask = (attention_mask > -1) * 1.0
+            
+            synthesizer_context_layer, attention_probs = self.perlin_synth_atten(q, v, mask = binary_mask)
+            
+            synthesizer_context_layer = synthesizer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = synthesizer_context_layer.size()[:-2] + (self.all_head_size,)
+            synthesizer_context_layer = synthesizer_context_layer.view(new_context_layer_shape)
+            
+            context_layer = synthesizer_context_layer
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':
