@@ -433,6 +433,7 @@ class BertSelfAttention(nn.Module):
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
         self.perlin_k_flatten = True
+        self.perlin_k = 7
         self.last_loss = None
         self.perlin_layerwise = False
         
@@ -547,7 +548,7 @@ class BertSelfAttention(nn.Module):
             # ) * 4
             # (N, H, T, K)
             
-            k = min(max(7, int(T*0.01)), T * 0.5)
+            k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
             k_flatten = self.perlin_k_flatten
             # warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:

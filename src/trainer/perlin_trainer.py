@@ -4,6 +4,7 @@ from .bert_glue_trainer import Trainer as BaseTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
 
+PERLIN_K = 7
 PERLIN_K_FLATTEN = True
 PERLIN_LAYERWISE = False
 PERLIN_MODE = 'perlin'
@@ -14,15 +15,17 @@ class Trainer(BaseTrainer):
     def __init__(
         self, subset = 'mnli'
     ):
-        global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN
+        global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN, PERLIN_K
 
         task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 24
+        
+        k_window_size = f'_k{PERLIN_K}' if PERLIN_K != 7 else ''
 
         super().__init__(
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
             amp_enabled=True,
-            trainer_name=f'perlin_trainer_kf{bool2int(PERLIN_K_FLATTEN)}_lw{bool2int(PERLIN_LAYERWISE)}_{PERLIN_MODE}',
+            trainer_name=f'perlin_trainer_kf{bool2int(PERLIN_K_FLATTEN)}_lw{bool2int(PERLIN_LAYERWISE)}_{PERLIN_MODE}{k_window_size}',
             using_kd=(not PERLIN_LAYERWISE),
             using_loss=not PERLIN_LAYERWISE,
             eval_steps=2000,
@@ -34,6 +37,7 @@ class Trainer(BaseTrainer):
             if isinstance(module, perlin.BertSelfAttention):
                 module.perlin_mode = PERLIN_MODE
                 module.perlin_k_flatten = PERLIN_K_FLATTEN
+                module.perlin_k = PERLIN_K
         
         if PERLIN_LAYERWISE:
             for module in self.model.modules():
@@ -54,8 +58,10 @@ if __name__ == '__main__':
     parser.add_argument('--mode', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
     parser.add_argument('--k-colwise', action='store_true', default=False)
+    parser.add_argument('--k', default=7, type=int)
     args = parser.parse_args()
     
+    PERLIN_K = args.k
     PERLIN_MODE = args.mode
     PERLIN_K_FLATTEN = not args.k_colwise
     PERLIN_LAYERWISE = args.layerwise
