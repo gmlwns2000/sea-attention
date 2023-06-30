@@ -375,6 +375,9 @@ class BertSelfAttention(nn.Module):
         self.perlin_k_flatten = True
         self.last_loss = None
         self.perlin_layerwise = False
+        
+        self.perlin_last_attention_prob = None
+        self.perlin_viz_before_topk = False
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -457,9 +460,14 @@ class BertSelfAttention(nn.Module):
             # (N, H, T, P)
             estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
-            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
+            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear') # TODO BFloat16 error .to(torch.float32)
+            estimated_attention_score = estimated_attention_score # .to(torch.bfloat16)
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+            
+            if self.perlin_viz_before_topk:
+                self.perlin_last_attention_prob = estimated_attention_probs
+            
             # in layerwise, train perlin attention predictor
             _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
             with torch.autocast('cuda', enabled=False):
@@ -512,6 +520,9 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
+            if not self.perlin_viz_before_topk:
+                self.perlin_last_attention_prob = partial_attention_probs
+            
             partial_context_layer = torch.matmul(partial_attention_probs, v)
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
@@ -548,6 +559,11 @@ class BertSelfAttention(nn.Module):
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
             context_layer = performer_context_layer
+            
+            # TODO approximate performer attention matrix
+            '''
+            
+            '''
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':

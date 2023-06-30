@@ -7,6 +7,7 @@ from .bert_glue_trainer import task_to_batch_size
 PERLIN_K_FLATTEN = True
 PERLIN_LAYERWISE = False
 PERLIN_MODE = 'perlin'
+PERLIN_VIZ_BEFORE_TOPK = False
 
 bool2int = lambda x: 1 if x else 0
 
@@ -14,7 +15,7 @@ class Trainer(BaseTrainer):
     def __init__(
         self, subset = 'mnli'
     ):
-        global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN
+        global PERLIN_LAYERWISE, PERLIN_MODE, PERLIN_K_FLATTEN, PERLIN_VIZ_BEFORE_TOPK
 
         task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 24
 
@@ -30,10 +31,14 @@ class Trainer(BaseTrainer):
             epochs = 20
         )
         
+        self.perlin_mode = PERLIN_MODE
+        self.perlin_viz_before_topk = PERLIN_VIZ_BEFORE_TOPK
+        
         for module in self.model.modules():
             if isinstance(module, perlin.BertSelfAttention):
                 module.perlin_mode = PERLIN_MODE
                 module.perlin_k_flatten = PERLIN_K_FLATTEN
+                module.perlin_viz_before_topk = PERLIN_VIZ_BEFORE_TOPK
         
         if PERLIN_LAYERWISE:
             for module in self.model.modules():
@@ -46,6 +51,10 @@ class Trainer(BaseTrainer):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
+    
+    from ._plot_trainer import plot_attentions_all_layer
+    
+    
 
 if __name__ == '__main__':
     import argparse

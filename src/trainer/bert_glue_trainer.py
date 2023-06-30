@@ -201,6 +201,11 @@ class Trainer:
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
+        # for plot_attentions_all_layer in _plot_trainer
+        for batch in self.valid_loader:
+            self.viz_batch = batch
+            break
+        
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
         self.model.to(self.device)
@@ -211,6 +216,8 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
+    
+    from ._plot_trainer import plot_attentions_all_layer
     
     def reset_trainloader(self):
         if self.subset != 'bert':
@@ -352,6 +359,9 @@ class Trainer:
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
+                    
+                    #visualization
+                    self.plot_attentions_all_layer(current_state=f"train_epoch_{self.epoch+1}_{istep+1}")
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -424,6 +434,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
+            self.plot_attentions_all_layer(current_state=f"main_epoch_{self.epoch+1}")
             self.evaluate(split='train')
             self.save()
 
