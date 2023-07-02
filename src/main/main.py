@@ -113,7 +113,7 @@ class Main():
         warnings.warn(project_name+"!")
         
         self.load()
-        self.plot_attentions_all_layer(current_state=f"loaded_{self.epoch+1}")
+        self.plot_attentions_all_layer(current_state=f"loaded_ep{self.epoch+1}")
 
 if __name__ == '__main__':
     import argparse
@@ -140,7 +140,7 @@ if __name__ == '__main__':
         _TRAINER_NAME = 'bert_glue_trainer'
     elif _MODE == 'perlin' or _MODE == 'performer':
         _TRAINER_NAME = f'perlin_trainer_kf{bool2int(PERLIN_K_RELWISE)}_lw{bool2int(PERLIN_LAYERWISE)}_{_MODE}' # TODO temporarily implemented
-        # _TRAINER_NAME = trainer_name=f'perlin_trainer_lw{bool2int(PERLIN_LAYERWISE)}_rw{bool2int(PERLIN_K_RELWISE)}_bf{bool2int(PERLIN_BEFORE_TOPK)}_{PERLIN_MODE}' # TODO use this
+        # _TRAINER_NAME = trainer_name=f'perlin_trainer_lw{bool2int(PERLIN_LAYERWISE)}_rw{bool2int(PERLIN_K_RELWISE)}_bf{bool2int(PERLIN_BEFORE_TOPK)}_{_MODE}' # TODO use this
     else:
         raise Exception("Plot: path doesn't exist.")
     _PATH = f'./saves/trainer/hj/{_TRAINER_NAME}/checkpoint_{SUBSET}.pth' # NOTE(JIN) path hj

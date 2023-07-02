@@ -371,7 +371,7 @@ class Trainer:
                     m = Metric()
                     
                     # visualization
-                    self.plot_attentions_all_layer(current_state=f"train_epoch_{self.epoch+1}_{istep+1}")
+                    self.plot_attentions_all_layer(current_state=f"train_epoch_ep{self.epoch+1}_is{istep+1}")
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         global TRAIN_MODE
@@ -427,10 +427,10 @@ class Trainer:
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'config': self.base_model.config, # TODO check
             'viz_batch': self.viz_batch, # TODO check
             'loss': self.loss_details if TRAIN_MODE else '', # TODO(JIN): check + save as .tar?
             'accuracy': self.last_metric_score.items(), # TODO(JIN): check
-            # TODO 'config': self.base_model.config
         }, path)
     
     def load(self, path=None):
@@ -459,7 +459,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.plot_attentions_all_layer(current_state=f"main_epoch_{self.epoch+1}")
+            self.plot_attentions_all_layer(current_state=f"main_epoch_ep{self.epoch+1}")
             self.evaluate(split='train') # check overfitting
             self.save()
 
