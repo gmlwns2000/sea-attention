@@ -453,7 +453,7 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            self.perlin_performer_proj_updater.redraw_projections() # NOTE(JIN) : error's happening in this line
+            # self.perlin_performer_proj_updater.redraw_projections() # NOTE(JIN) : error's happening in this line
             performer_context_layer = self.perlin_performer(q, k, v)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
@@ -470,12 +470,14 @@ class BertSelfAttention(nn.Module):
             
             # in layerwise, train perlin attention predictor
             _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
+            breakpoint()
             with torch.autocast('cuda', enabled=False):
                 loss = F.kl_div(
-                    F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
+                    F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask, # [16, 12, 203, 203] -> 
                     F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
                     reduction='batchmean'
                 ) * 2
+            breakpoint()
             # loss = F.mse_loss(
             #     estimated_attention_score.view(-1, T) * _amask,
             #     attention_scores_truth.view(-1, T) * _amask,

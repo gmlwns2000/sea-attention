@@ -4,11 +4,6 @@ from .bert_glue_trainer import Trainer as BaseTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
 
-PERLIN_K_RELWISE = True # PERLIN_K_FLATTEN
-PERLIN_LAYERWISE = False
-PERLIN_MODE = 'perlin'
-PERLIN_BEFORE_TOPK = False
-
 bool2int = lambda x: 1 if x else 0
 
 class Trainer(BaseTrainer):
@@ -19,6 +14,16 @@ class Trainer(BaseTrainer):
 
         task_to_batch_size['mnli'] = 16 if not PERLIN_LAYERWISE else 24
 
+        if PERLIN_MODE=="perlin":
+            if PERLIN_BEFORE_TOPK == True:
+                self.proj_type = "perlin_before"
+            elif PERLIN_BEFORE_TOPK == False:
+                self.proj_type = "perlin_after"
+        elif PERLIN_MODE == "performer":
+            self.proj_type = "performer"
+        else:
+            raise Exception(f"Perlin_trainer] check PERLIN_MODE {PERLIN_MODE}")
+        
         super().__init__(
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
@@ -28,7 +33,8 @@ class Trainer(BaseTrainer):
             using_loss=not PERLIN_LAYERWISE,
             eval_steps=2000,
             lr = 1e-4,
-            epochs = 20
+            epochs = 20,
+            proj_type = self.proj_type
         )
         
         self.perlin_mode = PERLIN_MODE
@@ -51,23 +57,28 @@ class Trainer(BaseTrainer):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
-    
-    from ._plot_trainer import plot_attentions_all_layer
-    
-    
+                    
 
 if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', default='perlin', type=str)
-    parser.add_argument('--layerwise', action='store_true')
+    parser.add_argument('--layerwise', action='store_true') # default = False
     parser.add_argument('--k-relwise', action='store_true')
+    parser.add_argument('--before-topk', action='store_true')
+    
     args = parser.parse_args()
     
     PERLIN_MODE = args.mode
     PERLIN_LAYERWISE = args.layerwise
     PERLIN_K_RELWISE = args.k_relwise
+    PERLIN_BEFORE_TOPK = args.before_topk
+    
+    print(f"Perlin_trainer] perlin_mode: {PERLIN_MODE}")
+    print(f"Perlin_trainer] perlin_layerwise: {PERLIN_LAYERWISE}")
+    print(f"Perlin_trainer] perlin_k_relwise: {PERLIN_K_RELWISE}")
+    print(f"Perlin_trainer] perlin_before_topk: {PERLIN_BEFORE_TOPK}")
     
     trainer = Trainer(
         subset='mnli'

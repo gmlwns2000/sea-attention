@@ -35,9 +35,9 @@ def plot_attentions_all_layer(self, current_state):
         elif self.perlin_mode == 'performer':
             viz_matrix_type = 'performerM'
         else:
-            raise Exception(f"_Plot_trainer] self.perlin_mode {self.perlin_mode}")
+            raise Exception(f"Plot] self.perlin_mode {self.perlin_mode}")
     else: #TODO
-        raise Exception(f"_Plot_trainer] {self.trainer_name} is neither bert_glue_trainer nor perlin_trainer.")
+        raise Exception(f"Plot] {self.trainer_name} is neither bert_glue_trainer nor perlin_trainer.")
     
     os.makedirs(f'./saves/trainer/{self.trainer_name}/{viz_matrix_type}/{current_state}/', exist_ok=True)
     

@@ -176,7 +176,8 @@ class Trainer:
         eval_steps = 1500,
         lr = 1e-5,
         epochs = 100,
-        load_ignore_keys = ['perlin', 'pbert', 'permute']
+        load_ignore_keys = ['perlin', 'pbert', 'permute'],
+        proj_type = "base"
     ) -> None:
         # global TRAIN_MODE
         
@@ -189,6 +190,7 @@ class Trainer:
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
         self.using_loss = using_loss
+        self.proj_type = proj_type
         
         self.amp_enabled = amp_enabled
         self.device = 0
@@ -206,7 +208,7 @@ class Trainer:
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
-        # for plot_attentions_all_layer in _plot_trainer
+        # for plot_attentions_all_layer in plot
         for batch in self.valid_loader:
             self.viz_batch = batch_to(batch, self.device)
             break
@@ -413,7 +415,6 @@ class Trainer:
         
         score = metric.compute()
         self.last_metric_score = score
-        breakpoint() # NOTE check how to get scor num -> update line 431
         if show_messages:
             tqdm.tqdm.write(f'metric score {score}')
         return score
@@ -430,7 +431,7 @@ class Trainer:
             'config': self.base_model.config, # TODO check
             'viz_batch': self.viz_batch, # TODO check
             'loss': self.loss_details if TRAIN_MODE else '', # TODO(JIN): check + save as .tar?
-            'accuracy': self.last_metric_score.items(), # TODO(JIN): check
+            'accuracy': self.last_metric_score['accuracy'], # TODO(JIN): check
         }, path)
     
     def load(self, path=None):
@@ -447,11 +448,12 @@ class Trainer:
             print('error while load', ex)
     
     def main(self):
-        project_name = "[perlin_after] with redraw_projections" # TODO change
+        project_name = f"[{self.proj_type}] without redraw_projections" # TODO change
         wandb.init(
              project=project_name
          )
-        warnings.warn(project_name+"!")
+        print("\n"+project_name+"!\n")
+        warnings.warn("\n\nif running perlin, CHECK PERLIN_BEFORE_TOPK!\n")
         self.epoch = 0
         self.step = 0
         
