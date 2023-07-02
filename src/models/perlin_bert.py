@@ -372,12 +372,12 @@ class BertSelfAttention(nn.Module):
             nn.Linear(self.all_head_size*2, self.num_attention_heads),
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
-        self.perlin_k_flatten = True
+        self.perlin_k_relwise = True
         self.last_loss = None
         self.perlin_layerwise = False
         
         self.perlin_last_attention_prob = None
-        self.perlin_viz_before_topk = False
+        self.perlin_before_topk = False
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -453,19 +453,19 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            self.perlin_performer_proj_updater.redraw_projections()
+            self.perlin_performer_proj_updater.redraw_projections() # NOTE(JIN) : error's happening in this line
             performer_context_layer = self.perlin_performer(q, k, v)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
             estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
-            estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear') # TODO BFloat16 error .to(torch.float32)
+            estimated_attention_score = F.interpolate(estimated_attention_score.to(torch.float16), (T, T), mode='bilinear') # NOTE(JIN): BFloat16 error .to(torch.float32)
             estimated_attention_score = estimated_attention_score # .to(torch.bfloat16)
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             
-            if self.perlin_viz_before_topk:
+            if self.perlin_before_topk:
                 self.perlin_last_attention_prob = estimated_attention_probs
             
             # in layerwise, train perlin attention predictor
@@ -483,9 +483,9 @@ class BertSelfAttention(nn.Module):
             # (N, H, T, K)
             
             k = min(max(7, int(T*0.01)), T * 0.5)
-            k_flatten = self.perlin_k_flatten
-            warnings.warn(f'k_flatten {k_flatten}')
-            if not k_flatten:
+            k_relwise = self.perlin_k_relwise
+            warnings.warn(f'k_relwise {k_relwise}')
+            if not k_relwise:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
                     k=k, dim=-1,
@@ -520,7 +520,7 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
-            if not self.perlin_viz_before_topk:
+            if not self.perlin_before_topk:
                 self.perlin_last_attention_prob = partial_attention_probs
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)

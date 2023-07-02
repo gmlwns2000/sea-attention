@@ -7,12 +7,15 @@ import transformers
 from datasets import load_dataset, load_metric
 import random, copy
 import torch
+import wandb
 
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+
+TRAIN_MODE = True
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -41,7 +44,7 @@ task_to_epochs = {
 
 task_to_batch_size = {
     "cola": 64,
-    "mnli": 4,
+    "mnli": 16,
     "mrpc": 32,
     "qnli": 4,
     "qqp":  16,
@@ -95,7 +98,7 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
     dataloader = torch.utils.data.DataLoader(
         dataset, 
         batch_size=batch_size, 
-        num_workers=0,
+        num_workers=0, # NOTE(JIN): check value
     )
     return dataloader
 
@@ -175,6 +178,8 @@ class Trainer:
         epochs = 100,
         load_ignore_keys = ['perlin', 'pbert', 'permute']
     ) -> None:
+        # global TRAIN_MODE
+        
         seed()
         
         self.load_ignore_keys = load_ignore_keys
@@ -203,7 +208,7 @@ class Trainer:
         
         # for plot_attentions_all_layer in _plot_trainer
         for batch in self.valid_loader:
-            self.viz_batch = batch
+            self.viz_batch = batch_to(batch, self.device)
             break
         
         assert model_cls is not None
@@ -217,7 +222,7 @@ class Trainer:
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
     
-    from ._plot_trainer import plot_attentions_all_layer
+    from ..main.plot import plot_attentions_all_layer
     
     def reset_trainloader(self):
         if self.subset != 'bert':
@@ -288,7 +293,8 @@ class Trainer:
             batch['output_attentions'] = True
             with torch.no_grad():
                 output_base = self.base_model(**batch)
-            batch['teacher'] = self.base_model
+            if 'bert_glue_trainer' not in self.trainer_name: # model_cls != berts.BertForSequenceClassification: running for baseM visualization
+                batch['teacher'] = self.base_model
             output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
@@ -298,7 +304,7 @@ class Trainer:
         
         loss_kd = 0
         if self.using_kd:
-            for ilayer in range(len(output_base.hidden_states)):
+            for ilayer in range(len(output_base.hidden_states)): # NOTE(JIN): first is output of BertEmbeddings. len: 13 tensor, each [batch_size, sequence_lengh, hidden_size]
                 loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
@@ -327,6 +333,7 @@ class Trainer:
         }
     
     def train_epoch(self):
+        global TRAIN_MODE
         # self.model = torch.compile(self.model_unwrap)
         self.reset_trainloader()
         
@@ -355,15 +362,21 @@ class Trainer:
                 
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
+                    
+                    TRAIN_MODE = True
                     self.save()
+                    
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
                     
-                    #visualization
+                    # visualization
                     self.plot_attentions_all_layer(current_state=f"train_epoch_{self.epoch+1}_{istep+1}")
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
+        global TRAIN_MODE
+        TRAIN_MODE = False
+        
         if self.subset == 'bert':
             return {'accuracy': 0.0}
         
@@ -387,9 +400,10 @@ class Trainer:
             labels = batch['labels']
             del batch['labels']
             
-            with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
+            with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled): # TODO JIN: modified torch.bfloat16
                 self.base_model(**batch)
-                batch['teacher'] = self.base_model
+                if 'bert_glue_trainer' not in self.trainer_name:
+                    batch['teacher'] = self.base_model
                 outputs = model(**batch)
             predictions = outputs[0]
 
@@ -399,18 +413,24 @@ class Trainer:
         
         score = metric.compute()
         self.last_metric_score = score
+        breakpoint() # NOTE check how to get scor num -> update line 431
         if show_messages:
             tqdm.tqdm.write(f'metric score {score}')
         return score
 
-    def save(self):
+    def save(self): # TODO(JIN): why not save the entire model?
         os.makedirs(f'./saves/trainer/{self.trainer_name}/', exist_ok=True)
-        path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth'
+        path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth' # NOTE(JIN): update plot.py once changed
         print(f'Trainer: save {path}')
         torch.save({
+            'epoch': self.epoch+1,
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'viz_batch': self.viz_batch, # TODO check
+            'loss': self.loss_details if TRAIN_MODE else '', # TODO(JIN): check + save as .tar?
+            'accuracy': self.last_metric_score.items(), # TODO(JIN): check
+            # TODO 'config': self.base_model.config
         }, path)
     
     def load(self, path=None):
@@ -427,6 +447,11 @@ class Trainer:
             print('error while load', ex)
     
     def main(self):
+        project_name = "[perlin_after] with redraw_projections" # TODO change
+        wandb.init(
+             project=project_name
+         )
+        warnings.warn(project_name+"!")
         self.epoch = 0
         self.step = 0
         
@@ -435,7 +460,7 @@ class Trainer:
             self.train_epoch()
             self.evaluate()
             self.plot_attentions_all_layer(current_state=f"main_epoch_{self.epoch+1}")
-            self.evaluate(split='train')
+            self.evaluate(split='train') # check overfitting
             self.save()
 
 if __name__ == '__main__':
