@@ -175,7 +175,8 @@ class Trainer:
         eval_steps = 1500,
         lr = 1e-5,
         epochs = 100,
-        load_ignore_keys = ['perlin', 'pbert', 'permute']
+        load_ignore_keys = ['perlin', 'pbert', 'permute'],
+        gradient_checkpointing = False,
     ) -> None:
         seed()
         
@@ -205,6 +206,9 @@ class Trainer:
         
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
+        for module in self.model.modules():
+            if hasattr(module, 'gradient_checkpointing') and isinstance(getattr(module, 'gradient_checkpointing', None), bool):
+                module.gradient_checkpointing = gradient_checkpointing
         self.model.to(self.device)
 
         self.load_state_from_base()
