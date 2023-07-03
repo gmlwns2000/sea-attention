@@ -375,6 +375,8 @@ class BertSelfAttention(nn.Module):
         self.is_decoder = config.is_decoder
         
         # perlin
+        self.perlin_mode = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
+        
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
@@ -385,7 +387,6 @@ class BertSelfAttention(nn.Module):
         self.perlin_key_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         self.perlin_value_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
-        self.perlin_mode = 'perlin' # in ['none', 'performer', 'perlin']
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
             # nb_features = 256,
@@ -440,6 +441,17 @@ class BertSelfAttention(nn.Module):
         self.perlin_synth_atten = SynthesizerDenseAttention(
             max_seq_len=512,
             d_k=self.attention_head_size,
+        )
+        
+        from sinkhorn_transformer.sinkhorn_transformer import SinkhornAttention
+        
+        self.perlin_sinkhorn_atten = SinkhornAttention(
+            bucket_size=self.perlin_k,
+            dim=self.all_head_size,
+            dim_heads=self.attention_head_size,
+            heads=self.num_attention_heads,
+            max_seq_len=512,
+            dropout=config.attention_probs_dropout_prob,
         )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
@@ -641,6 +653,48 @@ class BertSelfAttention(nn.Module):
             synthesizer_context_layer = synthesizer_context_layer.view(new_context_layer_shape)
             
             context_layer = synthesizer_context_layer
+            
+            self.last_loss = 0
+        elif self.perlin_mode == 'sinkhorn':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            
+            binary_mask = attention_mask > -1
+            
+            #pad
+            to_pad = 0 if (T % self.perlin_k) == 0 else (self.perlin_k - (T % self.perlin_k))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                k = F.pad(k, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                binary_mask = F.pad(binary_mask.expand(N, 1, 1, T), (0,to_pad), value=0.0).bool().view(N, TP)
+                assert q.shape == (N, H, T+to_pad, HID)
+                # assert binary_mask.shape == (N, T+to_pad)
+            else:
+                q = q.float()
+                k = k.float()
+                v = v.float()
+                binary_mask = binary_mask.bool().view(N, TP)
+            sinkhorn_context_layer = self.perlin_sinkhorn_atten(q, k, v, q_mask = binary_mask, kv_mask = binary_mask)
+            #unpad
+            if to_pad != 0:
+                q = q[:, :, :T, :]
+                k = k[:, :, :T, :]
+                v = v[:, :, :T, :]
+                sinkhorn_context_layer = sinkhorn_context_layer[:, :, :T, :]
+            
+            attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            
+            sinkhorn_context_layer = sinkhorn_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = sinkhorn_context_layer.size()[:-2] + (self.all_head_size,)
+            sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
+            
+            context_layer = sinkhorn_context_layer
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':

@@ -69,6 +69,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
+    parser.add_argument('--subset', default='mnli', type=str)
     parser.add_argument('--mode', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
     parser.add_argument('--k-colwise', action='store_true', default=False)
@@ -77,7 +78,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     trainer = Trainer(
-        subset='mnli',
+        subset=args.subset,
         perlin_k=args.k,
         perlin_mode=args.mode,
         perlin_k_flatten=not args.k_colwise,
