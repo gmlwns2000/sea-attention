@@ -81,7 +81,7 @@ if __name__ == '__main__':
         perlin_k=args.k,
         perlin_mode=args.mode,
         perlin_k_flatten=not args.k_colwise,
-        perlin_layerwise=args.layer_wise,
+        perlin_layerwise=args.layerwise,
         perlin_lora=args.lora
     )
     trainer.main()
