@@ -453,6 +453,15 @@ class BertSelfAttention(nn.Module):
             max_seq_len=512,
             dropout=config.attention_probs_dropout_prob,
         )
+        
+        from reformer_pytorch.reformer_pytorch import LSHAttention
+        
+        self.perlin_reformer_atten = LSHAttention(
+            dropout=config.attention_probs_dropout_prob,
+            bucket_size=32,
+            n_hashes=8,
+            return_attn=False,
+        )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -695,6 +704,60 @@ class BertSelfAttention(nn.Module):
             sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
             
             context_layer = sinkhorn_context_layer
+            
+            self.last_loss = 0
+        elif self.perlin_mode == 'reformer':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            
+            binary_mask = attention_mask > -1
+            
+            #pad
+            bucket_size = self.perlin_k
+            to_pad = 0 if (T % bucket_size) == 0 else (bucket_size - (T % bucket_size))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                k = F.pad(k, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, 1, TP, TP)
+                assert q.shape == (N, H, T+to_pad, HID)
+                # assert binary_mask.shape == (N, T+to_pad)
+            else:
+                q = q.float()
+                k = k.float()
+                v = v.float()
+                binary_mask = binary_mask.bool().view(N, TP)
+            def merge_head(t: torch.Tensor):
+                N, H, T, HID = t.shape
+                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            q = merge_head(q)
+            k = merge_head(k)
+            v = merge_head(v)
+            self.perlin_reformer_atten.bucket_size = bucket_size
+            reformer_context_layer, _,_ = self.perlin_reformer_atten(
+                torch.cat([q, k], dim=-1), 
+                v, 
+                input_attn_mask = binary_mask
+            )
+            #unpad
+            if to_pad != 0:
+                q = q[:, :, :T, :]
+                k = k[:, :, :T, :]
+                v = v[:, :, :T, :]
+                reformer_context_layer = reformer_context_layer[:, :, :T, :]
+            
+            attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            
+            reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
+            reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
+            
+            context_layer = reformer_context_layer
             
             self.last_loss = 0
         elif self.perlin_mode == 'none':
