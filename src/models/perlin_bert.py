@@ -395,8 +395,9 @@ class BertSelfAttention(nn.Module):
         self.perlin_value_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
         #- attention predictor
+        self.perlin_attention_predictor_method = 'mlp'
         self.perlin_attention_predictor_length = 128
-        self.perlin_attetnion_predictor_method = 'mlp'
+        #-- mlp predictor
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
             # nb_features = 256,
@@ -418,6 +419,33 @@ class BertSelfAttention(nn.Module):
         self.perlin_attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(config.hidden_size, self.num_attention_heads),
         )
+        #-- compressed predictor
+        self.perlin_attention_perdictor_comp_book_size = 8
+        self.perlin_attention_predictor_comp_patch_size = 16
+        self.perlin_attention_predictor_comp_patch_count = 16
+        self.perlin_attention_predictor_comp_length = \
+            self.perlin_attention_predictor_comp_patch_count * self.perlin_attention_predictor_comp_patch_size
+        self.perlin_attention_predictor_comp_codebook = nn.Parameter(
+            torch.randn((self.perlin_attention_perdictor_comp_book_size, self.perlin_attention_predictor_comp_patch_size))
+        )
+        self.perlin_attention_predictor_comp_enc = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
+        )
+        self.perlin_attention_predictor_comp_dec_row = nn.Sequential(
+            nn.Linear(
+                config.hidden_size, 
+                self.num_attention_heads\
+                    * self.perlin_attention_perdictor_comp_book_size\
+                    * self.perlin_attention_predictor_comp_patch_count
+            ),
+        )
+        self.perlin_attention_predictor_comp_dec_scaler = nn.Sequential(
+            nn.Linear(config.hidden_size, self.num_attention_heads),
+        )
+        #-- TODO VQVAE
         
         #- output
         self.perlin_out = nn.Sequential(
@@ -540,15 +568,42 @@ class BertSelfAttention(nn.Module):
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
-            t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
-            estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
+            
+            # estimate attention scores
+            if self.perlin_attention_predictor_method == 'mlp':
+                t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+            elif self.perlin_attention_predictor_method == 'comp':
+                warnings.warn('attention prediction method is compressed one.')
+                t_attention_predictor = self.perlin_attention_predictor_comp_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+                estimated_attention_score = estimated_attention_score\
+                    .view(N, H, T, self.perlin_attention_predictor_comp_patch_count, self.perlin_attention_perdictor_comp_book_size)
+                _, _, _, CODE_SEQ_LEN, BOOK_LEN = estimated_attention_score.shape
+                estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
+                estimated_attention_score = torch.matmul(
+                    estimated_attention_score.view(-1, BOOK_LEN), 
+                    self.perlin_attention_predictor_comp_codebook
+                )
+                estimated_attention_score = estimated_attention_score.view(N, H, T, -1)
+            else:
+                raise Exception()
+            
+            # interpolate and convert to probability
+            original_dtype = estimated_attention_score.dtype
             with torch.autocast('cuda', torch.float32):
                 if estimated_attention_score.dtype != torch.float32:
                     estimated_attention_score = estimated_attention_score.to(torch.float32)
-                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
+                interp_mode = 'bilinear' if T >= estimated_attention_score.shape[-1] else 'area'
+                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
+            if estimated_attention_score.dtype != original_dtype:
+                estimated_attention_score = estimated_attention_score.to(original_dtype)
+            
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+            
             # in layerwise, train perlin attention predictor
             with torch.autocast('cuda', torch.float32):
                 loss = kl_div_attention(
