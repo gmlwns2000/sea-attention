@@ -17,6 +17,7 @@ class Trainer(BaseTrainer):
         perlin_layerwise = False,
         perlin_lora = False,
         perlin_mode = 'perlin',
+        gradient_checkpointing = False,
     ):
         self.perlin_k = perlin_k
         self.perlin_k_flatten = perlin_k_flatten
@@ -43,6 +44,7 @@ class Trainer(BaseTrainer):
             eval_steps=2000,
             lr = lr,
             epochs = epochs,
+            gradient_checkpointing = gradient_checkpointing
         )
         
         for module in self.model.modules():
@@ -76,6 +78,7 @@ if __name__ == '__main__':
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--k', default=7, type=int)
     parser.add_argument('--lora', action='store_true', default=False)
+    parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     args = parser.parse_args()
     
     trainer = Trainer(
@@ -84,6 +87,7 @@ if __name__ == '__main__':
         perlin_mode=args.mode,
         perlin_k_flatten=not args.k_colwise,
         perlin_layerwise=args.layerwise,
-        perlin_lora=args.lora
+        perlin_lora=args.lora,
+        gradient_checkpointing=args.gradient_checkpointing
     )
     trainer.main()
