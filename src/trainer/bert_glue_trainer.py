@@ -135,6 +135,8 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
+BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+
 class Metric:
     def __init__(self):
         self.sum = {}
@@ -276,7 +278,7 @@ class Trainer:
     def train_step(self, batch):
         self.optimizer.zero_grad()
         
-        with torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
+        with torch.autocast('cuda', BF16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
             with torch.no_grad():
@@ -377,7 +379,7 @@ class Trainer:
             labels = batch['labels']
             del batch['labels']
             
-            with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
+            with torch.no_grad(), torch.autocast('cuda', BF16, enabled=self.amp_enabled):
                 self.base_model(**batch)
                 batch['teacher'] = self.base_model
                 outputs = model(**batch)

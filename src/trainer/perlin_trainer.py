@@ -25,6 +25,7 @@ class Trainer(BaseTrainer):
         self.perlin_mode = perlin_mode
         
         task_to_batch_size['mnli'] = 16 if not perlin_layerwise else 24
+        # task_to_batch_size['mnli'] = 4 if not perlin_layerwise else 8
         
         name_k_window_size = f'_k{perlin_k}' if perlin_k != 7 else ''
         name_lora = '_full' if not perlin_lora else ''

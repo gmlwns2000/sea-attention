@@ -717,7 +717,8 @@ class BertSelfAttention(nn.Module):
             
             #pad
             bucket_size = self.perlin_k
-            to_pad = 0 if (T % bucket_size) == 0 else (bucket_size - (T % bucket_size))
+            pad_unit_size = bucket_size * 2
+            to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
             TP = T + to_pad
             if to_pad != 0:
                 pad_config = (0,0,0,to_pad)
@@ -740,18 +741,20 @@ class BertSelfAttention(nn.Module):
             v = merge_head(v)
             self.perlin_reformer_atten.bucket_size = bucket_size
             reformer_context_layer, _,_ = self.perlin_reformer_atten(
-                torch.cat([q, k], dim=-1), 
+                # torch.cat([q, k], dim=-1), 
+                q, 
                 v, 
                 input_attn_mask = binary_mask
             )
             #unpad
             if to_pad != 0:
-                q = q[:, :, :T, :]
-                k = k[:, :, :T, :]
-                v = v[:, :, :T, :]
+                q = None
+                k = None
+                v = None
+                reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
                 reformer_context_layer = reformer_context_layer[:, :, :T, :]
             
-            attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
             
             reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
