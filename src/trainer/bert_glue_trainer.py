@@ -8,6 +8,8 @@ from datasets import load_dataset, load_metric
 import random, copy
 import torch
 
+# torch.autograd.set_detect_anomaly(True)
+
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
@@ -135,7 +137,7 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 class Metric:
     def __init__(self):

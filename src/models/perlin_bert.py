@@ -442,9 +442,9 @@ class BertSelfAttention(nn.Module):
                     * self.perlin_attention_predictor_comp_patch_count
             ),
         )
-        self.perlin_attention_predictor_comp_dec_scaler = nn.Sequential(
-            nn.Linear(config.hidden_size, self.num_attention_heads),
-        )
+        # self.perlin_attention_predictor_comp_dec_scaler = nn.Sequential(
+        #     nn.Linear(self.all_head_size*2, self.num_attention_heads),
+        # )
         #-- TODO VQVAE
         
         #- output
@@ -564,7 +564,10 @@ class BertSelfAttention(nn.Module):
                 context_layer_truth = context_layer_truth.detach()
             
             self.perlin_performer_proj_updater.redraw_projections(q.device)
-            performer_context_layer = self.perlin_performer(q, k, v)
+            with torch.autocast('cuda', torch.float32):
+                q_type = q.dtype
+                performer_context_layer = self.perlin_performer(q.float(), k.float(), v.float())
+                performer_context_layer = performer_context_layer.to(q_type)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
@@ -657,7 +660,7 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))# + partial_context_layer
+            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1)) + partial_context_layer
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
