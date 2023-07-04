@@ -376,7 +376,7 @@ class BertSelfAttention(nn.Module):
         
         ### Perlin
         #- configs
-        self.perlin_mode = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
+        self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
         self.perlin_k_flatten = True
         self.perlin_k = 7
         self.last_loss = None
@@ -548,7 +548,7 @@ class BertSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
         
         # if perlin, overwrite attention_probs, context_layer
-        if self.perlin_mode == 'perlin':
+        if self.attention_method == 'perlin':
             attention_scores_truth = self.teacher_attention_score
             attention_probs_truth = self.teacher_attention_prob
             context_layer_truth = self.teacher_context_layer
@@ -563,7 +563,7 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            self.perlin_performer_proj_updater.redraw_projections(q.device)
+            # self.perlin_performer_proj_updater.redraw_projections(q.device)
             with torch.autocast('cuda', torch.float32):
                 q_type = q.dtype
                 performer_context_layer = self.perlin_performer(q.float(), k.float(), v.float())
@@ -613,7 +613,7 @@ class BertSelfAttention(nn.Module):
                     F.log_softmax(estimated_attention_score, dim=-1),
                     F.softmax(attention_scores_truth, dim=-1),
                     attention_mask,
-                ) * 0.2
+                ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
             
             k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
             k_flatten = self.perlin_k_flatten
@@ -664,7 +664,7 @@ class BertSelfAttention(nn.Module):
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer) * 2
+            loss += F.mse_loss(context_layer_truth, partial_context_layer)
             self.last_loss = loss
             
             attention_probs = partial_attention_probs
@@ -672,14 +672,14 @@ class BertSelfAttention(nn.Module):
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
-        elif self.perlin_mode == 'performer':
+        elif self.attention_method == 'performer':
             q = query_layer
             k = key_layer
             v = value_layer
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            self.perlin_performer_proj_updater.redraw_projections(q.device)
+            # self.perlin_performer_proj_updater.redraw_projections(q.device)
             performer_context_layer = self.perlin_performer(q, k, v)
             attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
             
@@ -690,7 +690,7 @@ class BertSelfAttention(nn.Module):
             context_layer = performer_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'synthesizer':
+        elif self.attention_method == 'synthesizer':
             q = query_layer
             k = key_layer
             v = value_layer
@@ -708,7 +708,7 @@ class BertSelfAttention(nn.Module):
             context_layer = synthesizer_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'sinkhorn':
+        elif self.attention_method == 'sinkhorn':
             q = query_layer
             k = key_layer
             v = value_layer
@@ -750,7 +750,7 @@ class BertSelfAttention(nn.Module):
             context_layer = sinkhorn_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'reformer':
+        elif self.attention_method == 'reformer':
             q = query_layer
             k = key_layer
             v = value_layer
@@ -807,7 +807,7 @@ class BertSelfAttention(nn.Module):
             context_layer = reformer_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'none':
+        elif self.attention_method == 'none':
             use_cache = past_key_value is not None
             if self.is_decoder:
                 # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
@@ -868,7 +868,7 @@ class BertSelfAttention(nn.Module):
             
             self.last_loss = 0
         else:
-            raise Exception(self.perlin_mode)
+            raise Exception(self.attention_method)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
