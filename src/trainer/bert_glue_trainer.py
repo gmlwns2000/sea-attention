@@ -468,7 +468,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.evaluate(split='train', max_steps=1000)
+            self.evaluate(split='train', max_step=1000)
             self.save()
 
 if __name__ == '__main__':
