@@ -199,7 +199,7 @@ class Trainer:
         
         self.batch_size = task_to_batch_size[self.subset]
         
-        self.eval_steps = eval_steps
+        self.eval_steps = eval_steps * gradient_accumulation_steps
         self.epochs = epochs
         self.lr = lr
         self.wd = 1e-2
@@ -215,7 +215,7 @@ class Trainer:
         for module in self.model.modules():
             if hasattr(module, 'gradient_checkpointing') and isinstance(getattr(module, 'gradient_checkpointing', None), bool):
                 module.gradient_checkpointing = gradient_checkpointing
-                print('gradient-checkpoint patched')
+                if gradient_checkpointing: print('gradient-checkpoint patched')
         self.model.to(self.device)
 
         self.load_state_from_base()
