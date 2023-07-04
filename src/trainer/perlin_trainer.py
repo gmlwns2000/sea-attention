@@ -17,6 +17,7 @@ class Trainer(BaseTrainer):
         perlin_layerwise = False,
         perlin_lora = False,
         perlin_mode = 'perlin',
+        perlin_attention_predictor_method = 'mlp',
         gradient_checkpointing = False,
     ):
         self.perlin_k = perlin_k
@@ -24,6 +25,7 @@ class Trainer(BaseTrainer):
         self.perlin_layerwise = perlin_layerwise
         self.perlin_lora = perlin_lora
         self.perlin_mode = perlin_mode
+        self.perlin_attention_predictor_method = perlin_attention_predictor_method
         
         task_to_batch_size['mnli'] = 16 if not perlin_layerwise else 24
         
@@ -51,6 +53,7 @@ class Trainer(BaseTrainer):
                 module.perlin_mode = perlin_mode
                 module.perlin_k_flatten = perlin_k_flatten
                 module.perlin_k = perlin_k
+                module.perlin_attention_predictor_method = perlin_attention_predictor_method
         
         if perlin_layerwise:
             for name, param in self.model.named_parameters():
@@ -71,13 +74,16 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
+    
     parser.add_argument('--subset', default='mnli', type=str)
+    parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
+    
     parser.add_argument('--mode', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
-    parser.add_argument('--k-colwise', action='store_true', default=False)
-    parser.add_argument('--k', default=7, type=int)
     parser.add_argument('--lora', action='store_true', default=False)
-    parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
+    parser.add_argument('--k', default=7, type=int)
+    parser.add_argument('--k-colwise', action='store_true', default=False)
+    parser.add_argument('--attention-predictor-method', default='mlp', type=str)
     args = parser.parse_args()
     
     trainer = Trainer(
@@ -87,6 +93,7 @@ if __name__ == '__main__':
         perlin_k_flatten=not args.k_colwise,
         perlin_layerwise=args.layerwise,
         perlin_lora=args.lora,
-        gradient_checkpointing=args.gradient_checkpointing
+        perlin_attention_predictor_method=args.attention_predictor_method,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     trainer.main()
