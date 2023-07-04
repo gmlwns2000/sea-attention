@@ -602,7 +602,7 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1)) + partial_context_layer
+            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))# + partial_context_layer
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
