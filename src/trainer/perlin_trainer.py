@@ -20,6 +20,7 @@ class Trainer(BaseTrainer):
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
         gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
     ):
         self.attention_method = attention_method
         self.perlin_k = perlin_k
@@ -30,7 +31,7 @@ class Trainer(BaseTrainer):
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
         
-        task_to_batch_size['mnli'] = 16 if not perlin_layerwise else 24
+        task_to_batch_size['mnli'] = (16 if not perlin_layerwise else 24) // gradient_accumulation_steps
         
         name_k_window_size = f'_k{perlin_k}' if perlin_k != 7 else ''
         name_lora = '_full' if not perlin_lora else ''
@@ -49,6 +50,7 @@ class Trainer(BaseTrainer):
             lr = lr,
             epochs = epochs,
             gradient_checkpointing = gradient_checkpointing,
+            gradient_accumulation_steps = gradient_accumulation_steps,
             high_lr_names=['perlin'],
         )
         
@@ -81,6 +83,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--subset', default='mnli', type=str)
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
+    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
@@ -101,5 +104,6 @@ if __name__ == '__main__':
         perlin_attention_predictor_method=args.attention_predictor_method,
         perlin_performer_nb_feature_factor=args.performer_nb_feature_factor,
         gradient_checkpointing=args.gradient_checkpointing,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
     )
     trainer.main()

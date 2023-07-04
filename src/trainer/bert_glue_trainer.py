@@ -181,9 +181,11 @@ class Trainer:
         epochs = 100,
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
         gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
     ) -> None:
         seed()
         
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
         self.trainer_name = trainer_name
@@ -213,6 +215,7 @@ class Trainer:
         for module in self.model.modules():
             if hasattr(module, 'gradient_checkpointing') and isinstance(getattr(module, 'gradient_checkpointing', None), bool):
                 module.gradient_checkpointing = gradient_checkpointing
+                print('gradient-checkpoint patched')
         self.model.to(self.device)
 
         self.load_state_from_base()
@@ -284,8 +287,6 @@ class Trainer:
         return optim_cls(params, **kwargs)
     
     def train_step(self, batch):
-        self.optimizer.zero_grad()
-        
         with torch.autocast('cuda', BF16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
@@ -313,13 +314,15 @@ class Trainer:
         
         loss = loss_model + loss_kd + loss_special
         
-        self.scaler.scale(loss).backward()
+        self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        
+        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.step(self.optimizer)
+            self.optimizer.zero_grad()
+            self.scaler.update()
         
         for module in self.model.modules():
             if hasattr(module, 'redraw_projections'):
