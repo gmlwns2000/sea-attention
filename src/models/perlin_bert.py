@@ -347,8 +347,12 @@ class SynthesizerDenseAttention(nn.Module):
         
         return output, dense_attn
 
+PERLIN_PERFORMER_NB_FACTOR = 1
+
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
+        global PERLIN_PERFORMER_NB_FACTOR
+        
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -398,9 +402,12 @@ class BertSelfAttention(nn.Module):
         self.perlin_attention_predictor_method = 'mlp'
         self.perlin_attention_predictor_length = 128
         #-- mlp predictor
+        self.perlin_performer_nb_features = int(
+            self.attention_head_size * math.log(self.attention_head_size) / PERLIN_PERFORMER_NB_FACTOR
+        )
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
-            # nb_features = 256,
+            nb_features = self.perlin_performer_nb_features,
             causal=False
         )
         self.perlin_performer_proj_updater = ProjectionUpdater(
