@@ -19,7 +19,6 @@ import random
 from absl import app
 from absl import flags
 import numpy as np
-import tensorflow.compat.v1 as tf
 
 flags.DEFINE_string(
     'task', default='basic',
@@ -146,9 +145,10 @@ def to_value(t):
 
 def write_to_file(data, fp):
   """Write to file output."""
-  tf.logging.info(type(data))
-  tf.logging.info('Writing {} samples to {}'.format(len(data), fp + '.tsv'))
-  with tf.io.gfile.GFile(fp + '.tsv', 'w+') as f:
+  print(type(data))
+  print('Writing {} samples to {}'.format(len(data), fp + '.tsv'))
+  # with tf.io.gfile.GFile(fp + '.tsv', 'w+') as f:
+  with open(fp+'.csv', 'w+') as f:
     writer = csv.writer(f, delimiter='\t')
     writer.writerow(['Source', 'Target'])
     writer.writerows(data)
@@ -158,7 +158,7 @@ def main(argv):
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
 
-  tf.logging.info('Start dataset construction')
+  print('Start dataset construction')
 
   data = set()
   num_samples = FLAGS.num_train_samples \
@@ -168,25 +168,25 @@ def main(argv):
     if length > FLAGS.min_length and length < FLAGS.max_length:
       data.add(tree)
       if len(data) % 1000 == 0:
-        tf.logging.info('Processed {}'.format(len(data)))
+        print('Processed {}'.format(len(data)))
         print('Processed {}'.format(len(data)))
   train = []
   for example in data:
     train.append([to_string(example), to_value(example)])
 
-  tf.logging.info('Finished running dataset construction')
+  print('Finished running dataset construction')
 
   val = train[FLAGS.num_train_samples:]
   test = val[FLAGS.num_valid_samples:]
   val = val[:FLAGS.num_valid_samples]
   train = train[:FLAGS.num_train_samples]
 
-  tf.logging.info('Dataset size: %d/%d/%d' % (len(train), len(val), len(test)))
+  print('Dataset size: %d/%d/%d' % (len(train), len(val), len(test)))
 
   write_to_file(train, FLAGS.output_dir + '/{}_train'.format(FLAGS.task))
   write_to_file(val, FLAGS.output_dir + '/{}_val'.format(FLAGS.task))
   write_to_file(test, FLAGS.output_dir + '/{}_test'.format(FLAGS.task))
-  tf.logging.info('Finished writing all to file')
+  print('Finished writing all to file')
 
 
 if __name__ == '__main__':

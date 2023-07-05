@@ -703,6 +703,7 @@ class BertSelfAttention(nn.Module):
                     estimated_attention_probs, # estimation gradient is cut here
                     k=k, dim=-1,
                 )
+                # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
                 partial_attention_scores = attention_scores_truth
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
@@ -719,6 +720,7 @@ class BertSelfAttention(nn.Module):
                     estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
                     k=k*T, dim=-1
                 )
+                # warnings.warn(f'topk({k*T}/{T*T})')
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
                 partial_attention_scores.scatter_(

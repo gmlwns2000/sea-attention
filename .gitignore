@@ -23,3 +23,5 @@ saves/
 cache/
 .torch/
 wandb/
+
+*.csv
