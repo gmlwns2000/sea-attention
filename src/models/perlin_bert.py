@@ -501,6 +501,80 @@ class BertSelfAttention(nn.Module):
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
 
+    def forward_performer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        # self.perlin_performer_proj_updater.redraw_projections(q.device)
+        performer_context_layer = self.perlin_performer(q, k, v)
+        attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+        
+        performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+        performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = performer_context_layer
+        
+        return context_layer, attention_probs
+
+    def forward_reformer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        binary_mask = attention_mask > -1
+        
+        #pad
+        bucket_size = self.perlin_k
+        pad_unit_size = bucket_size * 2
+        to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
+        TP = T + to_pad
+        if to_pad != 0:
+            pad_config = (0,0,0,to_pad)
+            q = F.pad(q, pad_config).float()
+            k = F.pad(k, pad_config).float()
+            v = F.pad(v, pad_config).float()
+            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            assert q.shape == (N, H, T+to_pad, HID)
+            # assert binary_mask.shape == (N, T+to_pad)
+        else:
+            q = q.float()
+            k = k.float()
+            v = v.float()
+            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+        def merge_head(t: torch.Tensor):
+            N, H, T, HID = t.shape
+            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+        q = merge_head(q)
+        k = merge_head(k)
+        v = merge_head(v)
+        self.perlin_reformer_atten.bucket_size = bucket_size
+        reformer_context_layer, _,_ = self.perlin_reformer_atten(
+            # torch.cat([q, k], dim=-1), 
+            q, 
+            v, 
+            input_attn_mask = binary_mask
+        )
+        #unpad
+        if to_pad != 0:
+            q = None
+            k = None
+            v = None
+            reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        else:
+            reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            # reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        
+        attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+        
+        reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
+        reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = reformer_context_layer
+        
+        return context_layer, attention_probs
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -683,18 +757,8 @@ class BertSelfAttention(nn.Module):
             q = query_layer
             k = key_layer
             v = value_layer
-            N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            # self.perlin_performer_proj_updater.redraw_projections(q.device)
-            performer_context_layer = self.perlin_performer(q, k, v)
-            attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
-            
-            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
-            
-            context_layer = performer_context_layer
+            context_layer, attention_probs = self.forward_performer(q, k, v, attention_mask)
             
             self.last_loss = 0
         elif self.attention_method == 'synthesizer':
@@ -761,60 +825,20 @@ class BertSelfAttention(nn.Module):
             q = query_layer
             k = key_layer
             v = value_layer
-            N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            binary_mask = attention_mask > -1
+            context_layer, attention_probs = self.forward_reformer(q, k, v, attention_mask)
             
-            #pad
-            bucket_size = self.perlin_k
-            pad_unit_size = bucket_size * 2
-            to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
-            TP = T + to_pad
-            if to_pad != 0:
-                pad_config = (0,0,0,to_pad)
-                q = F.pad(q, pad_config).float()
-                k = F.pad(k, pad_config).float()
-                v = F.pad(v, pad_config).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
-                assert q.shape == (N, H, T+to_pad, HID)
-                # assert binary_mask.shape == (N, T+to_pad)
-            else:
-                q = q.float()
-                k = k.float()
-                v = v.float()
-                binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
-            def merge_head(t: torch.Tensor):
-                N, H, T, HID = t.shape
-                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
-            q = merge_head(q)
-            k = merge_head(k)
-            v = merge_head(v)
-            self.perlin_reformer_atten.bucket_size = bucket_size
-            reformer_context_layer, _,_ = self.perlin_reformer_atten(
-                # torch.cat([q, k], dim=-1), 
-                q, 
-                v, 
-                input_attn_mask = binary_mask
-            )
-            #unpad
-            if to_pad != 0:
-                q = None
-                k = None
-                v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
-                reformer_context_layer = reformer_context_layer[:, :, :T, :]
-            else:
-                reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
-                # reformer_context_layer = reformer_context_layer[:, :, :T, :]
+            self.last_loss = 0
+        elif self.attention_method == 'scatterbrain':
+            q = query_layer
+            k = key_layer
+            v = value_layer
             
-            attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+            reformer_context_layer, reformer_attention_probs = self.forward_reformer(q, k, v, attention_mask)
+            performer_context_layer, performer_attention_probs = self.forward_performer(q, k, v, attention_mask)
             
-            reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
-            reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
-            
-            context_layer = reformer_context_layer
+            context_layer = reformer_context_layer + performer_context_layer
+            attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
             
             self.last_loss = 0
         elif self.attention_method == 'none':
