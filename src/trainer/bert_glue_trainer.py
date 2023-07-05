@@ -8,11 +8,15 @@ from datasets import load_dataset, load_metric
 import random, copy
 import torch
 
+# torch.autograd.set_detect_anomaly(True)
+
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+
+import wandb
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -135,7 +139,7 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 class Metric:
     def __init__(self):
@@ -177,9 +181,11 @@ class Trainer:
         epochs = 100,
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
         gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
     ) -> None:
         seed()
         
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
         self.trainer_name = trainer_name
@@ -193,7 +199,7 @@ class Trainer:
         
         self.batch_size = task_to_batch_size[self.subset]
         
-        self.eval_steps = eval_steps
+        self.eval_steps = eval_steps * gradient_accumulation_steps
         self.epochs = epochs
         self.lr = lr
         self.wd = 1e-2
@@ -209,6 +215,7 @@ class Trainer:
         for module in self.model.modules():
             if hasattr(module, 'gradient_checkpointing') and isinstance(getattr(module, 'gradient_checkpointing', None), bool):
                 module.gradient_checkpointing = gradient_checkpointing
+                if gradient_checkpointing: print('gradient-checkpoint patched')
         self.model.to(self.device)
 
         self.load_state_from_base()
@@ -280,8 +287,6 @@ class Trainer:
         return optim_cls(params, **kwargs)
     
     def train_step(self, batch):
-        self.optimizer.zero_grad()
-        
         with torch.autocast('cuda', BF16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
@@ -309,13 +314,19 @@ class Trainer:
         
         loss = loss_model + loss_kd + loss_special
         
-        self.scaler.scale(loss).backward()
+        self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        
+        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.step(self.optimizer)
+            self.optimizer.zero_grad()
+            self.scaler.update()
+        
+        for module in self.model.modules():
+            if hasattr(module, 'redraw_projections'):
+                module.redraw_projections(self.device)
         
         self.loss = loss.item()
         self.loss_details = {
@@ -324,6 +335,8 @@ class Trainer:
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
         }
+        
+        return loss.item()
     
     def train_epoch(self):
         # self.model = torch.compile(self.model_unwrap)
@@ -352,12 +365,24 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 
+                
                 if ((istep+1) % self.eval_steps) == 0:
-                    self.evaluate()
+                    score = self.evaluate()
                     self.save()
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
+                    
+                    wandb.log({'eval/score': score}, step=self.step)
+                
+                if ((istep + 1) % 5) == 0:
+                    wandb_data = {}
+                    for k, v in self.loss_details.items():
+                        wandb_data[f'train/{k}'] = v
+                    wandb_data['train/epoch'] = (istep / len(pbar)) + self.epoch
+                    wandb.log(wandb_data, step=self.step)
+                
+                self.step += 1
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -426,11 +451,24 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         
+        run = wandb.init(
+            # Set the project where this run will be logged
+            project="perlin-glue",
+            # Track hyperparameters and run metadata
+            config={
+                "learning_rate": self.lr,
+                "batch_size": self.batch_size,
+                "subset": self.subset,
+                "epochs": self.epochs,
+            }
+        )
+        wandb.watch(self.model)
+        
         for epoch in range(self.epochs):
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.evaluate(split='train')
+            self.evaluate(split='train', max_step=1000)
             self.save()
 
 if __name__ == '__main__':

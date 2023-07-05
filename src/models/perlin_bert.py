@@ -347,8 +347,12 @@ class SynthesizerDenseAttention(nn.Module):
         
         return output, dense_attn
 
+PERLIN_PERFORMER_NB_FACTOR = 1
+
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
+        global PERLIN_PERFORMER_NB_FACTOR
+        
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -374,74 +378,101 @@ class BertSelfAttention(nn.Module):
 
         self.is_decoder = config.is_decoder
         
-        # perlin
-        self.perlin_mode = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
+        ### Perlin
+        #- configs
+        self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
+        self.perlin_k_flatten = True
+        self.perlin_k = 7
+        self.last_loss = None
+        self.perlin_layerwise = False
+        perlin_lora_r = 32
+        self.perlin_lora_enabled = False
         
+        #- intermediate buffers
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
         
-        perlin_lora_r = 32
-        self.perlin_lora_enabled = False
+        #- lora
         self.perlin_query_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         self.perlin_key_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         self.perlin_value_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
+        #- attention predictor
+        self.perlin_attention_predictor_method = 'mlp'
+        self.perlin_attention_predictor_length = 128
+        #-- mlp predictor
+        self.perlin_performer_nb_features = int(
+            self.attention_head_size * math.log(self.attention_head_size) / PERLIN_PERFORMER_NB_FACTOR
+        )
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
-            # nb_features = 256,
+            nb_features = self.perlin_performer_nb_features,
             causal=False
         )
         self.perlin_performer_proj_updater = ProjectionUpdater(
             self.perlin_performer, 
             1000,
         )
-        self.perlin_performer_out = nn.Sequential(
+        self.perlin_attention_predictor_enc = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
-            
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
+        )
+        self.perlin_attention_predictor_dec_row = nn.Sequential(
+            nn.Linear(config.hidden_size, self.num_attention_heads * self.perlin_attention_predictor_length),
+        )
+        self.perlin_attention_predictor_dec_scaler = nn.Sequential(
+            nn.Linear(config.hidden_size, self.num_attention_heads),
+        )
+        #-- compressed predictor
+        self.perlin_attention_perdictor_comp_book_size = 8
+        self.perlin_attention_predictor_comp_patch_size = 16
+        self.perlin_attention_predictor_comp_patch_count = 16
+        self.perlin_attention_predictor_comp_length = \
+            self.perlin_attention_predictor_comp_patch_count * self.perlin_attention_predictor_comp_patch_size
+        self.perlin_attention_predictor_comp_codebook = nn.Parameter(
+            torch.randn((self.perlin_attention_perdictor_comp_book_size, self.perlin_attention_predictor_comp_patch_size))
+        )
+        self.perlin_attention_predictor_comp_enc = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
+        )
+        self.perlin_attention_predictor_comp_dec_row = nn.Sequential(
+            nn.Linear(
+                config.hidden_size, 
+                self.num_attention_heads\
+                    * self.perlin_attention_perdictor_comp_book_size\
+                    * self.perlin_attention_predictor_comp_patch_count
+            ),
+        )
+        # self.perlin_attention_predictor_comp_dec_scaler = nn.Sequential(
+        #     nn.Linear(self.all_head_size*2, self.num_attention_heads),
+        # )
+        #-- TODO VQVAE
+        
+        #- output
+        self.perlin_out = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
             
             nn.Linear(config.hidden_size, config.hidden_size),
         )
-        self.perlin_attention_predictor = nn.Sequential(
-            nn.Dropout(0.1),
-            nn.Linear(self.all_head_size*2, config.hidden_size),
-            nn.LayerNorm(config.hidden_size),
-            nn.GELU(),
-            
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
-            
-            nn.Linear(config.hidden_size, self.num_attention_heads * 128),
-        )
-        self.perlin_attention_scaler = nn.Sequential(
-            # nn.Dropout(0.1),
-            # nn.Linear(self.all_head_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size, self.num_attention_heads),
-            
-            nn.Linear(self.all_head_size*2, self.num_attention_heads),
-        )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
-        self.perlin_k_flatten = True
-        self.perlin_k = 7
-        self.last_loss = None
-        self.perlin_layerwise = False
+        
+        ### Synthesizer
         
         self.perlin_synth_atten = SynthesizerDenseAttention(
             max_seq_len=512,
             d_k=self.attention_head_size,
         )
+        
+        ### Sinkhorn
         
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornAttention
         
@@ -453,6 +484,8 @@ class BertSelfAttention(nn.Module):
             max_seq_len=512,
             dropout=config.attention_probs_dropout_prob,
         )
+        
+        ### Reformer
         
         from reformer_pytorch.reformer_pytorch import LSHAttention
         
@@ -467,6 +500,80 @@ class BertSelfAttention(nn.Module):
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
+
+    def forward_performer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        # self.perlin_performer_proj_updater.redraw_projections(q.device)
+        performer_context_layer = self.perlin_performer(q, k, v)
+        attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+        
+        performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+        performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = performer_context_layer
+        
+        return context_layer, attention_probs
+
+    def forward_reformer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        binary_mask = attention_mask > -1
+        
+        #pad
+        bucket_size = self.perlin_k
+        pad_unit_size = bucket_size * 2
+        to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
+        TP = T + to_pad
+        if to_pad != 0:
+            pad_config = (0,0,0,to_pad)
+            q = F.pad(q, pad_config).float()
+            k = F.pad(k, pad_config).float()
+            v = F.pad(v, pad_config).float()
+            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            assert q.shape == (N, H, T+to_pad, HID)
+            # assert binary_mask.shape == (N, T+to_pad)
+        else:
+            q = q.float()
+            k = k.float()
+            v = v.float()
+            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+        def merge_head(t: torch.Tensor):
+            N, H, T, HID = t.shape
+            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+        q = merge_head(q)
+        k = merge_head(k)
+        v = merge_head(v)
+        self.perlin_reformer_atten.bucket_size = bucket_size
+        reformer_context_layer, _,_ = self.perlin_reformer_atten(
+            # torch.cat([q, k], dim=-1), 
+            q, 
+            v, 
+            input_attn_mask = binary_mask
+        )
+        #unpad
+        if to_pad != 0:
+            q = None
+            k = None
+            v = None
+            reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        else:
+            reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            # reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        
+        attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+        
+        reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
+        reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = reformer_context_layer
+        
+        return context_layer, attention_probs
 
     def forward(
         self,
@@ -522,7 +629,7 @@ class BertSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(mixed_query_layer)
         
         # if perlin, overwrite attention_probs, context_layer
-        if self.perlin_mode == 'perlin':
+        if self.attention_method == 'perlin':
             attention_scores_truth = self.teacher_attention_score
             attention_probs_truth = self.teacher_attention_prob
             context_layer_truth = self.teacher_context_layer
@@ -537,41 +644,60 @@ class BertSelfAttention(nn.Module):
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
-            self.perlin_performer_proj_updater.redraw_projections(q.device)
-            performer_context_layer = self.perlin_performer(q, k, v)
+            # self.perlin_performer_proj_updater.redraw_projections(q.device)
+            with torch.autocast('cuda', torch.float32):
+                q_type = q.dtype
+                performer_context_layer = self.perlin_performer(q.float(), k.float(), v.float())
+                performer_context_layer = performer_context_layer.to(q_type)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
-            estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
+            
+            # estimate attention scores
+            if self.perlin_attention_predictor_method == 'mlp':
+                t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+            elif self.perlin_attention_predictor_method == 'comp':
+                warnings.warn('attention prediction method is compressed one.')
+                t_attention_predictor = self.perlin_attention_predictor_comp_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+                estimated_attention_score = estimated_attention_score\
+                    .view(N, H, T, self.perlin_attention_predictor_comp_patch_count, self.perlin_attention_perdictor_comp_book_size)
+                _, _, _, CODE_SEQ_LEN, BOOK_LEN = estimated_attention_score.shape
+                estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
+                estimated_attention_score = torch.matmul(
+                    estimated_attention_score.view(-1, BOOK_LEN), 
+                    self.perlin_attention_predictor_comp_codebook
+                )
+                estimated_attention_score = estimated_attention_score.view(N, H, T, -1)
+            else:
+                raise Exception()
+            
+            # interpolate and convert to probability
+            original_dtype = estimated_attention_score.dtype
             with torch.autocast('cuda', torch.float32):
                 if estimated_attention_score.dtype != torch.float32:
                     estimated_attention_score = estimated_attention_score.to(torch.float32)
-                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode='bilinear')
+                interp_mode = 'bilinear' if T >= estimated_attention_score.shape[-1] else 'area'
+                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
+            if estimated_attention_score.dtype != original_dtype:
+                estimated_attention_score = estimated_attention_score.to(original_dtype)
+            
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+            
             # in layerwise, train perlin attention predictor
-            _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
             with torch.autocast('cuda', torch.float32):
-                # loss = F.kl_div(
-                #     F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
-                #     F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask,
-                #     reduction='batchmean'
-                # ) * 2
                 loss = kl_div_attention(
                     F.log_softmax(estimated_attention_score, dim=-1),
                     F.softmax(attention_scores_truth, dim=-1),
                     attention_mask,
-                ) * 0.2
-            # loss = F.mse_loss(
-            #     estimated_attention_score.view(-1, T) * _amask,
-            #     attention_scores_truth.view(-1, T) * _amask,
-            # ) * 4
-            # (N, H, T, K)
+                ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
             
             k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
             k_flatten = self.perlin_k_flatten
-            # warnings.warn(f'k_flatten {k_flatten}')
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
@@ -602,8 +728,7 @@ class BertSelfAttention(nn.Module):
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
-            estimated_scale = self.perlin_attention_scaler(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
+            estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
@@ -616,11 +741,11 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            partial_context_layer = self.perlin_performer_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))
+            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1)) + partial_context_layer
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer) * 2
+            loss += F.mse_loss(context_layer_truth, partial_context_layer)
             self.last_loss = loss
             
             attention_probs = partial_attention_probs
@@ -628,25 +753,15 @@ class BertSelfAttention(nn.Module):
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
-        elif self.perlin_mode == 'performer':
+        elif self.attention_method == 'performer':
             q = query_layer
             k = key_layer
             v = value_layer
-            N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            self.perlin_performer_proj_updater.redraw_projections(q.device)
-            performer_context_layer = self.perlin_performer(q, k, v)
-            attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
-            
-            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
-            
-            context_layer = performer_context_layer
+            context_layer, attention_probs = self.forward_performer(q, k, v, attention_mask)
             
             self.last_loss = 0
-        elif self.perlin_mode == 'synthesizer':
+        elif self.attention_method == 'synthesizer':
             q = query_layer
             k = key_layer
             v = value_layer
@@ -664,7 +779,7 @@ class BertSelfAttention(nn.Module):
             context_layer = synthesizer_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'sinkhorn':
+        elif self.attention_method == 'sinkhorn':
             q = query_layer
             k = key_layer
             v = value_layer
@@ -706,64 +821,27 @@ class BertSelfAttention(nn.Module):
             context_layer = sinkhorn_context_layer
             
             self.last_loss = 0
-        elif self.perlin_mode == 'reformer':
+        elif self.attention_method == 'reformer':
             q = query_layer
             k = key_layer
             v = value_layer
-            N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            binary_mask = attention_mask > -1
-            
-            #pad
-            bucket_size = self.perlin_k
-            pad_unit_size = bucket_size * 2
-            to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
-            TP = T + to_pad
-            if to_pad != 0:
-                pad_config = (0,0,0,to_pad)
-                q = F.pad(q, pad_config).float()
-                k = F.pad(k, pad_config).float()
-                v = F.pad(v, pad_config).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, 1, TP, TP)
-                assert q.shape == (N, H, T+to_pad, HID)
-                # assert binary_mask.shape == (N, T+to_pad)
-            else:
-                q = q.float()
-                k = k.float()
-                v = v.float()
-                binary_mask = binary_mask.bool().view(N, TP)
-            def merge_head(t: torch.Tensor):
-                N, H, T, HID = t.shape
-                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
-            q = merge_head(q)
-            k = merge_head(k)
-            v = merge_head(v)
-            self.perlin_reformer_atten.bucket_size = bucket_size
-            reformer_context_layer, _,_ = self.perlin_reformer_atten(
-                # torch.cat([q, k], dim=-1), 
-                q, 
-                v, 
-                input_attn_mask = binary_mask
-            )
-            #unpad
-            if to_pad != 0:
-                q = None
-                k = None
-                v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
-                reformer_context_layer = reformer_context_layer[:, :, :T, :]
-            
-            attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
-            
-            reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
-            reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
-            
-            context_layer = reformer_context_layer
+            context_layer, attention_probs = self.forward_reformer(q, k, v, attention_mask)
             
             self.last_loss = 0
-        elif self.perlin_mode == 'none':
+        elif self.attention_method == 'scatterbrain':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            
+            reformer_context_layer, reformer_attention_probs = self.forward_reformer(q, k, v, attention_mask)
+            performer_context_layer, performer_attention_probs = self.forward_performer(q, k, v, attention_mask)
+            
+            context_layer = reformer_context_layer + performer_context_layer
+            attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
+            
+            self.last_loss = 0
+        elif self.attention_method == 'none':
             use_cache = past_key_value is not None
             if self.is_decoder:
                 # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
@@ -824,7 +902,7 @@ class BertSelfAttention(nn.Module):
             
             self.last_loss = 0
         else:
-            raise Exception(self.perlin_mode)
+            raise Exception(self.attention_method)
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
