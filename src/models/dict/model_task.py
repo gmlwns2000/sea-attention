@@ -1,15 +1,15 @@
-from ...models import perlin_bert as perlin
+from ...models import perlin_bert
 from ...models import hf_bert as berts
 
 def model_task_dict(base_model_type, task_type):
     if base_model_type == 'bert':
         model = {
-            "masked_lm" : perlin.BertForMaskedLM,
-            "next_sent_predict" : perlin.BertForNextSentencePrediction,
-            "seq_classification" : perlin.BertForSequenceClassification,
-            "multi_choice" : perlin.BertForMultipleChoice,
-            "token_classification" : perlin.BertForTokenClassification,
-            "question_answer" : perlin.BertForQuestionAnswering
+            "masked_lm" : perlin_bert.BertForMaskedLM,
+            "next_sent_predict" : perlin_bert.BertForNextSentencePrediction,
+            "seq_classification" : perlin_bert.BertForSequenceClassification,
+            "multi_choice" : perlin_bert.BertForMultipleChoice,
+            "token_classification" : perlin_bert.BertForTokenClassification,
+            "question_answer" : perlin_bert.BertForQuestionAnswering
         }[task_type]
     # elif base_model_type == 'gpt':
     #     ...
