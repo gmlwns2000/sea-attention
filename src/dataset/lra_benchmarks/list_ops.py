@@ -6,7 +6,7 @@ import tqdm
 
 def make_word_tokenizer(allowed_words, lowercase_input=False, allow_unk=True):
     # make distinct
-    allowed_words = list(set(allowed_words))
+    allowed_words = sorted(list(set(allowed_words)))
     allowed_words = dict({c: (i+2) for i, c in enumerate(allowed_words)})
     PAD_TOKEN = 0
     UNK_TOKEN = 1
@@ -108,6 +108,7 @@ def get_loader(split: str = 'train', batch_size: int = 2):
 if __name__ == '__main__':
     loader = get_loader(split='train', batch_size=2)
     for batch in loader:
+        print(*[(k, v[0]) for k, v in batch.items()], sep='\n')
         print([(k, v.shape if isinstance(v, torch.Tensor) else type(v)) for k, v in batch.items()])
         break
     
