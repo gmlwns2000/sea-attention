@@ -1,3 +1,4 @@
+import random
 import transformers, os
 import torch
 from torch import nn, optim
@@ -33,11 +34,11 @@ LRA_TASKS = {
         )
     },
     'text': {
-        'batch_size': 4,
+        'batch_size': 16,
         'dataloader_fn': lambda bs: get_loaders('text', bs),
-        'lr': 2e-4,
+        'lr': 5e-5,
         'wd': 1e-2,
-        'epochs': 30,
+        'epochs': 60,
         'eval_steps': 12000,
         'wandb_steps': 5,
         'config': berts.BertConfig(
@@ -242,6 +243,7 @@ class Trainer:
     def main(self):
         wandb.init(
             project="perlin-lra",
+            name=f"{self.exp_name}-{random.randint(0, 32)}",
             config={
                 "lr": self.lr,
                 "subset": self.subset,
