@@ -1,4 +1,5 @@
 import random
+import time
 import transformers, os
 import torch
 from torch import nn, optim
@@ -10,7 +11,7 @@ from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to
 from ..dataset.lra_benchmarks.list_ops import get_tokenizer as get_tokenizer_listops
 from ..dataset.lra_benchmarks.text import get_tokenizer as get_tokenizer_text
-from ..utils import Metric
+from ..utils import Metric, seed
 
 BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -34,11 +35,11 @@ LRA_TASKS = {
         )
     },
     'text': {
-        'batch_size': 16,
+        'batch_size': 24,
         'dataloader_fn': lambda bs: get_loaders('text', bs),
-        'lr': 5e-5,
+        'lr': 2e-5,
         'wd': 1e-2,
-        'epochs': 60,
+        'epochs': 100,
         'eval_steps': 12000,
         'wandb_steps': 5,
         'config': berts.BertConfig(
@@ -68,6 +69,8 @@ class Trainer:
         amp_enabled: bool = True,
         device: int = 0,
     ) -> None:
+        seed()
+        
         task_desc = LRA_TASKS[subset]
         
         self.exp_name = exp_name
@@ -243,7 +246,7 @@ class Trainer:
     def main(self):
         wandb.init(
             project="perlin-lra",
-            name=f"{self.exp_name}-{random.randint(0, 32)}",
+            name=f"{self.exp_name}-{int(time.time()*1000 % 1000)}",
             config={
                 "lr": self.lr,
                 "subset": self.subset,
