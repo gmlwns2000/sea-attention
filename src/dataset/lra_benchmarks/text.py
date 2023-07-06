@@ -36,7 +36,7 @@ def get_tokenizer():
     return make_char_tokenizer(''.join(chr(i) for i in range(256)))
 
 class LRAText(Dataset):
-    def __init__(self, tokenizer, path, max_length = 2048):
+    def __init__(self, tokenizer, path, max_length = 1024):
         self.path = path
         self.max_length = max_length
         self.load(tokenizer)
@@ -51,7 +51,7 @@ class LRAText(Dataset):
             print('loaded!')
         else:
             self.load_from_path(tokenizer)
-            # torch.save(self.data, cache_path)
+            torch.save(self.data, cache_path)
     
     def load_from_path(self, tokenizer):
         self.data = []
@@ -96,6 +96,7 @@ def get_loader(split: str = 'train', batch_size: int = 2):
 
 if __name__ == '__main__':
     loader = get_loader(split='train', batch_size=2)
+    loader = get_loader(split='test', batch_size=2)
     for batch in loader:
         print(*[(k, v[0]) for k, v in batch.items()], sep='\n')
         print([(k, v.shape if isinstance(v, torch.Tensor) else type(v)) for k, v in batch.items()])

@@ -7,7 +7,8 @@ from ..models import hf_bert as berts
 from ..dataset.lra_benchmarks import get_loaders
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to
-from ..dataset.lra_benchmarks.list_ops import get_tokenizer
+from ..dataset.lra_benchmarks.list_ops import get_tokenizer as get_tokenizer_listops
+from ..dataset.lra_benchmarks.text import get_tokenizer as get_tokenizer_text
 from ..utils import Metric
 
 BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -28,7 +29,25 @@ LRA_TASKS = {
             hidden_size=512,
             intermediate_size=2048,
             num_labels=10,
-            vocab_size=get_tokenizer().vocab_size,
+            vocab_size=get_tokenizer_listops().vocab_size,
+        )
+    },
+    'text': {
+        'batch_size': 4,
+        'dataloader_fn': lambda bs: get_loaders('text', bs),
+        'lr': 2e-4,
+        'wd': 1e-2,
+        'epochs': 30,
+        'eval_steps': 12000,
+        'wandb_steps': 5,
+        'config': berts.BertConfig(
+            max_position_embeddings=1024,
+            num_attention_heads=4,
+            num_hidden_layers=4,
+            hidden_size=256,
+            intermediate_size=1024,
+            num_labels=2,
+            vocab_size=get_tokenizer_text().vocab_size,
         )
     }
 }
@@ -163,9 +182,9 @@ class Trainer:
                 
                 pbar.set_description((
                     f'[{self.epoch}/{self.epochs}] '
-                    f'L:{m.update(loss.item(), "l"):.4f}({m.update(loss_details.get("loss_model", None), "lm"):.4f}) '
-                    f'Lsp:{m.update(loss_details.get("loss_sp", None), "lsp"):.4f} '
-                    f'Lkd:{m.update(loss_details.get("loss_kd", None), "lkd"):.4f}'
+                    f'L:{m.update(loss.item(), "l"):.4f}({m.update(loss_details.get("loss_model", 0.0), "lm"):.4f}) '
+                    f'Lsp:{m.update(loss_details.get("loss_sp", 0.0), "lsp"):.4f} '
+                    f'Lkd:{m.update(loss_details.get("loss_kd", 0.0), "lkd"):.4f}'
                 ).strip())
     
     def evaluate(self):
