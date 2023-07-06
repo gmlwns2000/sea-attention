@@ -28,24 +28,42 @@ def load_model(): # NOTE : optimizer not included
     del state
     return epoch, step, lr, model, base_model
 
-def get_attns_img(DATASET, SUBSET, model, base_model, img_title):
+def get_attns_img(dataset, subset, model, base_model, img_title):
     dense_attns_img = None
     sparse_attns_img = None
 
     if ATTENTION_METHOD=="base":
-        dense_attn_probs = sample_attentions_basem(DATASET, SUBSET, base_model, dense_attn = True)
+        dense_attn_probs = sample_attentions_basem(dataset, subset, base_model)
         dense_attns_img = attentions_to_img(dense_attn_probs, img_title)
         assert dense_attns_img is not None
         return dense_attns_img, None
     elif ATTENTION_METHOD=='perlin':
-        dense_attn_probs = sample_attentions_model(DATASET, SUBSET, model, base_model, dense_attn = True)
-        sparse_attn_probs = sample_attentions_model(DATASET, SUBSET, model, base_model, dense_attn = False)
+        dense_attn_probs = sample_attentions_model(
+            BASE_MODEL_TYPE, 
+            dataset, 
+            subset, 
+            model, 
+            base_model, 
+            viz_dense_attn = True)
+        sparse_attn_probs = sample_attentions_model(
+            BASE_MODEL_TYPE, 
+            dataset, 
+            subset, 
+            model, 
+            base_model, 
+            viz_dense_attn = False)
         dense_attns_img = attentions_to_img(dense_attn_probs, img_title)
         sparse_attns_img = attentions_to_img(sparse_attn_probs, img_title)
         assert dense_attns_img is not None and sparse_attns_img is not None
         return dense_attns_img, sparse_attns_img
     elif ATTENTION_METHOD == 'performer':
-        sparse_attn_probs = sample_attentions_model(DATASET, SUBSET, model, base_model, dense_attn = False)
+        sparse_attn_probs = sample_attentions_model(
+            BASE_MODEL_TYPE, 
+            dataset, 
+            subset, 
+            model, 
+            base_model,
+            viz_dense_attn = False)
         sparse_attns_img = attentions_to_img(sparse_attn_probs, img_title)
         assert sparse_attns_img is not None
         return None, sparse_attns_img
