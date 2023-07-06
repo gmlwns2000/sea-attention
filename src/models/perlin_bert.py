@@ -2136,7 +2136,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            teacher=teacher.bert,
+            teacher=teacher.bert if teacher is not None else None,
         )
 
         pooled_output = outputs[1]

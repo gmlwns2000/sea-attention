@@ -301,3 +301,27 @@ def query_available_devices() -> list[int]:
     available_devices = q.get()
     q.close()
     return available_devices
+
+class Metric:
+    def __init__(self):
+        self.sum = {}
+        self.count = {}
+        
+    def update(self, x, name='', weight=1):
+        if isinstance(x, torch.Tensor):
+            x = x.item()
+        if not name in self.sum:
+            self.sum[name] = 0
+            self.count[name] = 0
+        self.sum[name] += x * weight
+        self.count[name] += weight
+        return self.sum[name] / self.count[name]
+
+    def get(self, name=''):
+        return self.sum[name] / self.count[name]
+
+    def to_dict(self):
+        r = {}
+        for key in self.sum:
+            r[key] = self.get(key)
+        return r

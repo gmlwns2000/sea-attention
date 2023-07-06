@@ -46,10 +46,10 @@ OUTPUT_DIR = "output_dir/"
 deepspeed_json = "ds_config.json"
 
 TASKS = {
-         'listops': ConfigDict(dict(dataset_fn=ListOpsDataset, config_getter=get_listops_config)),
-         'cifar10': ConfigDict(dict(dataset_fn=Cifar10Dataset, config_getter=get_cifar10_config)),
-         'imdb': ConfigDict(dict(dataset_fn=ImdbDataset, config_getter=get_text_classification_config)),
-        }
+    'listops': ConfigDict(dict(dataset_fn=ListOpsDataset, config_getter=get_listops_config)),       # ListOps: Ten-way classification
+    'imdb': ConfigDict(dict(dataset_fn=ImdbDataset, config_getter=get_text_classification_config)), # Text: Binary classification
+    'cifar10': ConfigDict(dict(dataset_fn=Cifar10Dataset, config_getter=get_cifar10_config)),       # Image: Ten-way classification
+}
 
 
 # main functions

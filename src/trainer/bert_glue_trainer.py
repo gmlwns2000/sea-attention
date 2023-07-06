@@ -140,30 +140,7 @@ def get_base_model(dataset, only_tokenizer=False):
     return bert, tokenizer
 
 BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-
-class Metric:
-    def __init__(self):
-        self.sum = {}
-        self.count = {}
-        
-    def update(self, x, name='', weight=1):
-        if isinstance(x, torch.Tensor):
-            x = x.item()
-        if not name in self.sum:
-            self.sum[name] = 0
-            self.count[name] = 0
-        self.sum[name] += x * weight
-        self.count[name] += weight
-        return self.sum[name] / self.count[name]
-
-    def get(self, name=''):
-        return self.sum[name] / self.count[name]
-
-    def to_dict(self):
-        r = {}
-        for key in self.sum:
-            r[key] = self.get(key)
-        return r
+from ..utils import Metric
 
 class Trainer:
     def __init__(
@@ -188,7 +165,7 @@ class Trainer:
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
-        self.trainer_name = trainer_name
+        self.exp_name = trainer_name
         self.subset = subset
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
@@ -296,7 +273,7 @@ class Trainer:
             output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
-            loss_model = output.loss
+            loss_model = output.loss * 0.1
         else:
             loss_model = 0.0
         
@@ -424,9 +401,13 @@ class Trainer:
             tqdm.tqdm.write(f'metric score {score}')
         return score
 
+    def checkpoint_path(self):
+        os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
+        return path
+    
     def save(self):
-        os.makedirs(f'./saves/trainer/{self.trainer_name}/', exist_ok=True)
-        path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth'
+        path = self.checkpoint_path()
         print(f'Trainer: save {path}')
         torch.save({
             'model': self.model.state_dict(),
@@ -437,7 +418,7 @@ class Trainer:
     def load(self, path=None):
         try:
             if path is None:
-                path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth'
+                path = self.checkpoint_path()
             print(f'Trainer: load {path}')
             state = torch.load(path, map_location='cpu')
             self.model.load_state_dict(state['model'])
@@ -462,7 +443,7 @@ class Trainer:
                 "epochs": self.epochs,
             }
         )
-        wandb.watch(self.model)
+        wandb.watch(self.model, log='all')
         
         for epoch in range(self.epochs):
             self.epoch = epoch

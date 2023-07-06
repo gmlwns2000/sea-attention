@@ -1,17 +1,16 @@
 import warnings
 import torch
-from .bert_glue_trainer import Trainer as BaseTrainer
+from torch import nn
+from .bert_glue_trainer import Trainer as BaseGlueTrainer
+from .lra_trainer import Trainer as BaseLraTrainer
 from ..models import perlin_bert as perlin
 from .bert_glue_trainer import task_to_batch_size
 
 bool2int = lambda x: 1 if x else 0
 
-class Trainer(BaseTrainer):
+class BaseTrainer:
     def __init__(
-        self, 
-        subset = 'mnli',
-        lr = 1e-4,
-        epochs = 20,
+        self,
         perlin_k = 7,
         perlin_k_flatten = True,
         perlin_layerwise = False,
@@ -19,9 +18,8 @@ class Trainer(BaseTrainer):
         attention_method = 'perlin',
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
-        gradient_checkpointing = False,
-        gradient_accumulation_steps = 1,
-    ):
+        **kwargs,
+    ) -> None:
         self.attention_method = attention_method
         self.perlin_k = perlin_k
         self.perlin_k_flatten = perlin_k_flatten
@@ -30,22 +28,62 @@ class Trainer(BaseTrainer):
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
+    
+    def apply_model_options(self, model: nn.Module):
+        for module in model.modules():
+            if isinstance(module, perlin.BertSelfAttention):
+                module.attention_method = self.attention_method
+                module.perlin_k_flatten = self.perlin_k_flatten
+                module.perlin_k = self.perlin_k
+                module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
         
-        task_to_batch_size['mnli'] = (16 if not perlin_layerwise else 24) // gradient_accumulation_steps
+        if self.perlin_layerwise:
+            for name, param in model.named_parameters():
+                if 'perlin' in name:
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+
+            for module in model.modules():
+                if isinstance(module, perlin.BertSelfAttention):
+                    module.perlin_layerwise = True
+                    module.perlin_lora_enabled = self.perlin_lora
+                    if not self.perlin_lora: # activate QKV
+                        for p in module.parameters():
+                            p.requires_grad = True
+        return model
+
+    def format_exp(self, name: str):
+        name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
+        name_lora = '_full' if not self.perlin_lora else ''
+        name = f'{name}'\
+            f'_kf{bool2int(self.perlin_k_flatten)}'\
+            f'_lw{bool2int(self.perlin_layerwise)}'\
+            f'_{self.attention_method}{name_k_window_size}{name_lora}'
+        return name
+
+class GlueTrainer(BaseGlueTrainer, BaseTrainer):
+    def __init__(
+        self, 
+        subset = 'mnli',
+        lr = 1e-4,
+        epochs = 20,
+        gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
+        **kwargs,
+    ):
+        BaseTrainer.__init__(self, **kwargs)
         
-        name_k_window_size = f'_k{perlin_k}' if perlin_k != 7 else ''
-        name_lora = '_full' if not perlin_lora else ''
-        name = f'perlin_trainer'\
-            f'_kf{bool2int(perlin_k_flatten)}'\
-            f'_lw{bool2int(perlin_layerwise)}'\
-            f'_{attention_method}{name_k_window_size}{name_lora}'
-        super().__init__(
+        task_to_batch_size['mnli'] = (16 if not self.perlin_layerwise else 24) // gradient_accumulation_steps
+        
+        BaseGlueTrainer.__init__(
+            self,
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
             amp_enabled=True,
-            trainer_name=name,
-            using_kd=(not perlin_layerwise),
-            using_loss=not perlin_layerwise,
+            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
+            using_kd=not self.perlin_layerwise,
+            using_loss=not self.perlin_layerwise,
             eval_steps=2000,
             lr = lr,
             epochs = epochs,
@@ -54,34 +92,38 @@ class Trainer(BaseTrainer):
             high_lr_names=['perlin'],
         )
         
-        for module in self.model.modules():
-            if isinstance(module, perlin.BertSelfAttention):
-                module.attention_method = attention_method
-                module.perlin_k_flatten = perlin_k_flatten
-                module.perlin_k = perlin_k
-                module.perlin_attention_predictor_method = perlin_attention_predictor_method
-        
-        if perlin_layerwise:
-            for name, param in self.model.named_parameters():
-                if 'perlin' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
+        self.apply_model_options(self.model)
 
-            for module in self.model.modules():
-                if isinstance(module, perlin.BertSelfAttention):
-                    module.perlin_layerwise = True
-                    module.perlin_lora_enabled = perlin_lora
-                    if not perlin_lora: # activate QKV
-                        for p in module.parameters():
-                            p.requires_grad = True
+class LraTrainer(BaseLraTrainer, BaseTrainer):
+    def __init__(
+        self, 
+        subset: str = 'listops',
+        gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
+        **kwargs
+    ):
+        BaseTrainer.__init__(self, **kwargs)
+        
+        BaseLraTrainer.__init__(
+            self,
+            exp_name=self.format_exp(f'lra_{subset}'),
+            subset=subset,
+            model_cls=perlin.BertForSequenceClassification,
+            gradient_checkpointing = gradient_checkpointing,
+            gradient_accumulation_steps = gradient_accumulation_steps,
+            using_kd=True,
+        )
+        
+        self.apply_model_options(self.model)
 
 if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
     
-    parser.add_argument('--subset', default='mnli', type=str)
+    parser.add_argument('--dataset', default='glue', type=str)
+    parser.add_argument('--subset', default=None, type=str)
+    
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     
@@ -92,18 +134,35 @@ if __name__ == '__main__':
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
     parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    
     args = parser.parse_args()
     
-    trainer = Trainer(
-        subset=args.subset,
-        perlin_k=args.k,
-        attention_method=args.method,
-        perlin_k_flatten=not args.k_colwise,
-        perlin_layerwise=args.layerwise,
-        perlin_lora=not args.disable_lora,
-        perlin_attention_predictor_method=args.attention_predictor_method,
-        perlin_performer_nb_feature_factor=args.performer_nb_feature_factor,
-        gradient_checkpointing=args.gradient_checkpointing,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-    )
+    if args.subset is None:
+        if args.dataset == 'glue':
+            args.subset = 'mnli'
+        elif args.dataset == 'lra':
+            args.subset = 'listops'
+        else:
+            raise Exception()
+    
+    kwargs = {
+        'subset':args.subset,
+        'perlin_k':args.k,
+        'attention_method':args.method,
+        'perlin_k_flatten':not args.k_colwise,
+        'perlin_layerwise':args.layerwise,
+        'perlin_lora':not args.disable_lora,
+        'perlin_attention_predictor_method':args.attention_predictor_method,
+        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
+        'gradient_checkpointing':args.gradient_checkpointing,
+        'gradient_accumulation_steps':args.gradient_accumulation_steps,
+    }
+    
+    if args.dataset == 'glue':
+        trainer = GlueTrainer(**kwargs)
+    elif args.dataset == 'lra':
+        trainer = LraTrainer(**kwargs)
+    else:
+        raise Exception()
+
     trainer.main()
