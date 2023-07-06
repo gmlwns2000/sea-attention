@@ -1,13 +1,8 @@
 import os
-from dataset.test_batch_generator import load_test_batch
-from models.initialize_model import get_model_init
-from ..models import hf_bert as berts
-from ..models import perlin_bert as perlin
-from transformers import BertConfig
 import torch
-from ..trainer.bert_glue_trainer import get_dataloader, get_base_model
-from ..utils import batch_to, seed
-import warnings
+
+from models.initialize_model import get_model_init
+from models.sampling.sampling_attentions import sample_attentions_basem, sample_attentions_model
 
 bool2int = lambda x: 1 if x else 0
 
@@ -28,25 +23,32 @@ def load_model(): # NOTE : optimizer not included
     del state
     return epoch, step, lr, model, base_model
 
-def get_attns_img(dataset, subset, model, base_model, img_title):
+def get_attns_img(
+        base_model_type, 
+        dataset, 
+        subset, 
+        attention_method, 
+        model, 
+        base_model, 
+        img_title):
     dense_attns_img = None
     sparse_attns_img = None
 
-    if ATTENTION_METHOD=="base":
+    if attention_method=="base":
         dense_attn_probs = sample_attentions_basem(dataset, subset, base_model)
         dense_attns_img = attentions_to_img(dense_attn_probs, img_title)
         assert dense_attns_img is not None
         return dense_attns_img, None
-    elif ATTENTION_METHOD=='perlin':
+    elif attention_method=='perlin':
         dense_attn_probs = sample_attentions_model(
-            BASE_MODEL_TYPE, 
+            base_model_type, 
             dataset, 
             subset, 
             model, 
             base_model, 
             viz_dense_attn = True)
         sparse_attn_probs = sample_attentions_model(
-            BASE_MODEL_TYPE, 
+            base_model_type, 
             dataset, 
             subset, 
             model, 
@@ -56,9 +58,9 @@ def get_attns_img(dataset, subset, model, base_model, img_title):
         sparse_attns_img = attentions_to_img(sparse_attn_probs, img_title)
         assert dense_attns_img is not None and sparse_attns_img is not None
         return dense_attns_img, sparse_attns_img
-    elif ATTENTION_METHOD == 'performer':
+    elif attention_method == 'performer':
         sparse_attn_probs = sample_attentions_model(
-            BASE_MODEL_TYPE, 
+            base_model_type, 
             dataset, 
             subset, 
             model, 
@@ -83,7 +85,14 @@ def main():
     # NOTE(JIN) add other eval tasks
     if 'viz_attentions' in EVAL_TYPES:
         img_title = f"ep{epoch}_st{step}_lr{lr}"
-        dense_attns_img, sparse_attns_img = get_attns_img(DATASET, SUBSET, model, base_model, img_title)
+        dense_attns_img, sparse_attns_img = get_attns_img(
+            BASE_MODEL_TYPE, 
+            DATASET, 
+            SUBSET, 
+            ATTENTION_METHOD, 
+            model, 
+            base_model, 
+            img_title)
 
         assert PATH[:8] is './saves/'
         FOLDER_PATH = PATH.replace('./saves/','./plots/')
@@ -91,9 +100,9 @@ def main():
         FOLDER_PATH = FOLDER_PATH[:folder_idx+1] # ~~/~/~/
 
         if dense_attns_img is not None:
-            save_eval(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attentions_{img_title}.png")
+            save_eval(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}.png")
         if sparse_attns_img is not None:
-            save_eval(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attentions_{img_title}.png")
+            save_eval(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}.png")
     
 if __name__ == '__main__':
     import argparse

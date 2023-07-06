@@ -1,6 +1,8 @@
 import os
 import warnings
 from matplotlib import pyplot as plt
+from dataset.test_batch_generator import save_test_batch
+from main.evaluation import get_attns_img
 import numpy as np
 import tqdm
 import transformers
@@ -14,8 +16,9 @@ from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+from ..main.plot import plot_attentions_all_layer
 
-TRAIN_MODE = True
+bool2int = lambda x: 1 if x else 0
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -44,7 +47,7 @@ task_to_epochs = {
 
 task_to_batch_size = {
     "cola": 64,
-    "mnli": 16,
+    "mnli": 16, # NOTE(JIN): changed 4 to 16 TODO check
     "mrpc": 32,
     "qnli": 4,
     "qqp":  16,
@@ -68,11 +71,14 @@ task_to_valid = {
     "bert": "validation",
 }
 
+BASE_MODEL_TYPE = 'bert'
+DATASET = 'glue'
+
 def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if subset == 'bert':
         subset = "cola" #return dummy set
     
-    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
+    dataset = load_dataset(DATASET, subset, split=split, cache_dir='./cache/datasets')
     
     sentence1_key, sentence2_key = task_to_keys[subset]
 
@@ -102,7 +108,7 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
     )
     return dataloader
 
-def get_base_model(dataset, only_tokenizer=False):
+def get_base_model(subset, only_tokenizer=False):
     checkpoint = {
         "cola": "textattack/bert-base-uncased-CoLA",
         "mnli": "yoshitomo-matsubara/bert-base-uncased-mnli",
@@ -115,7 +121,7 @@ def get_base_model(dataset, only_tokenizer=False):
         "stsb": "textattack/bert-base-uncased-STS-B",
         "wnli": "textattack/bert-base-uncased-WNLI",
         "bert": "bert-base-uncased",
-    }[dataset]
+    }[subset]
 
     # NOTE(HJ): this bert models has special hooks
     model = {
@@ -129,7 +135,7 @@ def get_base_model(dataset, only_tokenizer=False):
         "stsb": berts.BertForSequenceClassification,
         "wnli": berts.BertForSequenceClassification,
         "bert": berts.BertForSequenceClassification,
-    }[dataset]
+    }[subset]
     
     tokenizer = transformers.BertTokenizerFast.from_pretrained(checkpoint)
     if only_tokenizer:
@@ -177,9 +183,8 @@ class Trainer:
         lr = 1e-5,
         epochs = 100,
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
-        proj_type = "base"
+        attention_method = 'perlin',
     ) -> None:
-        # global TRAIN_MODE
         
         seed()
         
@@ -190,7 +195,7 @@ class Trainer:
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
         self.using_loss = using_loss
-        self.proj_type = proj_type
+
         
         self.amp_enabled = amp_enabled
         self.device = 0
@@ -201,6 +206,8 @@ class Trainer:
         self.epochs = epochs
         self.lr = lr
         self.wd = 1e-2
+
+        self.attention_method = attention_method
         
         self.base_model, self.tokenizer = get_base_model(subset)
         self.base_model.to(self.device)
@@ -208,11 +215,18 @@ class Trainer:
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
-        # for plot_attentions_all_layer in plot
-        for batch in self.valid_loader:
-            self.viz_batch = batch_to(batch, self.device)
+        # get test_batch
+        for batch in self.valid_loader: # TODO continued every time we're saving -> better way?
+            test_batch = batch
             break
+        print("\n\nBert_glue_trainer] test_batch", test_batch) # for debug
+        print("\n\nBert_glue_trainer] test_batch_input_ids_shape", test_batch['input_ids'].shape)
         
+        # save test_batch
+        save_test_batch(DATASET, self.subset, test_batch)
+        
+        test_batch = batch_to(test_batch, self.device) # TODO check <- after saving
+
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
         self.model.to(self.device)
@@ -223,8 +237,6 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.model_unwrap = self.model
         # self.model = torch.compile(self.model)
-    
-    from ..main.plot import plot_attentions_all_layer
     
     def reset_trainloader(self):
         if self.subset != 'bert':
@@ -335,7 +347,6 @@ class Trainer:
         }
     
     def train_epoch(self):
-        global TRAIN_MODE
         # self.model = torch.compile(self.model_unwrap)
         self.reset_trainloader()
         
@@ -364,8 +375,22 @@ class Trainer:
                 
                 if ((istep+1) % self.eval_steps) == 0:
                     self.evaluate()
-                    
-                    TRAIN_MODE = True
+                    img_title = f"train_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
+
+                    dense_attns_img, sparse_attns_img = get_attns_img(
+                        BASE_MODEL_TYPE,
+                        DATASET, 
+                        self.subset, 
+                        self.attention_method, # it wouldn't be "base"
+                        self.model, 
+                        self.base_model,
+                        img_title)
+
+                    if dense_attns_img is not None:
+                        wandb.log({self.attention_method : dense_attns_img})
+                    if sparse_attns_img is not None:
+                        wandb.log({self.attention_method : sparse_attns_img})
+
                     self.save()
                     
                     self.model.train()
@@ -373,12 +398,8 @@ class Trainer:
                     m = Metric()
                     
                     # visualization
-                    self.plot_attentions_all_layer(current_state=f"train_epoch_ep{self.epoch+1}_is{istep+1}")
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
-        global TRAIN_MODE
-        TRAIN_MODE = False
-        
         if self.subset == 'bert':
             return {'accuracy': 0.0}
         
@@ -420,18 +441,16 @@ class Trainer:
         return score
 
     def save(self): # TODO(JIN): why not save the entire model?
-        os.makedirs(f'./saves/trainer/{self.trainer_name}/', exist_ok=True)
-        path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth' # NOTE(JIN): update plot.py once changed
+        os.makedirs(f'./saves/trainer/{self.trainer_name}/{DATASET}/', exist_ok=True)
+        path = f'./saves/trainer/{self.trainer_name}/{DATASET}/checkpoint_{self.subset}.pth' # NOTE(JIN): update plot.py once changed
         print(f'Trainer: save {path}')
         torch.save({
-            'epoch': self.epoch+1,
+            'epoch': self.epoch,
+            'step': self.step,
+            'lr': self.lr,
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-            'config': self.base_model.config, # TODO check
-            'viz_batch': self.viz_batch, # TODO check
-            'loss': self.loss_details if TRAIN_MODE else '', # TODO(JIN): check + save as .tar?
-            'accuracy': self.last_metric_score['accuracy'], # TODO(JIN): check
         }, path)
     
     def load(self, path=None):
@@ -446,14 +465,19 @@ class Trainer:
             del state
         except Exception as ex:
             print('error while load', ex)
-    
+
     def main(self):
-        project_name = f"[{self.proj_type}] without redraw_projections" # TODO change
-        wandb.init(
-             project=project_name
+        run = wandb.init(
+             project="perlin-glue",
+             config={
+                "learning_rate": self.lr,
+                "batch_size": self.batch_size,
+                "subset": self.subset,
+                "epochs": self.epochs,
+            }
          )
-        print("\n"+project_name+"!\n")
-        warnings.warn("\n\nif running perlin, CHECK PERLIN_BEFORE_TOPK!\n")
+        wandb.watch(self.model, log='all')
+    
         self.epoch = 0
         self.step = 0
         
@@ -461,7 +485,22 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             self.evaluate()
-            self.plot_attentions_all_layer(current_state=f"main_epoch_ep{self.epoch+1}")
+
+            img_title = f"main_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
+            dense_attns_img, sparse_attns_img = get_attns_img(
+                BASE_MODEL_TYPE,
+                DATASET, 
+                self.subset, 
+                self.attention_method, # it wouldn't be "base"
+                self.model, 
+                self.base_model, 
+                img_title)
+            
+            if dense_attns_img is not None:
+                wandb.log({self.attention_method : dense_attns_img})
+            if sparse_attns_img is not None:
+                wandb.log({self.attention_method : sparse_attns_img})
+            
             self.evaluate(split='train') # check overfitting
             self.save()
 

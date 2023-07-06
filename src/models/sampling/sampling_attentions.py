@@ -9,6 +9,7 @@ def sample_attentions_model(
         model, 
         base_model, 
         viz_dense_attn = True):
+    
     test_batch = load_test_batch(dataset, subset)
     test_batch['output_hidden_states'] = True
     test_batch['output_attentions'] = True
@@ -36,6 +37,7 @@ def sample_attentions_basem(
         dataset, 
         subset, 
         base_model):
+    
     test_batch = load_test_batch(dataset, subset)
     test_batch['output_hidden_states'] = True
     test_batch['output_attentions'] = True
