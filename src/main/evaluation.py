@@ -1,5 +1,6 @@
 import os
 from dataset.test_batch_generator import load_test_batch
+from models.initialize_model import get_model_init
 from ..models import hf_bert as berts
 from ..models import perlin_bert as perlin
 from transformers import BertConfig
@@ -17,8 +18,7 @@ def load_model(): # NOTE : optimizer not included
     step = state['step']
     lr = state['lr']
     
-    model = get_model_init(BASE_MODEL_TYPE, TASK_TYPE)
-    base_model = get_basem_init(BASE_MODEL_TYPE, TASK_TYPE)
+    model, base_model = get_model_init(BASE_MODEL_TYPE, TASK_TYPE, DATASET, SUBSET)
 
     model.load_state_dict(state['model'], strict=False)
     base_model.load_state_dict(state['base_model'], strict=True)
