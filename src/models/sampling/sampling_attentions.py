@@ -21,17 +21,17 @@ def sample_attentions_model(
     with torch.no_grad():
         model(**test_batch)
 
-    attn_probs = []
+    all_layers_attn_probs = []
     model_self_attention = get_model_self_attn(base_model_type)
     for module in model.modules():
         if isinstance(module, model_self_attention):
             if viz_dense_attn:
                 assert module.last_dense_attention_prob is not None
-                attn_probs.append(module.last_dense_attention_prob)
+                all_layers_attn_probs.append(module.last_dense_attention_prob)
             if not viz_dense_attn:
                 assert module.last_sparse_attention_prob is not None
-                attn_probs.append(module.last_sparse_attention_prob)
-    return attn_probs
+                all_layers_attn_probs.append(module.last_sparse_attention_prob)
+    return all_layers_attn_probs
 
 def sample_attentions_basem(
         dataset, 
@@ -45,7 +45,7 @@ def sample_attentions_basem(
     with torch.no_grad():
         output_base = base_model(**test_batch)
 
-    attn_probs = output_base.attentions # [Tuple[torch.FloatTensor]]
-    attn_probs = list(attn_probs)
+    all_layers_attn_probs = output_base.attentions # [Tuple[torch.FloatTensor]]
+    all_layers_attn_probs = list(all_layers_attn_probs)
 
-    return attn_probs
+    return all_layers_attn_probs
