@@ -448,8 +448,12 @@ class Trainer:
         for epoch in range(self.epochs):
             self.epoch = epoch
             self.train_epoch()
-            self.evaluate()
-            self.evaluate(split='train', max_step=1000)
+            valid_score = self.evaluate()
+            train_score = self.evaluate(split='train', max_step=1000)
+            wandb.log({
+                'eval/score': valid_score,
+                'train/score': train_score,
+            }, step=self.step)
             self.save()
 
 if __name__ == '__main__':
