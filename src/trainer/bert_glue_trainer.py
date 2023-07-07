@@ -74,6 +74,7 @@ task_to_valid = {
 BASE_MODEL_TYPE = 'bert'
 DATASET = 'glue'
 TEST_BATCH_SIZE = 1
+assert TEST_BATCH_SIZE == 1 # attentions_to_img.py
 
 def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if subset == 'bert':

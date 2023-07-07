@@ -1,31 +1,32 @@
-from dataset.test_batch_generator import load_test_batch
+from dataset.test_batch_func import load_test_batch
 import torch
 import matplotlib.pyplot as plt
 
-# %matplotlib agg # NOTE check
-def attentions_to_img(all_layers_attn_probs, dataset, subset, img_title):
-    test_batch = load_test_batch(dataset, subset)
+# %matplotlib agg # TODO check
+def attentions_to_img(all_layers_attn_probs, dataset, subset, img_title, test_batch_size):
+    test_batch = load_test_batch(dataset, subset, test_batch_size)
     stacked_attn_probs = torch.stack(all_layers_attn_probs, dim=1)
     # [batch_size, layer, head, length, length]
-    batch_size = stacked_attn_probs.shape[0]
+    test_batch_size = stacked_attn_probs.shape[0]
     layer_num = stacked_attn_probs.shape[1]
     head_num = stacked_attn_probs.shape[2]
     
     assert layer_num == len(all_layers_attn_probs)
     
-    if batch_size == 1: # called in trainer
+    if test_batch_size == 1: # called in trainer
         batch_rows =1
         batch_cols =1
     else: # called in main
-        assert batch_size == len(test_batch) == 10
-        batch_rows, batch_cols = 2, 5
-    assert batch_rows * batch_cols == batch_size
+        assert test_batch_size == len(test_batch)
+        assert test_batch_size % 2 ==0
+        batch_rows, batch_cols = 2, test_batch_size//2
+    assert batch_rows * batch_cols == test_batch_size
 
     rows, cols = layer_num, head_num
     plot = []
     batch_subtitle = []
     plot = []
-    for b in range(batch_size): # TODO in trainer, max_length
+    for b in range(test_batch_size): # TODO in trainer, max_length
         fig = plt.figure(figsize=(12,12), dpi=300)
         t = test_batch['attention_mask'][b]
         seq_len = (t==0).nonzero()[0].squeeze().item()
@@ -38,6 +39,10 @@ def attentions_to_img(all_layers_attn_probs, dataset, subset, img_title):
                 ax.set_title(f'l{l}_h{h+l*head_num}', fontsize=30)
                 ax.imshow(img) # one atten_probs
                 i+=1
+        if test_batch_size==1: # Trainer
+            fig.suptitle(f"{img_title}\n"+batch_subtitle[0], fontsize=50)
+            fig.tight_layout()
+            return fig
         fig.tight_layout()
         plot.append(fig)
 
@@ -54,7 +59,7 @@ def attentions_to_img(all_layers_attn_probs, dataset, subset, img_title):
             axes[r,c].set_yticklabels([])
             j+=1
     
-    plt.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9,wspace=0, hspace=0) #  wspace=0, hspace=0
-    plt.tight_layout() # batch_fig
+    # plt.subplots_adjust(left=0.1, bottom=0.1, right=0.9, top=0.9,wspace=0, hspace=0) #  wspace=0, hspace=0
     plt.suptitle(img_title, fontsize = 80)
+    plt.tight_layout() # batch_fig
     return plt
