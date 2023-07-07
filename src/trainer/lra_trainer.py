@@ -37,9 +37,9 @@ LRA_TASKS = {
     'text': {
         'batch_size': 24,
         'dataloader_fn': lambda bs: get_loaders('text', bs),
-        'lr': 2e-5,
+        'lr': 1e-5,
         'wd': 1e-1,
-        'epochs': 100,
+        'epochs': 30,
         'eval_steps': 12000,
         'wandb_steps': 5,
         'config': berts.BertConfig(
