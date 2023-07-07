@@ -31,17 +31,19 @@ def get_attns_img(
         attention_method, 
         model, 
         base_model, 
-        img_title):
+        img_title,
+        test_batch_size):
     dense_attns_img = None
     sparse_attns_img = None
 
     if attention_method=="base":
-        dense_attn_probs = sample_attentions_basem(dataset, subset, base_model)
-        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title)
+        dense_attn_probs = sample_attentions_basem(TEST_BATCH_SIZE,dataset, subset, base_model)
+        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title, test_batch_size)
         assert dense_attns_img is not None
         return dense_attns_img, None
     elif attention_method=='perlin':
         dense_attn_probs = sample_attentions_model(
+            TEST_BATCH_SIZE,
             base_model_type, 
             dataset, 
             subset, 
@@ -49,25 +51,27 @@ def get_attns_img(
             base_model, 
             viz_dense_attn = True)
         sparse_attn_probs = sample_attentions_model(
+            TEST_BATCH_SIZE,
             base_model_type, 
             dataset, 
             subset, 
             model, 
             base_model, 
             viz_dense_attn = False)
-        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title)
-        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title)
+        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title, test_batch_size)
+        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title, test_batch_size)
         assert dense_attns_img is not None and sparse_attns_img is not None
         return dense_attns_img, sparse_attns_img
     elif attention_method == 'performer':
         sparse_attn_probs = sample_attentions_model(
+            TEST_BATCH_SIZE,
             base_model_type, 
             dataset, 
             subset, 
             model, 
             base_model,
             viz_dense_attn = False)
-        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title)
+        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title, test_batch_size)
         assert sparse_attns_img is not None
         return None, sparse_attns_img
     else:
@@ -100,7 +104,8 @@ def main():
             ATTENTION_METHOD, 
             model, 
             base_model, 
-            img_title)
+            img_title,
+            TEST_BATCH_SIZE)
 
         assert PATH[:8] is './saves/'
         FOLDER_PATH = PATH.replace('./saves/','./plots/')
@@ -120,6 +125,8 @@ if __name__ == '__main__':
     parser.add_argument('--task-type', default='seqclassification', type=str)
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default='mnli', type=str)
+    parser.add_argument('--test-batch-size', default=10, type=int)
+
     
     parser.add_argument('--method', default='perlin', type=str) # in ["base", "perlin", "performer", longformer, bigbird, sinkhorn, synthesizer, reformer, ...]
     parser.add_argument('--layerwise', action='store_true') # default: False, type --layerwise to make True
@@ -137,6 +144,8 @@ if __name__ == '__main__':
     TASK_TYPE = args.task_type
     DATASET = args.dataset
     SUBSET = args.subset
+    TEST_BATCH_SIZE = args.test_batch_size
+    assert TEST_BATCH_SIZE % 2==0
 
     ATTENTION_METHOD = args.method
     # dependent on attention_method

@@ -1,7 +1,7 @@
 import os
 import warnings
 from matplotlib import pyplot as plt
-from dataset.test_batch_generator import save_test_batch
+from dataset.test_batch_func import load_test_batch, save_test_batch
 from main.evaluation import get_attns_img
 import numpy as np
 import tqdm
@@ -73,6 +73,7 @@ task_to_valid = {
 
 BASE_MODEL_TYPE = 'bert'
 DATASET = 'glue'
+TEST_BATCH_SIZE = 1
 
 def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if subset == 'bert':
@@ -215,16 +216,10 @@ class Trainer:
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
-        # get test_batch
-        for batch in self.valid_loader: # TODO continued every time we're saving -> better way?
-            test_batch = batch
-            break
+        test_batch = load_test_batch(DATASET, self.subset, TEST_BATCH_SIZE)
+        
         print("\n\nBert_glue_trainer] test_batch", test_batch) # for debug
-        print("\n\nBert_glue_trainer] test_batch_input_ids_shape", test_batch['input_ids'].shape)
-        
-        # save test_batch
-        save_test_batch(DATASET, self.subset, test_batch)
-        
+
         test_batch = batch_to(test_batch, self.device) # TODO check <- after saving
 
         assert model_cls is not None
@@ -384,7 +379,8 @@ class Trainer:
                         self.attention_method, # it wouldn't be "base"
                         self.model, 
                         self.base_model,
-                        img_title)
+                        img_title,
+                        TEST_BATCH_SIZE)
 
                     if dense_attns_img is not None:
                         wandb.log({self.attention_method : dense_attns_img})
@@ -494,7 +490,8 @@ class Trainer:
                 self.attention_method, # it wouldn't be "base"
                 self.model, 
                 self.base_model, 
-                img_title)
+                img_title,
+                TEST_BATCH_SIZE)
             
             if dense_attns_img is not None:
                 wandb.log({self.attention_method : dense_attns_img})
