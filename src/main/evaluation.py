@@ -1,4 +1,5 @@
 import os
+from main.visualization.attentions_to_img import attentions_to_img
 import torch
 
 from models.initialize_model import get_model_init
@@ -36,7 +37,7 @@ def get_attns_img(
 
     if attention_method=="base":
         dense_attn_probs = sample_attentions_basem(dataset, subset, base_model)
-        dense_attns_img = attentions_to_img(dense_attn_probs, img_title)
+        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title)
         assert dense_attns_img is not None
         return dense_attns_img, None
     elif attention_method=='perlin':
@@ -54,8 +55,8 @@ def get_attns_img(
             model, 
             base_model, 
             viz_dense_attn = False)
-        dense_attns_img = attentions_to_img(dense_attn_probs, img_title)
-        sparse_attns_img = attentions_to_img(sparse_attn_probs, img_title)
+        dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title)
+        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title)
         assert dense_attns_img is not None and sparse_attns_img is not None
         return dense_attns_img, sparse_attns_img
     elif attention_method == 'performer':
@@ -66,7 +67,7 @@ def get_attns_img(
             model, 
             base_model,
             viz_dense_attn = False)
-        sparse_attns_img = attentions_to_img(sparse_attn_probs, img_title)
+        sparse_attns_img = attentions_to_img(sparse_attn_probs, DATASET, SUBSET, img_title)
         assert sparse_attns_img is not None
         return None, sparse_attns_img
     else:
@@ -78,6 +79,13 @@ def save_eval(obj, folder_path, file_path): # TODO
     print(f'Evaluation: save {path}')
     torch.save(obj, path)
     print(f'Evaluation: saved {path}')
+
+def save_fig(plot, folder_path, file_path): # TODO
+    os.makedirs(folder_path, exist_ok=True)
+    path = folder_path + file_path
+    print(f'Evaluation: save fig {path}')
+    plot.savefig(path, dpi=96)
+    print(f'Evaluation: saved fig {path}')
 
 def main():
     epoch, step, lr, model, base_model = load_model()
@@ -100,9 +108,9 @@ def main():
         FOLDER_PATH = FOLDER_PATH[:folder_idx+1] # ~~/~/~/
 
         if dense_attns_img is not None:
-            save_eval(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}.png")
+            save_fig(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}.png")
         if sparse_attns_img is not None:
-            save_eval(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}.png")
+            save_fig(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}.png")
     
 if __name__ == '__main__':
     import argparse
