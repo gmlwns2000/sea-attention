@@ -61,7 +61,7 @@ class LRAListOps(Dataset):
             
             data = pd.read_csv(self.csv_path, delimiter='\t')
             for i in tqdm.tqdm(range(len(data)), desc='LRAListOps.load', dynamic_ncols=True):
-                if i > 500: break
+                # if i > 500: break
                 row = data.iloc[i]
                 source = row.Source
                 inputs = tokenizer(
