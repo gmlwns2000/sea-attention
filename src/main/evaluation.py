@@ -1,7 +1,6 @@
 import os
-from main.visualization.attentions_to_img import attentions_to_img
+from ..main.visualization.attentions_to_img import attentions_to_img
 import torch
-
 from models.initialize_model import get_model_init
 from models.sampling.sampling_attentions import sample_attentions_basem, sample_attentions_model
 
@@ -33,9 +32,11 @@ def get_attns_img(
         base_model, 
         img_title,
         test_batch_size):
+    model.eval()
+    base_model.eval()
     dense_attns_img = None
     sparse_attns_img = None
-
+    
     if attention_method=="base":
         dense_attn_probs = sample_attentions_basem(TEST_BATCH_SIZE,dataset, subset, base_model)
         dense_attns_img = attentions_to_img(dense_attn_probs, DATASET, SUBSET, img_title, test_batch_size)

@@ -1,7 +1,19 @@
 import os
 import torch
-import trainer.bert_glue_trainer as bert_glue_trainer
-from trainer.bert_glue_trainer import task_to_valid as bert_glue_task_to_valid
+from ..trainer import bert_glue_trainer as bert_glue_trainer
+
+bert_glue_task_to_valid = {
+    "cola": "validation",
+    "mnli": "validation_matched",
+    "mrpc": "test",
+    "qnli": "validation",
+    "qqp": "validation",
+    "rte": "validation",
+    "sst2": "validation",
+    "stsb": "validation",
+    "wnli": "validation",
+    "bert": "validation",
+}
 
 def make_test_batch(base_model_type, dataset, subset, test_batch_size):
     # tokenizer, batch_size, tast_to_valid

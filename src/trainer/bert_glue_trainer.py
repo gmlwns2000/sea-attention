@@ -1,8 +1,8 @@
 import os
 import warnings
 from matplotlib import pyplot as plt
-from dataset.test_batch_func import load_test_batch, save_test_batch
-from main.evaluation import get_attns_img
+from ..dataset.test_batch_func import load_test_batch, save_test_batch
+from ..main.evaluation import get_attns_img
 import numpy as np
 import tqdm
 import transformers
@@ -303,8 +303,7 @@ class Trainer:
             batch['output_attentions'] = True
             with torch.no_grad():
                 output_base = self.base_model(**batch)
-            if 'bert_glue_trainer' not in self.trainer_name: # model_cls != berts.BertForSequenceClassification: running for baseM visualization
-                batch['teacher'] = self.base_model
+            batch['teacher'] = self.base_model
             output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
@@ -422,8 +421,7 @@ class Trainer:
             
             with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled): # TODO JIN: modified torch.bfloat16
                 self.base_model(**batch)
-                if 'bert_glue_trainer' not in self.trainer_name:
-                    batch['teacher'] = self.base_model
+                batch['teacher'] = self.base_model
                 outputs = model(**batch)
             predictions = outputs[0]
 

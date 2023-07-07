@@ -37,7 +37,6 @@ class Trainer(BaseTrainer):
                 module.attention_method = ATTENTION_METHOD
                 module.perlin_k_relwise = PERLIN_K_RELWISE
                 module.perlin_redraw_proj = PERLIN_REDRAW_PROJ
-                # breakpoint()
         
         if PERLIN_LAYERWISE:
             for module in self.model.modules():
@@ -50,7 +49,6 @@ class Trainer(BaseTrainer):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
-            # breakpoint()
                     
 if __name__ == '__main__':
     import argparse
