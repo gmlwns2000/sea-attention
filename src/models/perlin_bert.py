@@ -408,6 +408,7 @@ class BertSelfAttention(nn.Module):
         self.perlin_layerwise = False
         perlin_lora_r = 32
         self.perlin_lora_enabled = False
+        self.perlin_lora_in_approx_enabled = True #TODO: Try False
         
         #- intermediate buffers
         self.teacher_attention_prob = None
@@ -665,14 +666,14 @@ class BertSelfAttention(nn.Module):
             key_layer = self.transpose_for_scores(lora_forward_lora(
                 self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
             key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, True))
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
             key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, True))
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
             t_value_layer = lora_forward_linear(self.value, hidden_states)
             value_layer = self.transpose_for_scores(lora_forward_lora(
                 self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
             value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, True))
+                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
 
         # mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         # mixed_query_layer_for_atten = lora_forward(self.query, self.perlin_query_lora_for_approx_atten, hidden_states, True)
@@ -681,9 +682,9 @@ class BertSelfAttention(nn.Module):
         mixed_query_layer = lora_forward_lora(
             self.query, t_mixed_query_layer, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         mixed_query_layer_for_atten = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, True)
+            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
         mixed_query_layer_for_score = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, True)
+            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
         query_layer = self.transpose_for_scores(mixed_query_layer)
         query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
         query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)

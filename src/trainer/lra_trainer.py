@@ -18,14 +18,14 @@ BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 LRA_TASKS = {
     'listops': {
-        'batch_size': 4,
+        'batch_size': 32,
         'dataloader_fn': lambda bs: get_loaders('listops', bs),
-        'lr': 2e-4,
+        'lr': 2e-3,
         'wd': 1e-1,
-        'epochs': 10,
+        'epochs': 30,
         'eval_steps': 6000,
         'wandb_steps': 5,
-        'gradient_accumulation_steps': 1,
+        'gradient_accumulation_steps': 8,
         'config': berts.BertConfig(
             max_position_embeddings=2048,
             num_attention_heads=8,
