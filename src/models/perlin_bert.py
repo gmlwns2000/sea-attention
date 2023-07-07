@@ -696,6 +696,16 @@ class BertSelfAttention(nn.Module):
                     attention_mask,
                 ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
             
+            # Take the dot product between "query" and "key" to get the raw attention scores.
+            attention_scores_dense = torch.matmul(q, k.transpose(-1, -2))
+            if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
+                raise Exception()
+            attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
+            if attention_mask is not None:
+                # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+                attention_scores_dense = attention_scores_dense + attention_mask
+            loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+            
             k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
             k_flatten = self.perlin_k_flatten
             if not k_flatten:
@@ -705,7 +715,7 @@ class BertSelfAttention(nn.Module):
                 )
                 # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_truth
+                partial_attention_scores = attention_scores_dense
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
                 partial_attention_scores.scatter_(
@@ -713,7 +723,7 @@ class BertSelfAttention(nn.Module):
                 )
             else:
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_truth
+                partial_attention_scores = attention_scores_dense
                 N, H, T, T = partial_attention_scores.shape
                 partial_attention_scores = partial_attention_scores.view(N, H, T*T)
                 value, indices = torch.topk(
