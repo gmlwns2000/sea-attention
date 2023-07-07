@@ -16,6 +16,6 @@ if __name__ == '__main__':
     TEST_BATCH_SIZE = args.test_batch_size
     BASE_MODEL_TYPE = args.base_model_type
 
-    make_test_batch(DATASET, SUBSET, TEST_BATCH_SIZE, BASE_MODEL_TYPE)
+    make_test_batch(BASE_MODEL_TYPE, DATASET, SUBSET, TEST_BATCH_SIZE)
 
 

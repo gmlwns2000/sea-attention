@@ -3,7 +3,7 @@ import torch
 import trainer.bert_glue_trainer as bert_glue_trainer
 from trainer.bert_glue_trainer import task_to_valid as bert_glue_task_to_valid
 
-def make_test_batch(dataset, subset, test_batch_size, base_model_type):
+def make_test_batch(base_model_type, dataset, subset, test_batch_size):
     # tokenizer, batch_size, tast_to_valid
     if base_model_type == 'bert':
         if dataset == "glue":
