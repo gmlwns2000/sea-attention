@@ -355,7 +355,7 @@ class Trainer:
                     
                     wandb.log({'eval/score': score}, step=self.step)
                 
-                if ((istep + 1) % 5) == 0:
+                if ((istep + 1) % 15) == 0:
                     wandb_data = {}
                     for k, v in self.loss_details.items():
                         wandb_data[f'train/{k}'] = v

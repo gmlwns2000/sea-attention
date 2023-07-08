@@ -24,7 +24,7 @@ LRA_TASKS = {
         'wd': 1e-1,
         'epochs': 30,
         'eval_steps': 6000,
-        'wandb_steps': 5,
+        'wandb_steps': 10,
         'gradient_accumulation_steps': 8,
         'config': berts.BertConfig(
             max_position_embeddings=2048,
@@ -43,7 +43,7 @@ LRA_TASKS = {
         'wd': 1e-1,
         'epochs': 30,
         'eval_steps': 12000,
-        'wandb_steps': 5,
+        'wandb_steps': 10,
         'gradient_accumulation_steps': 2,
         'config': berts.BertConfig(
             max_position_embeddings=1024,
@@ -64,7 +64,7 @@ LRA_TASKS = {
         'wd': 0.0,
         'epochs': 500,
         'eval_steps': 12000,
-        'wandb_steps': 5,
+        'wandb_steps': 10,
         'gradient_accumulation_steps': 256//256,
         'config': berts.BertConfig(
             max_position_embeddings=1024,
