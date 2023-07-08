@@ -37,14 +37,14 @@ LRA_TASKS = {
         )
     },
     'text': {
-        'batch_size': 24,
+        'batch_size': 16,
         'dataloader_fn': lambda bs: get_loaders('text', bs),
         'lr': 1e-5,
         'wd': 1e-1,
         'epochs': 30,
         'eval_steps': 12000,
         'wandb_steps': 5,
-        'gradient_accumulation_steps': 1,
+        'gradient_accumulation_steps': 2,
         'config': berts.BertConfig(
             max_position_embeddings=1024,
             num_attention_heads=4,
@@ -52,6 +52,8 @@ LRA_TASKS = {
             hidden_size=256,
             intermediate_size=1024,
             num_labels=2,
+            hidden_dropout_prob=0.2,
+            attention_probs_dropout_prob=0.2,
             vocab_size=get_tokenizer_text().vocab_size,
         )
     },
