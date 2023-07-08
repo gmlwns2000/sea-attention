@@ -270,8 +270,10 @@ class Trainer:
         print('loaded', path)
     
     def main(self):
+        from ..utils.secrets import WANDB_KEY, USER_NAME
+        os.environ['WANDB_API_KEY'] = WANDB_KEY
         wandb.init(
-            project="perlin-lra",
+            project=f"[{USER_NAME}] perlin-lra",
             name=f"{self.exp_name}-{int(time.time()*1000 % 1000)}",
             config={
                 "lr": self.lr,
