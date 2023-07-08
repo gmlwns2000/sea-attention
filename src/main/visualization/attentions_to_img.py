@@ -1,10 +1,16 @@
-from dataset.test_batch_func import load_test_batch
+from ...dataset.test_batch_save_load import load_test_batch
 import torch
 import matplotlib.pyplot as plt
 
 # %matplotlib agg # TODO check
-def attentions_to_img(all_layers_attn_probs, dataset, subset, img_title, test_batch_size):
-    test_batch = load_test_batch(dataset, subset, test_batch_size)
+def attentions_to_img(
+        all_layers_attn_probs, 
+        dataset, 
+        subset, 
+        img_title, 
+        test_batch_size, 
+        for_eval):
+    test_batch = load_test_batch(dataset, subset, for_eval, test_batch_size)
     stacked_attn_probs = torch.stack(all_layers_attn_probs, dim=1)
     # [batch_size, layer, head, length, length]
     test_batch_size = stacked_attn_probs.shape[0]

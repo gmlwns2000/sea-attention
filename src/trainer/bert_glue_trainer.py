@@ -1,7 +1,7 @@
 import os
 import warnings
 from matplotlib import pyplot as plt
-from ..dataset.test_batch_func import load_test_batch, save_test_batch
+from ..dataset.test_batch_save_load import load_test_batch
 from ..main.evaluation import get_attns_img
 import numpy as np
 import tqdm
@@ -16,7 +16,6 @@ from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
-from ..main.plot import plot_attentions_all_layer
 
 bool2int = lambda x: 1 if x else 0
 
@@ -75,8 +74,10 @@ BASE_MODEL_TYPE = 'bert'
 DATASET = 'glue'
 TEST_BATCH_SIZE = 1
 assert TEST_BATCH_SIZE == 1 # attentions_to_img.py
+FOR_EVAL = False
+assert not FOR_EVAL
 
-def get_dataloader(subset, tokenizer, batch_size, split='train'):
+def get_dataloader(subset, tokenizer, batch_size, split='train', making_test_batch=False):
     if subset == 'bert':
         subset = "cola" #return dummy set
     
@@ -89,7 +90,10 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
         args = (
             (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
         )
-        result = tokenizer(*args, padding=True, max_length=256, truncation=True)
+        if not making_test_batch:
+            result = tokenizer(*args, padding=True, max_length=256, truncation=True)
+        else:
+            result = tokenizer(*args, padding='max_length', max_length=256, truncation=True)
         # result = tokenizer(*args, padding="max_length", max_length=512, truncation=True)
         # Map labels to IDs (not necessary for GLUE tasks)
         # if label_to_id is not None and "label" in examples:
@@ -217,7 +221,7 @@ class Trainer:
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
         
-        test_batch = load_test_batch(DATASET, self.subset, TEST_BATCH_SIZE)
+        test_batch = load_test_batch(DATASET, self.subset, FOR_EVAL, TEST_BATCH_SIZE)
         
         print("\n\nBert_glue_trainer] test_batch", test_batch) # for debug
 
