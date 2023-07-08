@@ -60,9 +60,9 @@ LRA_TASKS = {
     'image': {
         'batch_size': 256,
         'dataloader_fn': lambda bs: get_loaders('image', bs),
-        'lr': 1e-4,
+        'lr': 1e-3,
         'wd': 0.0,
-        'epochs': 200,
+        'epochs': 500,
         'eval_steps': 12000,
         'wandb_steps': 5,
         'gradient_accumulation_steps': 256//256,
