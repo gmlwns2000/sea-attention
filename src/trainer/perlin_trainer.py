@@ -119,6 +119,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
     def __init__(
         self, 
         subset: str = 'listops',
+        disable_amp: bool = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         **kwargs
@@ -133,6 +134,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
             gradient_checkpointing = gradient_checkpointing,
             gradient_accumulation_steps = gradient_accumulation_steps,
             using_kd=True,
+            amp_enabled=not disable_amp,
         )
         
         self.apply_model_options(self.model)
