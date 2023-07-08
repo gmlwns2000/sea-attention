@@ -68,6 +68,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         subset = 'mnli',
         lr = 1e-5,
         epochs = 20,
+        disable_amp = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         **kwargs,
@@ -100,7 +101,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             self,
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
-            amp_enabled=True,
+            amp_enabled=not disable_amp,
             trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
@@ -146,6 +147,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
+    parser.add_argument('--disable-amp', action='store_true', default=False)
     
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
