@@ -68,19 +68,40 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         subset = 'mnli',
         lr = 1e-5,
         epochs = 20,
+        disable_amp = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         **kwargs,
     ):
         BaseTrainer.__init__(self, **kwargs)
         
+        # task_to_batch_size = {
+        #     "cola": 64,
+        #     "mnli": 4,
+        #     "mrpc": 32,
+        #     "qnli": 4,
+        #     "qqp":  16,
+        #     "rte":  8,
+        #     "sst2": 16,
+        #     "stsb": 16,
+        #     "wnli": 32,
+        #     "bert": 4,
+        # }
+        task_to_batch_size['cola'] = (64 if not self.perlin_layerwise else 128) // gradient_accumulation_steps
         task_to_batch_size['mnli'] = (16 if not self.perlin_layerwise else 24) // gradient_accumulation_steps
+        task_to_batch_size['mrpc'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
+        task_to_batch_size['qnli'] = (16 if not self.perlin_layerwise else 24) // gradient_accumulation_steps
+        task_to_batch_size['qqp']  = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
+        task_to_batch_size['rte']  = (32 if not self.perlin_layerwise else 48) // gradient_accumulation_steps
+        task_to_batch_size['sst2'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
+        task_to_batch_size['stsb'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
+        task_to_batch_size['wnli'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
         
         BaseGlueTrainer.__init__(
             self,
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
-            amp_enabled=True,
+            amp_enabled=not disable_amp,
             trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
@@ -98,6 +119,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
     def __init__(
         self, 
         subset: str = 'listops',
+        disable_amp: bool = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         **kwargs
@@ -112,6 +134,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
             gradient_checkpointing = gradient_checkpointing,
             gradient_accumulation_steps = gradient_accumulation_steps,
             using_kd=True,
+            amp_enabled=not disable_amp,
         )
         
         self.apply_model_options(self.model)
@@ -126,6 +149,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
+    parser.add_argument('--disable-amp', action='store_true', default=False)
     
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
