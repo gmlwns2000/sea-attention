@@ -25,3 +25,5 @@ cache/
 wandb/
 
 *.csv
+
+src/utils/secrets.*
