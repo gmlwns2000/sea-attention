@@ -384,7 +384,8 @@ class Trainer:
                         self.model, 
                         self.base_model,
                         img_title,
-                        TEST_BATCH_SIZE)
+                        TEST_BATCH_SIZE,
+                        FOR_EVAL)
 
                     if dense_attns_img is not None:
                         wandb.log({self.attention_method : dense_attns_img})
@@ -494,7 +495,8 @@ class Trainer:
                 self.model, 
                 self.base_model, 
                 img_title,
-                TEST_BATCH_SIZE)
+                TEST_BATCH_SIZE,
+                FOR_EVAL)
             
             if dense_attns_img is not None:
                 wandb.log({self.attention_method : dense_attns_img})
