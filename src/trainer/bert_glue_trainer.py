@@ -273,7 +273,10 @@ class Trainer:
             output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
-            loss_model = output.loss * 0.1
+            if self.using_kd:
+                loss_model = output.loss * 0.1
+            else:
+                loss_model = output.loss
         else:
             loss_model = 0.0
         
