@@ -225,7 +225,7 @@ class Trainer:
         
         print("\n\nBert_glue_trainer] test_batch", test_batch) # for debug
 
-        test_batch = batch_to(test_batch, self.device) # TODO check <- after saving
+        test_batch = batch_to(test_batch, self.device)
 
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -377,6 +377,7 @@ class Trainer:
                     img_title = f"train_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
 
                     dense_attns_img, sparse_attns_img = get_attns_img(
+                        self.device,
                         BASE_MODEL_TYPE,
                         DATASET, 
                         self.subset, 
@@ -488,6 +489,7 @@ class Trainer:
 
             img_title = f"main_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
             dense_attns_img, sparse_attns_img = get_attns_img(
+                self.device,
                 BASE_MODEL_TYPE,
                 DATASET, 
                 self.subset, 

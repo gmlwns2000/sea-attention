@@ -7,6 +7,7 @@ from ..models.sampling.sampling_attentions import sample_attentions_basem, sampl
 bool2int = lambda x: 1 if x else 0
 
 def load_model(
+        device,
         path, 
         base_model_type, 
         task_type, 
@@ -22,6 +23,9 @@ def load_model(
 
     model.load_state_dict(state['model'], strict=False)
     base_model.load_state_dict(state['base_model'], strict=True)
+
+    model.to(device) # TODO don't have to be same with the while-training device?
+    base_model.to(device)
     model.eval()
     base_model.eval()
 
@@ -29,6 +33,7 @@ def load_model(
     return epoch, step, lr, model, base_model
 
 def get_attns_img(
+        device,
         base_model_type, 
         dataset, 
         subset, 
@@ -45,6 +50,7 @@ def get_attns_img(
     
     if attention_method=="base":
         dense_attn_probs = sample_attentions_basem(
+            device,
             for_eval,
             test_batch_size,
             dataset, 
@@ -61,6 +67,7 @@ def get_attns_img(
         return dense_attns_img, None
     elif attention_method=='perlin':
         dense_attn_probs = sample_attentions_model(
+            device,
             for_eval,
             test_batch_size,
             base_model_type, 
@@ -70,6 +77,7 @@ def get_attns_img(
             base_model, 
             viz_dense_attn = True)
         sparse_attn_probs = sample_attentions_model(
+            device,
             for_eval,
             test_batch_size,
             base_model_type, 
@@ -96,6 +104,7 @@ def get_attns_img(
         return dense_attns_img, sparse_attns_img
     elif attention_method == 'performer':
         sparse_attn_probs = sample_attentions_model(
+            device,
             for_eval,
             test_batch_size,
             base_model_type, 
@@ -132,6 +141,7 @@ def save_fig(plot, folder_path, file_path): # TODO
 
 def main():
     epoch, step, lr, model, base_model = load_model(
+        DEVICE,
         PATH, 
         BASE_MODEL_TYPE, 
         TASK_TYPE, 
@@ -142,6 +152,7 @@ def main():
     if 'viz_attentions' in EVAL_TYPES:
         img_title = f"ep{epoch}_st{step}_lr{lr}"
         dense_attns_img, sparse_attns_img = get_attns_img(
+            DEVICE,
             BASE_MODEL_TYPE, 
             DATASET, 
             SUBSET, 
@@ -171,8 +182,8 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default='mnli', type=str)
     parser.add_argument('--test-batch-size', default=10, type=int)
+    parser.add_argument('--device', default=0, type=int)
 
-    
     parser.add_argument('--method', default='perlin', type=str) # in ["base", "perlin", "performer", longformer, bigbird, sinkhorn, synthesizer, reformer, ...]
     parser.add_argument('--layerwise', action='store_true') # default: False, type --layerwise to make True
     parser.add_argument('--k-relwise', action='store_true')
@@ -190,6 +201,7 @@ if __name__ == '__main__':
     DATASET = args.dataset
     SUBSET = args.subset
     TEST_BATCH_SIZE = args.test_batch_size
+    DEVICE = args.device
     assert TEST_BATCH_SIZE % 2==0
 
     ATTENTION_METHOD = args.method

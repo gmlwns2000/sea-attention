@@ -1,8 +1,10 @@
+from ...utils import batch_to
 from ...models.dict.model_self_attention import get_model_self_attn
 import torch
 from ...dataset.test_batch_save_load import load_test_batch
 
 def sample_attentions_model(
+        device,
         for_eval,
         test_batch_size,
         base_model_type, 
@@ -13,6 +15,8 @@ def sample_attentions_model(
         viz_dense_attn = True):
     
     test_batch = load_test_batch(dataset, subset, for_eval, test_batch_size)
+    test_batch = batch_to(test_batch, device)
+    
     test_batch['output_hidden_states'] = True
     test_batch['output_attentions'] = True
 
@@ -36,6 +40,7 @@ def sample_attentions_model(
     return all_layers_attn_probs
 
 def sample_attentions_basem(
+        device,
         for_eval,
         test_batch_size,
         dataset, 
@@ -43,6 +48,8 @@ def sample_attentions_basem(
         base_model):
     
     test_batch = load_test_batch(dataset, subset, for_eval, test_batch_size)
+    test_batch = batch_to(test_batch, device)
+
     test_batch['output_hidden_states'] = True
     test_batch['output_attentions'] = True
 
