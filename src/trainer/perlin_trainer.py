@@ -180,6 +180,7 @@ if __name__ == '__main__':
         'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
+        'disable_amp': args.disable_amp,
     }
     
     if args.dataset == 'glue':
