@@ -66,7 +66,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
     def __init__(
         self, 
         subset = 'mnli',
-        lr = 1e-4,
+        lr = 1e-5,
         epochs = 20,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
