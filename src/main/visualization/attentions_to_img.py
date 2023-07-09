@@ -55,7 +55,9 @@ def attentions_to_img(
 
     batch_fig, axes = plt.subplots(batch_rows, batch_cols, figsize=(12*layer_num,12*head_num))# ,dpi=200 # layout="constrained"
     
-    # breakpoint()
+    # TODO change implementation
+    # TODO bug when test_batch_size == 2
+    breakpoint()
     j = 0
     for r in range(batch_rows):
         for c in range(batch_cols):
