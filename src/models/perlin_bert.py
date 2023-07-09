@@ -409,6 +409,7 @@ class BertSelfAttention(nn.Module):
         perlin_lora_r = 32
         self.perlin_lora_enabled = False
         self.perlin_lora_in_approx_enabled = True #TODO: Try False
+        self.perlin_random_lookup = False
         
         #- intermediate buffers
         self.teacher_attention_prob = None
@@ -489,7 +490,13 @@ class BertSelfAttention(nn.Module):
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
-            
+            nn.Linear(config.hidden_size, config.hidden_size),
+        )
+        self.perlin_out_random_lookup = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*3, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
             nn.Linear(config.hidden_size, config.hidden_size),
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
@@ -811,6 +818,29 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
+            
+            if self.perlin_random_lookup:
+                # lookup randomly that not looked up by partial context
+                num_lookups = 3
+                lookups = None
+                estimated_attention_probs_masked = estimated_attention_probs * (attention_mask > -1) * (partial_attention_scores > -9999)
+                for n in range(num_lookups):
+                    token_length = (attention_mask.view(N, T) > -1).float().sum(dim=-1).view(N, 1, 1, 1)
+                    # N, H, T, HID
+                    random_context_index = torch.rand_like(partial_context_layer)
+                    random_context_index = (random_context_index * (1 - 1/T) * token_length).floor().long()
+                    
+                    random_context_layer = v.gather(dim=-2, index=random_context_index)
+                    random_context_weight = estimated_attention_probs_masked.gather(dim=-1, index=random_context_index)
+                    random_context_layer = random_context_weight * random_context_layer
+                    if lookups is None:
+                        lookups = random_context_layer
+                    else:
+                        lookups = lookups + random_context_layer
+                
+                random_context_layer = random_context_layer.permute(0, 2, 1, 3).contiguous()
+                new_context_layer_shape = random_context_layer.size()[:-2] + (self.all_head_size,)
+                random_context_layer = random_context_layer.view(new_context_layer_shape)
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
@@ -819,7 +849,17 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            partial_context_layer = self.perlin_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1)) + partial_context_layer
+            if not self.perlin_random_lookup:
+                partial_context_layer = self.perlin_out(torch.cat([
+                    partial_context_layer, 
+                    performer_context_layer
+                ], dim=-1)) + partial_context_layer
+            else:
+                partial_context_layer = self.perlin_out_random_lookup(torch.cat([
+                    partial_context_layer, 
+                    performer_context_layer,
+                    random_context_layer,
+                ], dim=-1)) + partial_context_layer
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm

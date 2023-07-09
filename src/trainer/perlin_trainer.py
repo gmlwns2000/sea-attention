@@ -18,6 +18,7 @@ class BaseTrainer:
         attention_method = 'perlin',
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
+        perlin_random_lookup = False,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -27,6 +28,7 @@ class BaseTrainer:
         self.perlin_lora = perlin_lora
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
+        self.perlin_random_lookup = perlin_random_lookup
         perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
     
     def apply_model_options(self, model: nn.Module):
@@ -36,6 +38,7 @@ class BaseTrainer:
                 module.perlin_k_flatten = self.perlin_k_flatten
                 module.perlin_k = self.perlin_k
                 module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
+                module.perlin_random_lookup = self.perlin_random_lookup
         
         if self.perlin_layerwise:
             for name, param in model.named_parameters():
@@ -58,10 +61,11 @@ class BaseTrainer:
         name_lora = '_full' if not self.perlin_lora else ''
         name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
+        name_random_lookup = f'_rl' if self.perlin_random_lookup else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}'
         return name
 
 class GlueTrainer(BaseGlueTrainer, BaseTrainer):
@@ -160,8 +164,11 @@ if __name__ == '__main__':
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
     parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    parser.add_argument('--random-lookup', action='store_true', default=False)
     
     args = parser.parse_args()
+    
+    print(args)
     
     if args.subset is None:
         if args.dataset == 'glue':
@@ -180,6 +187,7 @@ if __name__ == '__main__':
         'perlin_lora':not args.disable_lora,
         'perlin_attention_predictor_method':args.attention_predictor_method,
         'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
+        'perlin_random_lookup': args.random_lookup,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,

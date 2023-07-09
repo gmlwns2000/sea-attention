@@ -439,7 +439,7 @@ class Trainer:
         os.environ['WANDB_API_KEY'] = WANDB_KEY
         wandb.init(
             # Set the project where this run will be logged
-            project=f"[{USER_NAME}] perlin-glue",
+            project=f"[{USER_NAME}] perlin-glue" if USER_NAME is not None else "perlin-glue",
             # Track hyperparameters and run metadata
             config={
                 "learning_rate": self.lr,
