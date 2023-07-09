@@ -23,7 +23,7 @@ def attentions_to_img(
         batch_rows =1
         batch_cols =1
     else: # called in main
-        assert test_batch_size == len(test_batch)
+        assert test_batch_size == len(test_batch['labels'])
         assert test_batch_size % 2 ==0
         batch_rows, batch_cols = 2, test_batch_size//2
     assert batch_rows * batch_cols == test_batch_size
@@ -41,6 +41,7 @@ def attentions_to_img(
         for l in range(layer_num):
             for h in range(head_num):
                 img = stacked_attn_probs[b,l,h,:seq_len,:seq_len]
+                img = img.cpu().numpy()
                 ax = fig.add_subplot(rows, cols, i+1)
                 ax.set_title(f'l{l}_h{h+l*head_num}', fontsize=30)
                 ax.imshow(img) # one atten_probs
@@ -53,7 +54,8 @@ def attentions_to_img(
         plot.append(fig)
 
     batch_fig, axes = plt.subplots(batch_rows, batch_cols, figsize=(12*layer_num,12*head_num))# ,dpi=200 # layout="constrained"
-
+    
+    # breakpoint()
     j = 0
     for r in range(batch_rows):
         for c in range(batch_cols):

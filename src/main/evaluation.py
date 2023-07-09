@@ -169,16 +169,16 @@ def main():
         FOLDER_PATH = FOLDER_PATH[:folder_idx+1] # ~~/~/~/
 
         if dense_attns_img is not None:
-            save_fig(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}.png")
+            save_fig(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}_bs{TEST_BATCH_SIZE}.png")
         if sparse_attns_img is not None:
-            save_fig(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}.png")
+            save_fig(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}_bs{TEST_BATCH_SIZE}.png")
     
 if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser()
     parser.add_argument('--base-model', default='bert', type=str)
-    parser.add_argument('--task-type', default='seqclassification', type=str)
+    parser.add_argument('--task-type', default='seq_classification', type=str)
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default='mnli', type=str)
     parser.add_argument('--test-batch-size', default=10, type=int)
