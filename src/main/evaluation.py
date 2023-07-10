@@ -150,7 +150,7 @@ def main():
     
     # NOTE(JIN) add other eval tasks
     if 'viz_attentions' in EVAL_TYPES:
-        img_title = f"ep{epoch}_st{step}_lr{lr}"
+        img_title = f"ep{epoch}_st{step}_lr{lr}_bs{TEST_BATCH_SIZE}"
         dense_attns_img, sparse_attns_img = get_attns_img(
             DEVICE,
             BASE_MODEL_TYPE, 
@@ -169,9 +169,9 @@ def main():
         FOLDER_PATH = FOLDER_PATH[:folder_idx+1] # ~~/~/~/
 
         if dense_attns_img is not None:
-            save_fig(dense_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"dense_attns_{img_title}_bs{TEST_BATCH_SIZE}.png")
+            save_fig(dense_attns_img, FOLDER_PATH, f"dense_attns_{img_title}.png")
         if sparse_attns_img is not None:
-            save_fig(sparse_attns_img, FOLDER_PATH+f"{ATTENTION_METHOD}/", f"sparse_attns_{img_title}_bs{TEST_BATCH_SIZE}.png")
+            save_fig(sparse_attns_img, FOLDER_PATH, f"sparse_attns_{img_title}.png")
     
 if __name__ == '__main__':
     import argparse
@@ -187,7 +187,7 @@ if __name__ == '__main__':
     parser.add_argument('--method', default='perlin', type=str) # in ["base", "perlin", "performer", longformer, bigbird, sinkhorn, synthesizer, reformer, ...]
     parser.add_argument('--layerwise', action='store_true') # default: False, type --layerwise to make True
     parser.add_argument('--k-relwise', action='store_true')
-    parser.add_argument('--redraw-proj', action='store_true')
+    parser.add_argument('--no-redraw-proj', action='store_true')
 
     parser.add_argument('--path', default='',type=str)
 
@@ -207,10 +207,16 @@ if __name__ == '__main__':
     ATTENTION_METHOD = args.method
     # dependent on attention_method
     PERLIN_LAYERWISE = args.layerwise
-    PERLIN_K_RELWISE = args.k_relwise
-    PERLIN_REDRAW_PROJ = args.redraw_proj
+    PERLIN_K_FLATTEN = args.k_flatten
+    PERLIN_REDRAW_PROJ = not args.no_redraw_proj
 
     PATH = args.path
+
+    # check whether it's the right one TODO anything to add?
+    assert f'kf{PERLIN_K_FLATTEN}' in PATH
+    assert f'lw{PERLIN_LAYERWISE}' in PATH
+    if not PERLIN_REDRAW_PROJ:
+        assert f'rp{PERLIN_REDRAW_PROJ}' in PATH
     
     # inlcudes all model eval
     EVAL_TYPES = args.eval_types

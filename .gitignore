@@ -24,3 +24,7 @@ cache/
 .torch/
 wandb/
 plots/
+
+*.csv
+
+src/utils/secrets.*

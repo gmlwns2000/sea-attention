@@ -57,7 +57,7 @@ def attentions_to_img(
     
     # TODO change implementation
     # TODO bug when test_batch_size == 2
-    breakpoint()
+    # breakpoint()
     j = 0
     for r in range(batch_rows):
         for c in range(batch_cols):

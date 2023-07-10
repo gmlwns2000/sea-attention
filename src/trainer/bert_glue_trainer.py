@@ -11,13 +11,15 @@ import random, copy
 import torch
 import wandb
 
+# torch.autograd.set_detect_anomaly(True)
+
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
 
-bool2int = lambda x: 1 if x else 0
+import wandb
 
 task_to_keys = {
     "cola": ("sentence", None),
@@ -150,29 +152,8 @@ def get_base_model(subset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-class Metric:
-    def __init__(self):
-        self.sum = {}
-        self.count = {}
-        
-    def update(self, x, name='', weight=1):
-        if isinstance(x, torch.Tensor):
-            x = x.item()
-        if not name in self.sum:
-            self.sum[name] = 0
-            self.count[name] = 0
-        self.sum[name] += x * weight
-        self.count[name] += weight
-        return self.sum[name] / self.count[name]
-
-    def get(self, name=''):
-        return self.sum[name] / self.count[name]
-
-    def to_dict(self):
-        r = {}
-        for key in self.sum:
-            r[key] = self.get(key)
-        return r
+BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+from ..utils import Metric
 
 class Trainer:
     def __init__(
@@ -189,14 +170,17 @@ class Trainer:
         lr = 1e-5,
         epochs = 100,
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
-        attention_method = 'perlin',
+        gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
+        attention_method = 'not_base', # should be 'perlin', 'performer', ...
     ) -> None:
         
         seed()
         
+        self.gradient_accumulation_steps = gradient_accumulation_steps
         self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
-        self.trainer_name = trainer_name
+        self.exp_name = trainer_name
         self.subset = subset
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
@@ -208,12 +192,14 @@ class Trainer:
         
         self.batch_size = task_to_batch_size[self.subset]
         
-        self.eval_steps = eval_steps
+        self.eval_steps = eval_steps * gradient_accumulation_steps
         self.epochs = epochs
         self.lr = lr
         self.wd = 1e-2
 
         self.attention_method = attention_method
+        assert not (self.attention_method == 'not_base')
+        assert not (self.attention_method == 'base')
         
         self.base_model, self.tokenizer = get_base_model(subset)
         self.base_model.to(self.device)
@@ -229,6 +215,10 @@ class Trainer:
 
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
+        for module in self.model.modules():
+            if hasattr(module, 'gradient_checkpointing') and isinstance(getattr(module, 'gradient_checkpointing', None), bool):
+                module.gradient_checkpointing = gradient_checkpointing
+                if gradient_checkpointing: print('gradient-checkpoint patched')
         self.model.to(self.device)
 
         self.load_state_from_base()
@@ -300,9 +290,7 @@ class Trainer:
         return optim_cls(params, **kwargs)
     
     def train_step(self, batch):
-        self.optimizer.zero_grad()
-        
-        with torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled):
+        with torch.autocast('cuda', BF16, enabled=self.amp_enabled):
             batch['output_hidden_states'] = True
             batch['output_attentions'] = True
             with torch.no_grad():
@@ -311,7 +299,10 @@ class Trainer:
             output = self.model(**batch)
         
         if not self.subset == 'bert' and self.using_loss:
-            loss_model = output.loss
+            if self.using_kd:
+                loss_model = output.loss * 0.1
+            else:
+                loss_model = output.loss
         else:
             loss_model = 0.0
         
@@ -324,18 +315,24 @@ class Trainer:
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
-            warnings.warn('special loss found!')
+            # warnings.warn('special loss found!')
             loss_special = self.model.calc_loss_special()
         
         loss = loss_model + loss_kd + loss_special
         
-        self.scaler.scale(loss).backward()
+        self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
+        
+        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.step(self.optimizer)
+            self.optimizer.zero_grad()
+            self.scaler.update()
+        
+        for module in self.model.modules():
+            if hasattr(module, 'redraw_projections'):
+                module.redraw_projections(self.device)
         
         self.loss = loss.item()
         self.loss_details = {
@@ -344,6 +341,8 @@ class Trainer:
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
         }
+        
+        return loss.item()
     
     def train_epoch(self):
         # self.model = torch.compile(self.model_unwrap)
@@ -372,10 +371,11 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 
+                
                 if ((istep+1) % self.eval_steps) == 0:
-                    self.evaluate()
+                    score = self.evaluate()
+                    # visualization
                     img_title = f"train_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
-
                     dense_attns_img, sparse_attns_img = get_attns_img(
                         self.device,
                         BASE_MODEL_TYPE,
@@ -387,19 +387,27 @@ class Trainer:
                         img_title,
                         TEST_BATCH_SIZE,
                         FOR_EVAL)
-
                     if dense_attns_img is not None:
                         wandb.log({self.attention_method : dense_attns_img})
                     if sparse_attns_img is not None:
                         wandb.log({self.attention_method : sparse_attns_img})
-
+                    
                     self.save()
                     
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
-                    
-                    # visualization
+
+                    wandb.log({'eval/score': score}, step=self.step)
+                
+                if ((istep + 1) % 15) == 0:
+                    wandb_data = {}
+                    for k, v in self.loss_details.items():
+                        wandb_data[f'train/{k}'] = v
+                    wandb_data['train/epoch'] = (istep / len(pbar)) + self.epoch
+                    wandb.log(wandb_data, step=self.step)
+                
+                self.step += 1
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -425,7 +433,7 @@ class Trainer:
             labels = batch['labels']
             del batch['labels']
             
-            with torch.no_grad(), torch.autocast('cuda', torch.bfloat16, enabled=self.amp_enabled): # TODO JIN: modified torch.bfloat16
+            with torch.no_grad(), torch.autocast('cuda', BF16, enabled=self.amp_enabled):
                 self.base_model(**batch)
                 batch['teacher'] = self.base_model
                 outputs = model(**batch)
@@ -441,9 +449,13 @@ class Trainer:
             tqdm.tqdm.write(f'metric score {score}')
         return score
 
-    def save(self): # TODO(JIN): why not save the entire model?
-        os.makedirs(f'./saves/trainer/{self.trainer_name}/{DATASET}/', exist_ok=True)
-        path = f'./saves/trainer/{self.trainer_name}/{DATASET}/checkpoint_{self.subset}.pth' # NOTE(JIN): update plot.py once changed
+    def checkpoint_path(self):
+        os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
+        return path
+    
+    def save(self):
+        path = self.checkpoint_path()
         print(f'Trainer: save {path}')
         torch.save({
             'epoch': self.epoch,
@@ -457,7 +469,7 @@ class Trainer:
     def load(self, path=None):
         try:
             if path is None:
-                path = f'./saves/trainer/{self.trainer_name}/checkpoint_{self.subset}.pth'
+                path = self.checkpoint_path()
             print(f'Trainer: load {path}')
             state = torch.load(path, map_location='cpu')
             self.model.load_state_dict(state['model'])
@@ -482,11 +494,26 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         
+        from ..utils.secrets import WANDB_KEY, USER_NAME
+        os.environ['WANDB_API_KEY'] = WANDB_KEY
+        wandb.init(
+            # Set the project where this run will be logged
+            project=f"[{USER_NAME}] perlin-glue" if USER_NAME is not None else "perlin-glue",
+            # Track hyperparameters and run metadata
+            config={
+                "learning_rate": self.lr,
+                "batch_size": self.batch_size,
+                "subset": self.subset,
+                "epochs": self.epochs,
+            }
+        )
+        wandb.watch(self.model, log='all')
+        
         for epoch in range(self.epochs):
             self.epoch = epoch
             self.train_epoch()
-            self.evaluate()
-
+            valid_score = self.evaluate()
+            # visualization
             img_title = f"main_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
             dense_attns_img, sparse_attns_img = get_attns_img(
                 self.device,
@@ -504,8 +531,12 @@ class Trainer:
                 wandb.log({self.attention_method : dense_attns_img})
             if sparse_attns_img is not None:
                 wandb.log({self.attention_method : sparse_attns_img})
-            
-            self.evaluate(split='train') # check overfitting
+            # check for overfitting
+            train_score = self.evaluate(split='train', max_step=1000)
+            wandb.log({
+                'eval/score': valid_score,
+                'train/score': train_score,
+            }, step=self.step)
             self.save()
 
 if __name__ == '__main__':

@@ -258,22 +258,42 @@ class LoraLinear(nn.Module):
 def lora_forward(linear: nn.Linear, lora: LoraLinear, x: torch.Tensor, enabled: bool):
     if not enabled:
         return linear(x)
+    assert linear.bias.ndim == 1
+    assert x.ndim == 3
+    
     x_fc = F.linear(x, linear.weight)
     x_lora = lora(x)
     x = x_fc + x_lora
     if linear.bias is not None:
-        x = x + linear.bias
+        x = x + linear.bias.view(1, 1, linear.bias.shape[0])
+    return x
+
+# split for save memory
+def lora_forward_linear(linear: nn.Linear, x: torch.Tensor):
+    return F.linear(x, linear.weight)
+
+def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinear, x: torch.Tensor, enabled: bool):
+    if not enabled:
+        assert linear.bias.ndim == 1
+        assert linear_x.ndim == 3
+        if linear.bias is not None:
+            return linear_x + linear.bias.view(1, 1, linear.bias.shape[0])
+        return linear_x
+    
+    lora_x = lora(x)
+    x = lora_x + linear_x
+    if linear.bias is not None:
+        return x + linear.bias.view(1, 1, linear.bias.shape[0])
     return x
 
 def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: torch.Tensor, log_target: bool = False):
     assert torch.max(attention_mask).item() <= 0
     assert attention_mask.ndim == 4
-    assert attention_mask.shape == input.shape
     
-    N, H, T, T = attention_mask.shape
+    N, H, T, T = input.shape
     
     if not log_target: # default
-        loss_pointwise = target * (target.log() - input)
+        loss_pointwise = target * ((target + 1e-12).log() - input)
     else:
         loss_pointwise = target.exp() * (target - input)
     
@@ -281,12 +301,79 @@ def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: 
     mask = mask * mask.transpose(-1, -2)
     
     loss_pointwise = loss_pointwise * mask
-    loss = loss_pointwise.sum() / 11
+    loss = loss_pointwise.sum() / (one_mask[:, :, 0, :].sum() + 1e-8)
     
     return loss
 
+from performer_pytorch import FastAttention
+
+class ProjectionUpdater(nn.Module):
+    def __init__(self, instance, feature_redraw_interval):
+        super().__init__()
+        self.instance = instance
+        self.feature_redraw_interval = feature_redraw_interval
+        self.register_buffer('calls_since_last_redraw', torch.tensor(0))
+
+    def fix_projections_(self):
+        self.feature_redraw_interval = None
+
+    def redraw_projections(self, device):
+        def exists(val):
+            return val is not None
+        def find_modules(nn_module, type):
+            return [module for module in nn_module.modules() if isinstance(module, type)]
+        
+        model = self.instance
+
+        if not self.training:
+            return
+
+        if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
+            fast_attentions = find_modules(model, FastAttention)
+            for fast_attention in fast_attentions:
+                fast_attention.redraw_projection_matrix(device)
+
+            self.calls_since_last_redraw.zero_()
+            return
+
+        self.calls_since_last_redraw += 1
+
+    def forward(self, x):
+        raise NotImplemented
+
+# template for attention synthesizers
+class SynthesizerDenseAttention(nn.Module):
+    def __init__(self, max_seq_len, d_k, d_hid = 64, attn_dropout = 0.1):
+        #d_hid = 8*(128/8)/2
+        super().__init__()
+        self.w_1 = nn.Linear(d_k, d_hid)
+        self.w_2 = nn.Linear(d_hid, max_seq_len)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(attn_dropout)
+
+    def forward(self, q, v, mask=None):
+        N, H, T, HID = q.shape
+
+        # b x n x lq x dq -> b x n x lq x lq #
+        dense_attn = self.w_2(self.relu(self.w_1(q)))[:,:,:,:T]
+        # print('Attn: ', dense_attn.shape)
+        # print('Mask: ', mask.shape)
+        # print('V: ', v.shape)
+
+        if mask is not None:
+            dense_attn = dense_attn.masked_fill(mask == 0, -1e9)
+
+        dense_attn = self.dropout(F.softmax(dense_attn, dim=-1))
+        output = torch.matmul(dense_attn, v)
+        
+        return output, dense_attn
+
+PERLIN_PERFORMER_NB_FACTOR = 1
+
 class BertSelfAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
+        global PERLIN_PERFORMER_NB_FACTOR
+        
         super().__init__()
         if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
             raise ValueError(
@@ -312,80 +399,222 @@ class BertSelfAttention(nn.Module):
 
         self.is_decoder = config.is_decoder
         
-        # perlin
-        from performer_pytorch import FastAttention, ProjectionUpdater
+        ### Perlin
+        #- configs
+        self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
+        self.perlin_k = 7
         
+        self.perlin_k_flatten = True
+        self.perlin_redraw_proj = False
+        self.last_dense_attention_prob = None
+        self.last_sparse_attention_prob = None
+
+        self.last_loss = None
+        self.perlin_layerwise = False
+        perlin_lora_r = 32
+        self.perlin_lora_enabled = False
+        self.perlin_lora_in_approx_enabled = True #TODO: Try False
+        self.perlin_random_lookup = False
+        
+        #- intermediate buffers
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
         
-        perlin_lora_r = 32
-        self.perlin_lora_enabled = False
+        #- lora
         self.perlin_query_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         self.perlin_key_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         self.perlin_value_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
-        self.attention_method = 'perlin' # in ['none', 'performer', 'perlin']
-        self.perlin_layerwise = False
-        self.perlin_k_relwise = True
+        self.perlin_query_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
+        self.perlin_key_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
-        self.perlin_redraw_proj = False
+        self.perlin_query_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
+        self.perlin_key_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
+        self.perlin_value_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
         
-        self.last_dense_attention_prob = None
-        self.last_sparse_attention_prob = None
-        self.last_loss = None
-        
+        #- attention predictor
+        self.perlin_attention_predictor_method = 'mlp'
+        self.perlin_attention_predictor_length = 128
+        #-- mlp predictor
+        self.perlin_performer_nb_features = int(
+            self.attention_head_size * math.log(self.attention_head_size) / PERLIN_PERFORMER_NB_FACTOR
+        )
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
-            # nb_features = 256,
+            nb_features = self.perlin_performer_nb_features,
             causal=False
         )
         self.perlin_performer_proj_updater = ProjectionUpdater(
             self.perlin_performer, 
             1000,
         )
-        self.perlin_performer_out = nn.Sequential(
+        self.perlin_attention_predictor_enc = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
-            
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
-            
+        )
+        self.perlin_attention_predictor_dec_row = nn.Sequential(
+            nn.Linear(config.hidden_size, self.num_attention_heads * self.perlin_attention_predictor_length),
+        )
+        self.perlin_attention_predictor_dec_scaler = nn.Sequential(
+            nn.Linear(config.hidden_size, self.num_attention_heads),
+        )
+        #-- compressed predictor
+        self.perlin_attention_perdictor_comp_book_size = 8
+        self.perlin_attention_predictor_comp_patch_size = 16
+        self.perlin_attention_predictor_comp_patch_count = 16
+        self.perlin_attention_predictor_comp_length = \
+            self.perlin_attention_predictor_comp_patch_count * self.perlin_attention_predictor_comp_patch_size
+        self.perlin_attention_predictor_comp_codebook = nn.Parameter(
+            torch.randn((self.perlin_attention_perdictor_comp_book_size, self.perlin_attention_predictor_comp_patch_size))
+        )
+        self.perlin_attention_predictor_comp_enc = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
+        )
+        self.perlin_attention_predictor_comp_dec_row = nn.Sequential(
+            nn.Linear(
+                config.hidden_size, 
+                self.num_attention_heads\
+                    * self.perlin_attention_perdictor_comp_book_size\
+                    * self.perlin_attention_predictor_comp_patch_count
+            ),
+        )
+        # self.perlin_attention_predictor_comp_dec_scaler = nn.Sequential(
+        #     nn.Linear(self.all_head_size*2, self.num_attention_heads),
+        # )
+        #-- TODO VQVAE
+        
+        #- output
+        self.perlin_out = nn.Sequential(
+            nn.Dropout(0.1),
+            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.LayerNorm(config.hidden_size),
+            nn.GELU(),
             nn.Linear(config.hidden_size, config.hidden_size),
         )
-        self.perlin_attention_predictor = nn.Sequential(
+        self.perlin_out_random_lookup = nn.Sequential(
             nn.Dropout(0.1),
-            nn.Linear(self.all_head_size*2, config.hidden_size),
+            nn.Linear(self.all_head_size*3, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
-            
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
-            
-            nn.Linear(config.hidden_size, self.num_attention_heads * 128), # TODO check 128
-        )
-        self.perlin_attention_scaler = nn.Sequential(
-            # nn.Dropout(0.1),
-            # nn.Linear(self.all_head_size*2, config.hidden_size),
-            # nn.LayerNorm(config.hidden_size),
-            # nn.GELU(),
-            # nn.Dropout(0.1),
-            # nn.Linear(config.hidden_size, self.num_attention_heads),
-            
-            nn.Linear(self.all_head_size*2, self.num_attention_heads),
+            nn.Linear(config.hidden_size, config.hidden_size),
         )
         self.perlin_norm = nn.LayerNorm(config.hidden_size)
+        
+        ### Synthesizer
+        
+        self.perlin_synth_atten = SynthesizerDenseAttention(
+            max_seq_len=512,
+            d_k=self.attention_head_size,
+        )
+        
+        ### Sinkhorn
+        
+        from sinkhorn_transformer.sinkhorn_transformer import SinkhornAttention
+        
+        self.perlin_sinkhorn_atten = SinkhornAttention(
+            bucket_size=self.perlin_k,
+            dim=self.all_head_size,
+            dim_heads=self.attention_head_size,
+            heads=self.num_attention_heads,
+            max_seq_len=512,
+            dropout=config.attention_probs_dropout_prob,
+        )
+        
+        ### Reformer
+        
+        from reformer_pytorch.reformer_pytorch import LSHAttention
+        
+        self.perlin_reformer_atten = LSHAttention(
+            dropout=config.attention_probs_dropout_prob,
+            bucket_size=32,
+            n_hashes=8,
+            return_attn=False,
+        )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
         return x.permute(0, 2, 1, 3)
+
+    def forward_performer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        # self.perlin_performer_proj_updater.redraw_projections(q.device)
+        performer_context_layer = self.perlin_performer(q, k, v)
+        attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+        
+        performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+        performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = performer_context_layer
+        
+        return context_layer, attention_probs
+
+    def forward_reformer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        binary_mask = attention_mask > -1
+        
+        #pad
+        bucket_size = self.perlin_k
+        pad_unit_size = bucket_size * 2
+        to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
+        TP = T + to_pad
+        if to_pad != 0:
+            pad_config = (0,0,0,to_pad)
+            q = F.pad(q, pad_config).float()
+            k = F.pad(k, pad_config).float()
+            v = F.pad(v, pad_config).float()
+            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            assert q.shape == (N, H, T+to_pad, HID)
+            # assert binary_mask.shape == (N, T+to_pad)
+        else:
+            q = q.float()
+            k = k.float()
+            v = v.float()
+            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+        def merge_head(t: torch.Tensor):
+            N, H, T, HID = t.shape
+            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+        q = merge_head(q)
+        k = merge_head(k)
+        v = merge_head(v)
+        self.perlin_reformer_atten.bucket_size = bucket_size
+        reformer_context_layer, _,_ = self.perlin_reformer_atten(
+            # torch.cat([q, k], dim=-1), 
+            q, 
+            v, 
+            input_attn_mask = binary_mask
+        )
+        #unpad
+        if to_pad != 0:
+            q = None
+            k = None
+            v = None
+            reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        else:
+            reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            # reformer_context_layer = reformer_context_layer[:, :, :T, :]
+        
+        attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+        
+        reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
+        reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = reformer_context_layer
+        
+        return context_layer, attention_probs
 
     def forward(
         self,
@@ -406,26 +635,28 @@ class BertSelfAttention(nn.Module):
         #     hidden_states_std, hidden_states_mean = torch.std_mean(hidden_states.view(-1))
         #     noise = torch.randn_like(hidden_states) * hidden_states_std * 0.1
         #     hidden_states = hidden_states + noise
-        
-        mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
 
         # If this is instantiated as a cross-attention module, the keys
         # and values come from an encoder; the attention mask needs to be
         # such that the encoder's padding tokens are not attended to.
         is_cross_attention = encoder_hidden_states is not None
 
+        value_layer_for_atten = key_layer_for_atten = key_layer_for_score = None
         if is_cross_attention and past_key_value is not None:
+            raise Exception()
             # reuse k,v, cross_attentions
             key_layer = past_key_value[0]
             value_layer = past_key_value[1]
             attention_mask = encoder_attention_mask
         elif is_cross_attention:
+            raise Exception()
             key_layer = self.transpose_for_scores(
                 lora_forward(self.key, self.perlin_key_lora, encoder_hidden_states, self.perlin_lora_enabled))
             value_layer = self.transpose_for_scores(
                 lora_forward(self.value, self.perlin_value_lora, encoder_hidden_states, self.perlin_lora_enabled))
             attention_mask = encoder_attention_mask
         elif past_key_value is not None:
+            raise Exception()
             key_layer = self.transpose_for_scores(
                 lora_forward(self.key, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
             value_layer = self.transpose_for_scores(
@@ -433,12 +664,42 @@ class BertSelfAttention(nn.Module):
             key_layer = torch.cat([past_key_value[0], key_layer], dim=2)
             value_layer = torch.cat([past_key_value[1], value_layer], dim=2)
         else:
-            key_layer = self.transpose_for_scores(
-                lora_forward(self.key, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
-            value_layer = self.transpose_for_scores(
-                lora_forward(self.value, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
+            # key_layer = self.transpose_for_scores(
+            #     lora_forward(self.key, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
+            # key_layer_for_atten = self.transpose_for_scores(
+            #     lora_forward(self.key, self.perlin_key_lora_for_approx_atten, hidden_states, True))
+            # key_layer_for_score = self.transpose_for_scores(
+            #     lora_forward(self.key, self.perlin_key_lora_for_approx_score, hidden_states, True))
+            # value_layer = self.transpose_for_scores(
+            #     lora_forward(self.value, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
+            # value_layer_for_atten = self.transpose_for_scores(
+            #     lora_forward(self.value, self.perlin_value_lora_for_approx_atten, hidden_states, True))
+            t_key_layer = lora_forward_linear(self.key, hidden_states)
+            key_layer = self.transpose_for_scores(lora_forward_lora(
+                self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
+            key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+            key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
+            t_value_layer = lora_forward_linear(self.value, hidden_states)
+            value_layer = self.transpose_for_scores(lora_forward_lora(
+                self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
+            value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
 
+        # mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
+        # mixed_query_layer_for_atten = lora_forward(self.query, self.perlin_query_lora_for_approx_atten, hidden_states, True)
+        # mixed_query_layer_for_score = lora_forward(self.query, self.perlin_query_lora_for_approx_score, hidden_states, True)
+        t_mixed_query_layer = lora_forward_linear(self.query, hidden_states)
+        mixed_query_layer = lora_forward_lora(
+            self.query, t_mixed_query_layer, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
+        mixed_query_layer_for_atten = lora_forward_lora(
+            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
+        mixed_query_layer_for_score = lora_forward_lora(
+            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
         query_layer = self.transpose_for_scores(mixed_query_layer)
+        query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
+        query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)
         
         # if perlin, overwrite attention_probs, context_layer
         if self.attention_method == 'perlin':
@@ -447,56 +708,97 @@ class BertSelfAttention(nn.Module):
             context_layer_truth = self.teacher_context_layer
             
             q = query_layer # [16, 12, 203, 64]: T is determined in this line (N, H, T, HID)
+            q_for_atten = query_layer_for_atten
+            q_for_score = query_layer_for_score
             k = key_layer
+            k_for_atten = key_layer_for_atten
+            k_for_score = key_layer_for_score
             v = value_layer
+            v_for_atten = value_layer_for_atten
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # attention_mask [16, 1, 1, 203], v: [16, 12, 203, 64]
             if self.perlin_layerwise:
                 attention_scores_truth = attention_scores_truth.detach()
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
-            
+
             if self.perlin_redraw_proj:
-                self.perlin_performer_proj_updater.redraw_projections() # NOTE(JIN) : error's happening in this line
-            performer_context_layer = self.perlin_performer(q, k, v) # [16, 12, 203, 64] (N, H, T, HID)
-            performer_value = torch.cat([performer_context_layer, v], dim=-1) # [16, 12, 203, 128] (N, H, T, 2*HID)
-            N, H, T, HID = performer_value.shape # (N, H, T, 2*HID)
+                self.perlin_performer_proj_updater.redraw_projections(q.device) # NOTE(JIN) : error's happening in this line
+            with torch.autocast('cuda', torch.float32):
+                q_type = q.dtype
+                performer_context_layer = self.perlin_performer(q_for_atten.float(), k_for_atten.float(), v_for_atten.float())
+                performer_context_layer = performer_context_layer.to(q_type)
+            performer_value = torch.cat([performer_context_layer, v], dim=-1)
+            N, H, T, HID = performer_value.shape
             # (N, H, T, P)
-            estimated_attention_score = self.perlin_attention_predictor(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3) # [16, 203, 1536] = [16, 203, H*128] = [N, T, H*HID] -> [N, T, H, HID] -> [N, H, T, HID]
-            estimated_attention_score = F.interpolate(estimated_attention_score.to(torch.float16), (T, T), mode='bilinear') # NOTE(JIN): BFloat16 error .to(torch.float32)
-            # [16, 12, 203, 203] = [N, H, T, T]
-            estimated_attention_score = estimated_attention_score + attention_mask # [16, 1, 1, 203]
-            # [N, H, T, T]
-            estimated_attention_probs = torch.softmax(estimated_attention_score, -1) # [16, 12, 203, 203]
-            # [N, H, T, T]
+            
+            # estimate attention scores
+            if self.perlin_attention_predictor_method == 'mlp':
+                t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+            elif self.perlin_attention_predictor_method == 'comp':
+                warnings.warn('attention prediction method is compressed one.')
+                t_attention_predictor = self.perlin_attention_predictor_comp_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+                estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
+                    .view(N, T, H, -1).permute(0, 2, 1, 3)
+                estimated_attention_score = estimated_attention_score\
+                    .view(N, H, T, self.perlin_attention_predictor_comp_patch_count, self.perlin_attention_perdictor_comp_book_size)
+                _, _, _, CODE_SEQ_LEN, BOOK_LEN = estimated_attention_score.shape
+                estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
+                estimated_attention_score = torch.matmul(
+                    estimated_attention_score.view(-1, BOOK_LEN), 
+                    self.perlin_attention_predictor_comp_codebook
+                )
+                estimated_attention_score = estimated_attention_score.view(N, H, T, -1)
+            else:
+                raise Exception()
+            
+            # interpolate and convert to probability
+            original_dtype = estimated_attention_score.dtype
+            with torch.autocast('cuda', torch.float32):
+                if estimated_attention_score.dtype != torch.float32:
+                    estimated_attention_score = estimated_attention_score.to(torch.float32)
+                interp_mode = 'bilinear' if T >= estimated_attention_score.shape[-1] else 'area'
+                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
+            if estimated_attention_score.dtype != original_dtype:
+                estimated_attention_score = estimated_attention_score.to(original_dtype)
+            
+            estimated_attention_score = estimated_attention_score + attention_mask
+            estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+            
             # perlin dense attention prob
             self.last_dense_attention_prob = estimated_attention_probs
+
             # in layerwise, train perlin attention predictor
-            _amask = (estimated_attention_score > -999).expand(estimated_attention_score.shape).reshape(-1, T)
-            with torch.autocast('cuda', enabled=False):
-                # train [16, 12, 203, 203] -> [38976, 203]*[38976, 203] -> [38976, 203] : 16*12*203 = N*H*T
-                # test  [16, 12, 161, 161] -> [30912, 161]*[30912, 161] -> [30912, 161]
-                loss = F.kl_div(
-                    F.log_softmax(estimated_attention_score.view(-1, T), dim=-1) * _amask,
-                    F.softmax(attention_scores_truth.view(-1, T), dim=-1) * _amask, #  908544 = 16*12*4732(T)
-                    reduction='batchmean'
-                ) * 2
-            # loss = F.mse_loss(
-            #     estimated_attention_score.view(-1, T) * _amask,
-            #     attention_scores_truth.view(-1, T) * _amask,
-            # ) * 4
-            # (N, H, T, K)
-            k = min(max(7, int(T*0.01)), T * 0.5)
-            k_relwise = self.perlin_k_relwise
-            warnings.warn(f'k_relwise {k_relwise}')
-            if not k_relwise:
+            with torch.autocast('cuda', torch.float32):
+                loss = kl_div_attention(
+                    F.log_softmax(estimated_attention_score, dim=-1),
+                    F.softmax(attention_scores_truth, dim=-1),
+                    attention_mask,
+                ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
+            
+            # Take the dot product between "query" and "key" to get the raw attention scores.
+            attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
+            if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
+                raise Exception()
+            attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
+            if attention_mask is not None:
+                # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+                attention_scores_dense = attention_scores_dense + attention_mask
+            loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+            
+            k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
+            k_flatten = self.perlin_k_flatten
+            warnings.warn(f'k_flatten {k_flatten}')
+            if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
                     k=k, dim=-1,
                 )
+                # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_truth
+                partial_attention_scores = attention_scores_dense
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
                 partial_attention_scores.scatter_(
@@ -504,13 +806,14 @@ class BertSelfAttention(nn.Module):
                 )
             else:
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_truth
+                partial_attention_scores = attention_scores_dense
                 N, H, T, T = partial_attention_scores.shape
                 partial_attention_scores = partial_attention_scores.view(N, H, T*T)
                 value, indices = torch.topk(
                     estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
                     k=k*T, dim=-1
                 )
+                # warnings.warn(f'topk({k*T}/{T*T})')
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
                 partial_attention_scores.scatter_(
@@ -520,8 +823,7 @@ class BertSelfAttention(nn.Module):
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
-            estimated_scale = self.perlin_attention_scaler(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))\
-                .view(N, T, H, -1).permute(0, 2, 1, 3)
+            estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
@@ -529,6 +831,29 @@ class BertSelfAttention(nn.Module):
             self.last_sparse_attention_prob = partial_attention_probs
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
+            
+            if self.perlin_random_lookup:
+                # lookup randomly that not looked up by partial context
+                num_lookups = 3
+                lookups = None
+                estimated_attention_probs_masked = estimated_attention_probs * (attention_mask > -1) * (partial_attention_scores > -9999)
+                for n in range(num_lookups):
+                    token_length = (attention_mask.view(N, T) > -1).float().sum(dim=-1).view(N, 1, 1, 1)
+                    # N, H, T, HID
+                    random_context_index = torch.rand_like(partial_context_layer)
+                    random_context_index = (random_context_index * (1 - 1/T) * token_length).floor().long()
+                    
+                    random_context_layer = v.gather(dim=-2, index=random_context_index)
+                    random_context_weight = estimated_attention_probs_masked.gather(dim=-1, index=random_context_index)
+                    random_context_layer = random_context_weight * random_context_layer
+                    if lookups is None:
+                        lookups = random_context_layer
+                    else:
+                        lookups = lookups + random_context_layer
+                
+                random_context_layer = random_context_layer.permute(0, 2, 1, 3).contiguous()
+                new_context_layer_shape = random_context_layer.size()[:-2] + (self.all_head_size,)
+                random_context_layer = random_context_layer.view(new_context_layer_shape)
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
@@ -537,11 +862,21 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
-            partial_context_layer = self.perlin_performer_out(torch.cat([partial_context_layer, performer_context_layer], dim=-1))
+            if not self.perlin_random_lookup:
+                partial_context_layer = self.perlin_out(torch.cat([
+                    partial_context_layer, 
+                    performer_context_layer
+                ], dim=-1)) + partial_context_layer
+            else:
+                partial_context_layer = self.perlin_out_random_lookup(torch.cat([
+                    partial_context_layer, 
+                    performer_context_layer,
+                    random_context_layer,
+                ], dim=-1)) + partial_context_layer
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer) * 2
+            loss += F.mse_loss(context_layer_truth, partial_context_layer)
             self.last_loss = loss
             
             attention_probs = partial_attention_probs
@@ -553,17 +888,88 @@ class BertSelfAttention(nn.Module):
             q = query_layer
             k = key_layer
             v = value_layer
+            
+            context_layer, attention_probs = self.forward_performer(q, k, v, attention_mask)
+            
+            self.last_loss = 0
+        elif self.attention_method == 'synthesizer':
+            q = query_layer
+            k = key_layer
+            v = value_layer
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
-            performer_context_layer = self.perlin_performer(q, k, v)
-            attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+            binary_mask = (attention_mask > -1) * 1.0
             
-            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            synthesizer_context_layer, attention_probs = self.perlin_synth_atten(q, v, mask = binary_mask)
             
-            context_layer = performer_context_layer
+            synthesizer_context_layer = synthesizer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = synthesizer_context_layer.size()[:-2] + (self.all_head_size,)
+            synthesizer_context_layer = synthesizer_context_layer.view(new_context_layer_shape)
+            
+            context_layer = synthesizer_context_layer
+            
+            self.last_loss = 0
+        elif self.attention_method == 'sinkhorn':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            
+            binary_mask = attention_mask > -1
+            
+            #pad
+            to_pad = 0 if (T % self.perlin_k) == 0 else (self.perlin_k - (T % self.perlin_k))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                k = F.pad(k, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                binary_mask = F.pad(binary_mask.expand(N, 1, 1, T), (0,to_pad), value=0.0).bool().view(N, TP)
+                assert q.shape == (N, H, T+to_pad, HID)
+                # assert binary_mask.shape == (N, T+to_pad)
+            else:
+                q = q.float()
+                k = k.float()
+                v = v.float()
+                binary_mask = binary_mask.bool().view(N, TP)
+            sinkhorn_context_layer = self.perlin_sinkhorn_atten(q, k, v, q_mask = binary_mask, kv_mask = binary_mask)
+            #unpad
+            if to_pad != 0:
+                q = q[:, :, :T, :]
+                k = k[:, :, :T, :]
+                v = v[:, :, :T, :]
+                sinkhorn_context_layer = sinkhorn_context_layer[:, :, :T, :]
+            
+            attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            
+            sinkhorn_context_layer = sinkhorn_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = sinkhorn_context_layer.size()[:-2] + (self.all_head_size,)
+            sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
+            
+            context_layer = sinkhorn_context_layer
+            
+            self.last_loss = 0
+        elif self.attention_method == 'reformer':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            
+            context_layer, attention_probs = self.forward_reformer(q, k, v, attention_mask)
+            
+            self.last_loss = 0
+        elif self.attention_method == 'scatterbrain':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            
+            reformer_context_layer, reformer_attention_probs = self.forward_reformer(q, k, v, attention_mask)
+            performer_context_layer, performer_attention_probs = self.forward_performer(q, k, v, attention_mask)
+            
+            context_layer = reformer_context_layer + performer_context_layer
+            attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
             
             # TODO approximate performer attention matrix
             '''
@@ -1864,7 +2270,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            teacher=teacher.bert,
+            teacher=teacher.bert if teacher is not None else None,
         )
 
         pooled_output = outputs[1]
