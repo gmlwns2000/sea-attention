@@ -413,6 +413,7 @@ class BertSelfAttention(nn.Module):
         self.perlin_lora_enabled = False
         self.perlin_lora_in_approx_enabled = True #TODO: Try False
         self.perlin_random_lookup = False
+        self.perlin_random_lookup_count = 3
         self.perlin_token_merging = False
         self.perlin_token_merging_preserve_ratio = 0.2
         self.perlin_token_merging_ratio = 0.5
@@ -839,7 +840,7 @@ class BertSelfAttention(nn.Module):
             
             if self.perlin_random_lookup:
                 # lookup randomly that not looked up by partial context
-                num_lookups = 3
+                num_lookups = self.perlin_random_lookup_count
                 lookups = None
                 estimated_attention_probs_masked = estimated_attention_probs * (attention_mask > -1) * (partial_attention_scores > -9999)
                 for n in range(num_lookups):

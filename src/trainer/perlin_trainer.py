@@ -19,6 +19,7 @@ class BaseTrainer:
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
         perlin_random_lookup = False,
+        perlin_random_lookup_count = 3,
         perlin_token_merging = False,
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
@@ -32,6 +33,7 @@ class BaseTrainer:
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
+        self.perlin_random_lookup_count = perlin_random_lookup_count
         perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
@@ -45,6 +47,7 @@ class BaseTrainer:
                 module.perlin_k = self.perlin_k
                 module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
                 module.perlin_random_lookup = self.perlin_random_lookup
+                module.perlin_random_lookup_count = self.perlin_random_lookup_count
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
@@ -70,7 +73,7 @@ class BaseTrainer:
         name_lora = '_full' if not self.perlin_lora else ''
         name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
-        name_random_lookup = f'_rl' if self.perlin_random_lookup else ''
+        name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
@@ -175,6 +178,7 @@ if __name__ == '__main__':
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
     parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
     parser.add_argument('--random-lookup', action='store_true', default=False)
+    parser.add_argument('--random-lookup-count', default=3, type=int)
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
@@ -201,6 +205,7 @@ if __name__ == '__main__':
         'perlin_attention_predictor_method':args.attention_predictor_method,
         'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
         'perlin_random_lookup': args.random_lookup,
+        'perlin_random_lookup_count': args.random_lookup_count,
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
