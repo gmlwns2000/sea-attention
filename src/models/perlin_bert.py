@@ -270,16 +270,19 @@ def lora_forward(linear: nn.Linear, lora: LoraLinear, x: torch.Tensor, enabled: 
 
 # split for save memory
 def lora_forward_linear(linear: nn.Linear, x: torch.Tensor):
-    return F.linear(x, linear.weight)
+    return F.linear(x, linear.weight, linear.bias)
 
 def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinear, x: torch.Tensor, enabled: bool):
     if not enabled:
-        assert linear.bias.ndim == 1
-        assert linear_x.ndim == 3
-        if linear.bias is not None:
-            return linear_x + linear.bias.view(1, 1, linear.bias.shape[0])
         return linear_x
+        # assert linear.bias.ndim == 1
+        # assert linear_x.ndim == 3
+        # if linear.bias is not None:
+        #     return linear_x + linear.bias.view(1, 1, linear.bias.shape[0])
+        # return linear_x
     
+    if linear.bias is not None:
+        linear_x = linear_x - linear.bias.view(1, 1, linear.bias.shape[0])
     lora_x = lora(x)
     x = lora_x + linear_x
     if linear.bias is not None:
@@ -410,6 +413,13 @@ class BertSelfAttention(nn.Module):
         self.perlin_lora_enabled = False
         self.perlin_lora_in_approx_enabled = True #TODO: Try False
         self.perlin_random_lookup = False
+        self.perlin_token_merging = False
+        self.perlin_token_merging_preserve_ratio = 0.2
+        self.perlin_token_merging_ratio = 0.5
+        self.perlin_token_merging_score_source = 'probs'
+        # for temperary buffer
+        self.perlin_token_merging_key_layer = None
+        self.perlin_token_merging_attention_probs = None
         
         #- intermediate buffers
         self.teacher_attention_prob = None
@@ -438,7 +448,8 @@ class BertSelfAttention(nn.Module):
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
             nb_features = self.perlin_performer_nb_features,
-            causal=False
+            causal=False,
+            # no_projection=True,
         )
         self.perlin_performer_proj_updater = ProjectionUpdater(
             self.perlin_performer, 
@@ -621,6 +632,8 @@ class BertSelfAttention(nn.Module):
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[torch.Tensor]:
+        self.perlin_token_merging_attention_mask = attention_mask
+        
         if self.perlin_layerwise:
             hidden_states = hidden_states.detach()
             if encoder_hidden_states is not None:
@@ -672,15 +685,17 @@ class BertSelfAttention(nn.Module):
             t_key_layer = lora_forward_linear(self.key, hidden_states)
             key_layer = self.transpose_for_scores(lora_forward_lora(
                 self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
-            key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
-            key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
+            if self.attention_method in ['perlin']:
+                key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                    self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+                key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
+                    self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
             t_value_layer = lora_forward_linear(self.value, hidden_states)
             value_layer = self.transpose_for_scores(lora_forward_lora(
                 self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
-            value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+            if self.attention_method in ['perlin']:
+                value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                    self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
 
         # mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         # mixed_query_layer_for_atten = lora_forward(self.query, self.perlin_query_lora_for_approx_atten, hidden_states, True)
@@ -688,13 +703,16 @@ class BertSelfAttention(nn.Module):
         t_mixed_query_layer = lora_forward_linear(self.query, hidden_states)
         mixed_query_layer = lora_forward_lora(
             self.query, t_mixed_query_layer, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
-        mixed_query_layer_for_atten = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
-        mixed_query_layer_for_score = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
         query_layer = self.transpose_for_scores(mixed_query_layer)
-        query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
-        query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)
+        if self.attention_method in ['perlin']:
+            mixed_query_layer_for_atten = lora_forward_lora(
+                self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
+            query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
+            mixed_query_layer_for_score = lora_forward_lora(
+                self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
+            query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)
+        
+        self.perlin_token_merging_key_layer = key_layer
         
         # if perlin, overwrite attention_probs, context_layer
         if self.attention_method == 'perlin':
@@ -868,6 +886,8 @@ class BertSelfAttention(nn.Module):
             
             attention_probs = partial_attention_probs
             context_layer = partial_context_layer
+            self.perlin_token_merging_key_layer = k_for_score
+            self.perlin_token_merging_attention_probs = estimated_attention_probs
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
@@ -877,6 +897,9 @@ class BertSelfAttention(nn.Module):
             v = value_layer
             
             context_layer, attention_probs = self.forward_performer(q, k, v, attention_mask)
+            
+            self.perlin_token_merging_key_layer = k
+            self.perlin_token_merging_attention_probs = None
             
             self.last_loss = 0
         elif self.attention_method == 'synthesizer':
@@ -1018,6 +1041,9 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
             context_layer = context_layer.view(new_context_layer_shape)
             
+            self.perlin_token_merging_key_layer = key_layer
+            self.perlin_token_merging_attention_probs = attention_probs
+            
             self.last_loss = 0
         else:
             raise Exception(self.attention_method)
@@ -1028,6 +1054,151 @@ class BertSelfAttention(nn.Module):
             outputs = outputs + (past_key_value,)
         return outputs
 
+class TokenMergingStart():
+    def __init__(self, parent_attention: BertSelfAttention):
+        self.parent = parent_attention
+    
+    def __call__(self, x): return self.forward(x)
+    
+    def forward(self, x:torch.Tensor):
+        if not self.parent.perlin_token_merging: return x
+        
+        N, T, H = x.shape
+        if self.parent.perlin_token_merging_score_source == 'probs':
+            probs = self.parent.perlin_token_merging_attention_probs
+        elif self.parent.perlin_token_merging_score_source == 'key':
+            k = self.parent.perlin_token_merging_key_layer
+            probs = torch.matmul(k, k.transpose(-1, -2))
+        else:
+            raise Exception(self.parent.perlin_token_merging_score_source)
+        probs = probs.mean(1)
+        assert probs.shape == (N, T, T)
+        sig = probs.mean(1)
+        assert sig.shape == (N, T)
+        N_CLS = 1
+        assert T > 2
+        N_PRESERVE = round((T-1)*self.parent.perlin_token_merging_preserve_ratio)
+        N_TOME = T - N_CLS - N_PRESERVE
+        # if (N_TOME % 2) != 0:
+        #     N_PRESERVE += N_TOME % 2
+        #     N_TOME -= N_TOME % 2
+        
+        if N_TOME > 0:
+            x_cls = x[:, :N_CLS, :]
+            x_tokens = x[:, N_CLS:, :]
+            
+            sig_tokens = sig[:, N_CLS:]
+            _, sig_tokens_sorted_indices = torch.sort(sig_tokens, dim=-1, descending=True)
+            x_tokens_sorted = x_tokens.gather(dim=1, index = sig_tokens_sorted_indices.view(N, T-N_CLS, 1).expand(N, T-N_CLS, H))
+            
+            x_tokens_preserve = x_tokens_sorted[:, :N_PRESERVE, :]
+            x_tokens_tome = x_tokens_sorted[:, N_PRESERVE:, :]
+            assert x_tokens_tome.shape == (N, N_TOME, H)
+            T_TOK = T-N_CLS
+            sim = probs[:, N_CLS:, N_CLS:].gather(dim=1, index=sig_tokens_sorted_indices.view(N, T_TOK, 1).expand(N, T_TOK, T_TOK))
+            sim = sim.gather(dim=2, index=sig_tokens_sorted_indices.view(N, 1, T_TOK).expand(N, T_TOK, T_TOK))
+            sim = sim[:, N_PRESERVE:, N_PRESERVE:]
+            x_tokens_tome, x_tokens_tome_state = self.token_merging(x_tokens_tome, sim)
+            
+            self.last_tome_state = x_tokens_tome_state
+            self.last_token_index = sig_tokens_sorted_indices
+            
+            x = torch.cat([x_cls, x_tokens_preserve, x_tokens_tome], dim=1)
+        else:
+            raise Exception()
+        
+        return x
+    
+    def token_merging(self, x: torch.Tensor, sim: torch.Tensor):
+        N, T, H = x.shape
+        assert sim.shape == (N, T, T)
+        # assert (T % 2) == 0
+        # print('tome merge x', x.shape)
+        
+        N_SRC = math.floor(self.parent.perlin_token_merging_ratio * T) # num of merged out
+        N_DST = max(1, T - N_SRC)
+        N_SRC = T - N_DST
+        if N_SRC == 0: return x, (None, N_SRC, N_DST)
+        assert N_SRC > 0
+        
+        src = x[:, :N_SRC, :]
+        dst = x[:, N_SRC:, :]
+        
+        scores = sim[:, :N_SRC, N_SRC:] + sim[:, N_SRC:, :N_SRC].transpose(-1, -2)
+        
+        _, node_idx = scores.max(dim=-1, keepdim=True)
+        #TODO weighted sum
+        dst = dst.scatter_reduce(
+            dim=1, 
+            index=node_idx.expand(N, N_SRC, H), 
+            src=src, 
+            reduce='mean'
+        )
+        
+        # print('tome merge NSRC, NDST, x->dst.shape', N_SRC, N_DST, x.shape, dst.shape)
+        
+        return dst, (node_idx, N_SRC, N_DST)
+    
+class TokenMergingEnd():
+    def __init__(self, start_block: TokenMergingStart):
+        self.start_block = start_block
+        self.parent = self.start_block.parent
+        
+    def __call__(self, x): return self.forward(x)
+    
+    def forward(self, x:torch.Tensor):
+        if not self.parent.perlin_token_merging: return x
+
+        N_CLS = 1
+        T = self.start_block.last_token_index.shape[1] + N_CLS
+        N, T1, H = x.shape
+        assert T > 2
+        N_PRESERVE = round((T-1)*self.parent.perlin_token_merging_preserve_ratio)
+        N_TOME = T - N_CLS - N_PRESERVE
+        # if (N_TOME % 2) != 0:
+        #     N_PRESERVE += N_TOME % 2
+        #     N_TOME -= N_TOME % 2
+        # print('npre ntome', N_PRESERVE, N_TOME)
+        
+        if N_TOME > 0:
+            x_cls = x[:, :N_CLS, :]
+            x_tokens_sorted = x[:, N_CLS:, :]
+            
+            x_tokens_preserve = x_tokens_sorted[:, :N_PRESERVE, :]
+            x_tokens_tome = x_tokens_sorted[:, N_PRESERVE:, :]
+            # assert x_tokens_tome.shape == (N, N_TOME, H), x_tokens_tome.shape
+            # tome_indices = sig_tokens_sorted_indices[:, N_PRESERVE:] - N_PRESERVE
+            x_token_tome_state = self.start_block.last_tome_state
+            x_tokens_tome = self.token_unmerging(x_tokens_tome, x_token_tome_state)
+            
+            x_tokens_sorted = torch.cat([x_tokens_preserve, x_tokens_tome], dim=1)
+            x_tokens = torch.empty_like(x_tokens_sorted)
+            sig_tokens_sorted_indices = self.start_block.last_token_index
+            x_tokens.scatter_(dim=1, index=sig_tokens_sorted_indices.view(N, T-N_CLS, 1).expand(N, T-N_CLS, H), src=x_tokens_sorted)
+            
+            x = torch.cat([x_cls, x_tokens], dim=1)
+        else:
+            raise Exception()
+        
+        assert x.shape[1] == T, x.shape
+        
+        return x
+
+    def token_unmerging(self, x: torch.Tensor, tome_state):
+        node_idx, N_SRC, N_DST = tome_state
+        if N_SRC == 0:
+            return x
+        # print('tome unmerge x', x.shape)
+        N, T1, H = x.shape
+        T = N_SRC + N_DST
+        # print('t t1 unmidx srcidx dstidx', T, T1, N_SRC, N_DST)
+        T1 = T // 2
+        
+        dst = x
+        src = torch.gather(dst, dim=1, index=node_idx.expand(N, N_SRC, H))
+        out = torch.cat([src, dst], dim=1)
+        
+        return out
 
 class BertSelfOutput(nn.Module):
     def __init__(self, config):
@@ -1100,8 +1271,11 @@ class BertIntermediate(nn.Module):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
             self.intermediate_act_fn = config.hidden_act
+        self.token_merging_start = None
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.token_merging_start is not None:
+            hidden_states = self.token_merging_start(hidden_states)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
         return hidden_states
@@ -1113,11 +1287,15 @@ class BertOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.token_merging_end = None
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.token_merging_end is not None:
+            hidden_states = self.token_merging_end(hidden_states)
+        hidden_states = hidden_states + input_tensor
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -1135,6 +1313,11 @@ class BertLayer(nn.Module):
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
+        
+        start = TokenMergingStart(self.attention.self)
+        end = TokenMergingEnd(start)
+        self.intermediate.token_merging_start = start
+        self.output.token_merging_end = end
 
     def forward(
         self,
