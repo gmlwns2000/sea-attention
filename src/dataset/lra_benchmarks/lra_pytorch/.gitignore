@@ -1,0 +1,8 @@
+.idea/*
+__pycache__/*
+.ipynb_checkpoints/*
+lra-experiments.ipynb
+datasets/*
+old/*
+output_dir/*
+runs/*

@@ -14,7 +14,7 @@ pretrained/
 logs/
 *.log
 saves.bak/
-output.txt
+output*.txt
 
 !saves/README.md
 !./saves/README.md
@@ -22,3 +22,8 @@ output.txt
 saves/
 cache/
 .torch/
+wandb/
+
+*.csv
+
+src/utils/secrets.*
