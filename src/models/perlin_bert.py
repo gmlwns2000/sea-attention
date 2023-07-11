@@ -404,6 +404,7 @@ class BertSelfAttention(nn.Module):
         
         ### Perlin
         #- configs
+        self.benchmarking = False
         self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
         self.perlin_k_flatten = True
         self.perlin_k = 7
@@ -423,6 +424,10 @@ class BertSelfAttention(nn.Module):
         self.perlin_token_merging_attention_probs = None
         
         #- intermediate buffers
+        self.last_attention_probs = None
+        self.last_perlin_estimated_probs = None
+        self.last_perlin_dense_probs = None
+        self.last_perlin_partial_probs = None
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
@@ -737,10 +742,22 @@ class BertSelfAttention(nn.Module):
                 context_layer_truth = context_layer_truth.detach()
             
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
-            with torch.autocast('cuda', torch.float32):
-                q_type = q.dtype
-                performer_context_layer = self.perlin_performer(q_for_atten.float(), k_for_atten.float(), v_for_atten.float())
-                performer_context_layer = performer_context_layer.to(q_type)
+            if not self.benchmarking:
+                with torch.autocast('cuda', torch.float32):
+                    q_type = q_for_atten.dtype
+                    if q_type != torch.float32:
+                        _q_for_atten = q_for_atten.float()
+                        _k_for_atten = k_for_atten.float()
+                        _v_for_atten = v_for_atten.float()
+                    else:
+                        _q_for_atten = q_for_atten
+                        _k_for_atten = k_for_atten
+                        _v_for_atten = v_for_atten
+                    performer_context_layer = self.perlin_performer(_q_for_atten, _k_for_atten, _v_for_atten)
+                    if q_type != performer_context_layer.dtype:
+                        performer_context_layer = performer_context_layer.to(q_type)
+            else:
+                performer_context_layer = self.perlin_performer(q_for_atten, k_for_atten, v_for_atten)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             N, H, T, HID = performer_value.shape
             # (N, H, T, P)
@@ -779,14 +796,18 @@ class BertSelfAttention(nn.Module):
             
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
+            self.last_perlin_estimated_probs = estimated_attention_probs
             
             # in layerwise, train perlin attention predictor
-            with torch.autocast('cuda', torch.float32):
-                loss = kl_div_attention(
-                    F.log_softmax(estimated_attention_score, dim=-1),
-                    F.softmax(attention_scores_truth, dim=-1),
-                    attention_mask,
-                ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
+            if not self.benchmarking:
+                with torch.autocast('cuda', torch.float32):
+                    loss = kl_div_attention(
+                        F.log_softmax(estimated_attention_score, dim=-1),
+                        F.softmax(attention_scores_truth, dim=-1),
+                        attention_mask,
+                    ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
+            else:
+                loss = 0
             
             # Take the dot product between "query" and "key" to get the raw attention scores.
             attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
@@ -796,9 +817,11 @@ class BertSelfAttention(nn.Module):
             if attention_mask is not None:
                 # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
                 attention_scores_dense = attention_scores_dense + attention_mask
-            loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+            if not self.benchmarking:
+                loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+                self.last_perlin_dense_probs = torch.softmax(attention_scores_dense, dim=-1)
             
-            k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
+            k = min(max(int(self.perlin_k), 1), T)
             k_flatten = self.perlin_k_flatten
             if not k_flatten:
                 value, indices = torch.topk(
@@ -811,7 +834,7 @@ class BertSelfAttention(nn.Module):
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
                 partial_attention_scores.scatter_(
-                    -1, indices, partial_attention_scores_gathered
+                    dim=-1, index=indices, src=partial_attention_scores_gathered
                 )
             else:
                 # (N, H, T, T)
@@ -826,7 +849,7 @@ class BertSelfAttention(nn.Module):
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                 partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
                 partial_attention_scores.scatter_(
-                    -1, indices, partial_attention_scores_gathered
+                    dim=-1, index=indices, src=partial_attention_scores_gathered
                 )
                 partial_attention_scores = partial_attention_scores.view(N, H, T, T)
             
@@ -835,6 +858,7 @@ class BertSelfAttention(nn.Module):
             estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
             partial_attention_probs = torch.softmax(partial_attention_scores, -1)
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
+            self.last_perlin_partial_probs = partial_attention_probs
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
             
@@ -882,7 +906,8 @@ class BertSelfAttention(nn.Module):
             partial_context_layer = self.perlin_norm(partial_context_layer)
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer)
+            if not self.benchmarking:
+                loss += F.mse_loss(context_layer_truth, partial_context_layer)
             self.last_loss = loss
             
             attention_probs = partial_attention_probs
@@ -1048,6 +1073,8 @@ class BertSelfAttention(nn.Module):
             self.last_loss = 0
         else:
             raise Exception(self.attention_method)
+
+        self.last_attention_probs = attention_probs
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 

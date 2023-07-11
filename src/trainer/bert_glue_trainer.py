@@ -416,6 +416,8 @@ class Trainer:
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'scaler': self.scaler.state_dict(),
+            'step': self.step,
         }, path)
     
     def load(self, path=None):
