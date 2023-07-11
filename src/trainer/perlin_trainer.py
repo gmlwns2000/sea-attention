@@ -167,7 +167,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default=None, type=str)
-    parser.add_argument('--epochs', default=20, type=int)
+    parser.add_argument('--epochs', default=None, type=int)
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)

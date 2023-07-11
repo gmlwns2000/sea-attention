@@ -32,15 +32,15 @@ task_to_keys = {
 
 task_to_epochs = {
     "cola": 100,
-    "mnli": 40,
-    "mrpc": 200,
-    "qnli": 30,
-    "qqp":  40,
-    "rte":  200,
-    "sst2": 150,
-    "stsb": 200,
-    "wnli": 200,
-    "bert": 200,
+    "mnli": 20,
+    "mrpc": 100,
+    "qnli": 20,
+    "qqp":  20,
+    "rte":  100,
+    "sst2": 100,
+    "stsb": 100,
+    "wnli": 100,
+    "bert": 100,
 }
 
 task_to_batch_size = {
@@ -177,7 +177,7 @@ class Trainer:
         self.batch_size = task_to_batch_size[self.subset]
         
         self.eval_steps = eval_steps * gradient_accumulation_steps
-        self.epochs = epochs
+        self.epochs = epochs if epochs is not None else task_to_epochs[subset]
         self.lr = lr
         self.wd = 1e-2
         
