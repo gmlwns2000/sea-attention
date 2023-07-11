@@ -145,6 +145,8 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
     ):
         BaseTrainer.__init__(self, **kwargs)
         
+        warnings.warn(f'epochs({kwargs.get("epochs", 20)}) are ignored')
+        
         BaseLraTrainer.__init__(
             self,
             exp_name=self.format_exp(f'lra_{subset}'),
@@ -165,6 +167,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default=None, type=str)
+    parser.add_argument('--epochs', default=20, type=int)
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
@@ -197,6 +200,7 @@ if __name__ == '__main__':
     
     kwargs = {
         'subset':args.subset,
+        'epochs': args.epochs,
         'perlin_k':args.k,
         'attention_method':args.method,
         'perlin_k_flatten':not args.k_colwise,
