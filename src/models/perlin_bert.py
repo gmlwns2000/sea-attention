@@ -716,14 +716,12 @@ class BertSelfAttention(nn.Module):
             v = value_layer
             v_for_atten = value_layer_for_atten
             N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # attention_mask [16, 1, 1, 203], v: [16, 12, 203, 64]
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             if self.perlin_layerwise:
                 attention_scores_truth = attention_scores_truth.detach()
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
 
-            if self.perlin_redraw_proj:
-                self.perlin_performer_proj_updater.redraw_projections(q.device) # NOTE(JIN) : error's happening in this line
             with torch.autocast('cuda', torch.float32):
                 q_type = q.dtype
                 performer_context_layer = self.perlin_performer(q_for_atten.float(), k_for_atten.float(), v_for_atten.float())

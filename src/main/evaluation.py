@@ -1,7 +1,7 @@
 import os
 from ..main.visualization.attentions_to_img import attentions_to_img
 import torch
-from ..models.initialize_model import get_model_init
+from ..models.initialize_model import create_model
 from ..models.sampling.sampling_attentions import sample_attentions_basem, sample_attentions_model
 
 bool2int = lambda x: 1 if x else 0
@@ -12,25 +12,26 @@ def load_model(
         base_model_type, 
         task_type, 
         dataset, 
-        subset): # NOTE : optimizer not included
+        subset):
     state = torch.load(path, map_location='cpu')
 
     epoch = state['epoch']
     step = state['step']
     lr = state['lr']
     
-    model, base_model = get_model_init(base_model_type, task_type, dataset, subset)
+    model, base_model = create_model(base_model_type, task_type, dataset, subset)
 
     model.load_state_dict(state['model'], strict=False)
     base_model.load_state_dict(state['base_model'], strict=True)
 
-    model.to(device) # TODO don't have to be same with the while-training device?
+    model.to(device)
     base_model.to(device)
     model.eval()
     base_model.eval()
 
     del state
-    return epoch, step, lr, model, base_model
+    loaded_model =(epoch, step, lr, model, base_model)
+    return loaded_model
 
 def get_attns_img(
         device,
@@ -125,14 +126,14 @@ def get_attns_img(
     else:
         raise Exception("check ATTNETION_METHOD")
 
-def save_eval(obj, folder_path, file_path): # TODO
+def save_eval(obj, folder_path, file_path):
     os.makedirs(folder_path, exist_ok=True)
     path = folder_path + file_path
     print(f'Evaluation: save {path}')
     torch.save(obj, path)
     print(f'Evaluation: saved {path}')
 
-def save_fig(plot, folder_path, file_path): # TODO
+def save_fig(plot, folder_path, file_path):
     os.makedirs(folder_path, exist_ok=True)
     path = folder_path + file_path
     print(f'Evaluation: save fig {path}')
@@ -142,15 +143,15 @@ def save_fig(plot, folder_path, file_path): # TODO
 def main():
     epoch, step, lr, model, base_model = load_model(
         DEVICE,
-        PATH, 
+        path, 
         BASE_MODEL_TYPE, 
         TASK_TYPE, 
         DATASET, 
         SUBSET)
     
-    # NOTE(JIN) add other eval tasks
+    # TODO(JIN) add other eval tasks
     if 'viz_attentions' in EVAL_TYPES:
-        img_title = f"ep{epoch}_st{step}_lr{lr}_bs{TEST_BATCH_SIZE}"
+        img_title = f"ep{epoch}_st{step}"
         dense_attns_img, sparse_attns_img = get_attns_img(
             DEVICE,
             BASE_MODEL_TYPE, 
@@ -163,15 +164,15 @@ def main():
             TEST_BATCH_SIZE,
             FOR_EVAL)
 
-        assert PATH[:8] == './saves/'
-        FOLDER_PATH = PATH.replace('./saves/','./plots/')
-        folder_idx = FOLDER_PATH.rindex('/')
-        FOLDER_PATH = FOLDER_PATH[:folder_idx+1] # ~~/~/~/
+        assert path[:8] == './saves/'
+        folder_path = path.replace('./saves/','./plots/')
+        folder_idx = folder_path.rindex('/')
+        folder_path = folder_path[:folder_idx+1] # ~~/~/~/
 
         if dense_attns_img is not None:
-            save_fig(dense_attns_img, FOLDER_PATH, f"dense_attns_{img_title}.png")
+            save_fig(dense_attns_img, folder_path, f"dense_attns_{img_title}.png")
         if sparse_attns_img is not None:
-            save_fig(sparse_attns_img, FOLDER_PATH, f"sparse_attns_{img_title}.png")
+            save_fig(sparse_attns_img, folder_path, f"sparse_attns_{img_title}.png")
     
 if __name__ == '__main__':
     import argparse
@@ -184,8 +185,8 @@ if __name__ == '__main__':
     parser.add_argument('--test-batch-size', default=10, type=int)
     parser.add_argument('--device', default=0, type=int)
 
-    parser.add_argument('--method', default='perlin', type=str) # in ["base", "perlin", "performer", longformer, bigbird, sinkhorn, synthesizer, reformer, ...]
-    parser.add_argument('--layerwise', action='store_true') # default: False, type --layerwise to make True
+    parser.add_argument('--method', default='perlin', type=str) # in ["base", "perlin", "performer", longformer, ...]
+    parser.add_argument('--layerwise', action='store_true')
     parser.add_argument('--k-relwise', action='store_true')
     parser.add_argument('--no-redraw-proj', action='store_true')
 
@@ -210,13 +211,13 @@ if __name__ == '__main__':
     PERLIN_K_FLATTEN = args.k_flatten
     PERLIN_REDRAW_PROJ = not args.no_redraw_proj
 
-    PATH = args.path
+    path = args.path
 
-    # check whether it's the right one TODO anything to add?
-    assert f'kf{PERLIN_K_FLATTEN}' in PATH
-    assert f'lw{PERLIN_LAYERWISE}' in PATH
+    # for checking whether it's the right one TODO anything to add?
+    assert f'kf{PERLIN_K_FLATTEN}' in path
+    assert f'lw{PERLIN_LAYERWISE}' in path
     if not PERLIN_REDRAW_PROJ:
-        assert f'rp{PERLIN_REDRAW_PROJ}' in PATH
+        assert f'rp{PERLIN_REDRAW_PROJ}' in path
     
     # inlcudes all model eval
     EVAL_TYPES = args.eval_types

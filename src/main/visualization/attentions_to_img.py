@@ -2,7 +2,6 @@ from ...dataset.test_batch_save_load import load_test_batch
 import torch
 import matplotlib.pyplot as plt
 
-# %matplotlib agg # TODO check
 def attentions_to_img(
         all_layers_attn_probs, 
         dataset, 
@@ -32,7 +31,7 @@ def attentions_to_img(
     plot = []
     batch_subtitle = []
     plot = []
-    for b in range(test_batch_size): # TODO in trainer, max_length
+    for b in range(test_batch_size):
         fig = plt.figure(figsize=(12,12), dpi=300)
         t = test_batch['attention_mask'][b]
         seq_len = (t==0).nonzero()[0].squeeze().item()
@@ -55,9 +54,6 @@ def attentions_to_img(
 
     batch_fig, axes = plt.subplots(batch_rows, batch_cols, figsize=(12*layer_num,12*head_num))# ,dpi=200 # layout="constrained"
     
-    # TODO change implementation
-    # TODO bug when test_batch_size == 2
-    # breakpoint()
     j = 0
     for r in range(batch_rows):
         for c in range(batch_cols):

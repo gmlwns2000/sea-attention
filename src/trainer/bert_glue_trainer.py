@@ -19,8 +19,6 @@ from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
 
-import wandb
-
 task_to_keys = {
     "cola": ("sentence", None),
     "mnli": ("premise", "hypothesis"),
@@ -48,7 +46,7 @@ task_to_epochs = {
 
 task_to_batch_size = {
     "cola": 64,
-    "mnli": 16, # NOTE(JIN): changed 4 to 16 TODO check
+    "mnli": 4,
     "mrpc": 32,
     "qnli": 4,
     "qqp":  16,
@@ -72,18 +70,11 @@ task_to_valid = {
     "bert": "validation",
 }
 
-BASE_MODEL_TYPE = 'bert'
-DATASET = 'glue'
-TEST_BATCH_SIZE = 1
-assert TEST_BATCH_SIZE == 1 # attentions_to_img.py
-FOR_EVAL = False
-assert not FOR_EVAL
-
 def get_dataloader(subset, tokenizer, batch_size, split='train', making_test_batch=False):
     if subset == 'bert':
         subset = "cola" #return dummy set
     
-    dataset = load_dataset(DATASET, subset, split=split, cache_dir='./cache/datasets')
+    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
     
     sentence1_key, sentence2_key = task_to_keys[subset]
 
@@ -112,7 +103,7 @@ def get_dataloader(subset, tokenizer, batch_size, split='train', making_test_bat
     dataloader = torch.utils.data.DataLoader(
         dataset, 
         batch_size=batch_size, 
-        num_workers=0, # NOTE(JIN): check value
+        num_workers=0,
     )
     return dataloader
 
@@ -206,12 +197,6 @@ class Trainer:
         
         self.reset_trainloader()
         self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
-        
-        test_batch = load_test_batch(DATASET, self.subset, FOR_EVAL, TEST_BATCH_SIZE)
-        
-        print("\n\nBert_glue_trainer] test_batch", test_batch) # for debug
-
-        test_batch = batch_to(test_batch, self.device)
 
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -308,7 +293,7 @@ class Trainer:
         
         loss_kd = 0
         if self.using_kd:
-            for ilayer in range(len(output_base.hidden_states)): # NOTE(JIN): first is output of BertEmbeddings. len: 13 tensor, each [batch_size, sequence_lengh, hidden_size]
+            for ilayer in range(len(output_base.hidden_states)):
                 loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
@@ -378,19 +363,22 @@ class Trainer:
                     img_title = f"train_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
                     dense_attns_img, sparse_attns_img = get_attns_img(
                         self.device,
-                        BASE_MODEL_TYPE,
-                        DATASET, 
+                        'bert',
+                        'glue', 
                         self.subset, 
                         self.attention_method, # it wouldn't be "base"
                         self.model, 
                         self.base_model,
                         img_title,
-                        TEST_BATCH_SIZE,
-                        FOR_EVAL)
+                        1,
+                        False
+                        )
                     if dense_attns_img is not None:
-                        wandb.log({self.attention_method : dense_attns_img})
+                        wandb.log({self.attention_method : dense_attns_img}, 
+                                  step=self.step)
                     if sparse_attns_img is not None:
-                        wandb.log({self.attention_method : sparse_attns_img})
+                        wandb.log({self.attention_method : sparse_attns_img},
+                                   step=self.step)
                     
                     self.save()
                     
@@ -480,17 +468,6 @@ class Trainer:
             print('error while load', ex)
 
     def main(self):
-        run = wandb.init(
-             project="perlin-glue",
-             config={
-                "learning_rate": self.lr,
-                "batch_size": self.batch_size,
-                "subset": self.subset,
-                "epochs": self.epochs,
-            }
-         )
-        wandb.watch(self.model, log='all')
-    
         self.epoch = 0
         self.step = 0
         
@@ -512,26 +489,30 @@ class Trainer:
         for epoch in range(self.epochs):
             self.epoch = epoch
             self.train_epoch()
-            valid_score = self.evaluate()
+            
             # visualization
             img_title = f"main_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
             dense_attns_img, sparse_attns_img = get_attns_img(
                 self.device,
-                BASE_MODEL_TYPE,
-                DATASET, 
+                'bert',
+                'glue', 
                 self.subset, 
                 self.attention_method, # it wouldn't be "base"
                 self.model, 
                 self.base_model, 
                 img_title,
-                TEST_BATCH_SIZE,
-                FOR_EVAL)
+                1,
+                False
+                )
             
             if dense_attns_img is not None:
-                wandb.log({self.attention_method : dense_attns_img})
+                wandb.log({self.attention_method : dense_attns_img},
+                          step=self.step)
             if sparse_attns_img is not None:
-                wandb.log({self.attention_method : sparse_attns_img})
-            # check for overfitting
+                wandb.log({self.attention_method : sparse_attns_img},
+                          step=self.step)
+            
+            valid_score = self.evaluate()
             train_score = self.evaluate(split='train', max_step=1000)
             wandb.log({
                 'eval/score': valid_score,

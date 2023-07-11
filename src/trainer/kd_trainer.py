@@ -145,7 +145,7 @@ class Trainer:
         dynamic_linear_pattern_enabled=True,
         dynamic_linear_pattern_temperature=0.05,
         synthesizer_enabled=False,
-        running_type="head_permutation",
+        running_type=None,
     ) -> None:
         seed()
         

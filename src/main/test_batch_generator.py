@@ -1,5 +1,5 @@
-from ...dataset.test_batch_save_load import save_test_batch
-from ...trainer import bert_glue_trainer as bert_glue_trainer
+from ..dataset.test_batch_save_load import save_test_batch
+from ...trainer import bert_glue_trainer
 from datasets import load_dataset
 
 bert_glue_task_to_valid = {
@@ -41,7 +41,7 @@ def make_test_batch(base_model_type, dataset, subset, test_batch_size):
     # elif base_model_type =="glue":
     # ...
     
-    save_test_batch(dataset, subset, FOR_EVAL, test_batch, test_batch_size)
+    save_test_batch(dataset, subset, for_eval, test_batch, test_batch_size)
     return test_batch
 
 if __name__ == '__main__':
@@ -56,15 +56,15 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    DATASET = args.dataset
-    SUBSET = args.subset
-    FOR_EVAL = args.for_eval
-    TEST_BATCH_SIZE = args.test_batch_size
-    BASE_MODEL_TYPE = args.base_model_type
+    dataset = args.dataset
+    subset = args.subset
+    for_eval = args.for_eval
+    test_batch_size = args.test_batch_size
+    base_model_type = args.base_model_type
 
-    if not FOR_EVAL:
-        assert TEST_BATCH_SIZE == 1
+    if not for_eval:
+        assert test_batch_size == 1
 
-    make_test_batch(BASE_MODEL_TYPE, DATASET, SUBSET, TEST_BATCH_SIZE)
+    make_test_batch(base_model_type, dataset, subset, test_batch_size)
 
 

@@ -8,8 +8,8 @@ def save_test_batch(dataset, subset, for_eval, test_batch, test_batch_size):
         eval_or_train = "train"
     else:
         eval_or_train = "eval"
-    os.makedirs(f'./saves/dataset/test_batch/{dataset}/{subset}/{eval_or_train}/', exist_ok=True)
-    path = f'./saves/dataset/test_batch/{dataset}/{subset}/{eval_or_train}/batch_size_{test_batch_size}.pth'
+    os.makedirs(f'./saves/dataset/test_batch/', exist_ok=True)
+    path = f'./saves/dataset/test_batch/{dataset}_{subset}_{eval_or_train}_bs{test_batch_size}.pth'
     print(f'test_batch saved in "{path}"')
     torch.save({
         'test_batch': test_batch
@@ -20,7 +20,7 @@ def load_test_batch(dataset, subset, for_eval, test_batch_size):
         eval_or_train = "train"
     else:
         eval_or_train = "eval"
-    path = f'./saves/dataset/test_batch/{dataset}/{subset}/{eval_or_train}/batch_size_{test_batch_size}.pth'
+    path = f'./saves/dataset/test_batch/{dataset}_{subset}_{eval_or_train}_bs{test_batch_size}.pth'
     state = torch.load(path, map_location='cpu')
     print(f'test_batch load "{path}"')
     test_batch = state['test_batch']
