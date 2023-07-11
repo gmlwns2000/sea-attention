@@ -678,23 +678,23 @@ class BertSelfAttention(nn.Module):
             #     lora_forward(self.value, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
             # value_layer_for_atten = self.transpose_for_scores(
             #     lora_forward(self.value, self.perlin_value_lora_for_approx_atten, hidden_states, True))
-            t_key_layer = lora_forward_linear(self.key, hidden_states)
+            t_key_layer = lora_forward_linear(self.key, hidden_states) # [16, 203, 768] <- Linear(in_features=768, out_features=768, bias=True), [16, 203, 768]
             key_layer = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
+                self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled)) # [16, 12, 203, 64]
             key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
             key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
-            t_value_layer = lora_forward_linear(self.value, hidden_states)
+                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
+            t_value_layer = lora_forward_linear(self.value, hidden_states) # [16, 203, 768]
             value_layer = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
+                self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled)) # [16, 12, 203, 64]
             value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
         breakpoint()
         # mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         # mixed_query_layer_for_atten = lora_forward(self.query, self.perlin_query_lora_for_approx_atten, hidden_states, True)
         # mixed_query_layer_for_score = lora_forward(self.query, self.perlin_query_lora_for_approx_score, hidden_states, True)
-        t_mixed_query_layer = lora_forward_linear(self.query, hidden_states)
+        t_mixed_query_layer = lora_forward_linear(self.query, hidden_states) # [16, 203, 768] all below
         mixed_query_layer = lora_forward_lora(
             self.query, t_mixed_query_layer, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         mixed_query_layer_for_atten = lora_forward_lora(
@@ -702,9 +702,9 @@ class BertSelfAttention(nn.Module):
         mixed_query_layer_for_score = lora_forward_lora(
             self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
         breakpoint()
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-        query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
-        query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)
+        query_layer = self.transpose_for_scores(mixed_query_layer) # [16, 12, 203, 64]
+        query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten) # [16, 12, 203, 64]
+        query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score) # [16, 12, 203, 64]
         breakpoint()
         # if perlin, overwrite attention_probs, context_layer
         if self.attention_method == 'perlin':
@@ -722,7 +722,8 @@ class BertSelfAttention(nn.Module):
             v_for_atten = value_layer_for_atten
             N, H, T, HID = q.shape
             breakpoint()
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            # leaving only 
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # [16, 12, 203, 64] <- [16, 12, 203, 64] * [16, 1, 203, 1] (: [16, 1, 1, 203], [16, 1, 203, 1])
             breakpoint()
             if self.perlin_layerwise:
                 attention_scores_truth = attention_scores_truth.detach()
@@ -733,11 +734,11 @@ class BertSelfAttention(nn.Module):
             with torch.autocast('cuda', torch.float32):
                 q_type = q.dtype
                 performer_context_layer = self.perlin_performer(q_for_atten.float(), k_for_atten.float(), v_for_atten.float())
-                performer_context_layer = performer_context_layer.to(q_type)
+                performer_context_layer = performer_context_layer.to(q_type) # [16, 12, 203, 64]
             breakpoint()
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
             breakpoint()
-            N, H, T, HID = performer_value.shape
+            N, H, T, HID = performer_value.shape # [16, 12, 203, 128]
             breakpoint()
             # (N, H, T, P)
             
