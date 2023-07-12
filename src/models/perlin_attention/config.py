@@ -23,6 +23,7 @@ class PerlinAttentionConfig:
     lora_r: int = 32
     lora_enabed: bool = False
     lora_in_approx_enabled: bool = False
+    partial_attention_scaler: bool = False
     
     def to_json(self):
         return asdict(self)

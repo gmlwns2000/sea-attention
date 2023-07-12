@@ -65,7 +65,7 @@ class PerlinSelfAttention(nn.Module):
         attention_scores_truth: Optional[torch.FloatTensor] = None,
         context_layer_truth: Optional[torch.FloatTensor] = None,
     ) -> Tuple[torch.Tensor]:
-        if self.pconfig.layerwise:
+        if self.pconfig.layerwise and self.training:
             hidden_states = hidden_states.detach()
         
         t_key_layer = default_lazy(key_layer, lambda: lora_forward_linear(key, hidden_states))
@@ -154,7 +154,7 @@ class PerlinSelfAttention(nn.Module):
         ) #type: PerlinAttentionOutput
         self.last_attention_probs = output.partial_attention_probs
         
-        if self.pconfig.layerwise:
+        if self.pconfig.layerwise and self.training:
             output.partial_attention_probs = output.partial_attention_probs.detach()
             output.context_layer = output.context_layer.detach()
         

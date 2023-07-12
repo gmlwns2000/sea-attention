@@ -325,3 +325,43 @@ class Metric:
         for key in self.sum:
             r[key] = self.get(key)
         return r
+
+import time
+
+class BenchmarkRegion:
+    def __init__(self, benchmark: "Benchmark", name: str) -> None:
+        self.benchmark = benchmark
+        self.name = name
+    
+    def __enter__(self):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = time.time()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = time.time() - self.t
+        self.benchmark.add_data(self.name, self.t)
+
+class Benchmark:
+    def __init__(self):
+        self.synchronize = False
+        self.data = {}
+    
+    def add_data(self, name, t):
+        count, sum = self.data.get(name, (0, 0))
+        self.data[name] = (count+1, sum+t)
+    
+    def region(self, name):
+        return BenchmarkRegion(benchmark=self, name=name)
+
+    def todict(self):
+        data = {}
+        for key, (c, s) in self.data.items():
+            data[key] = s / (c+1e-10)
+        return data
+
+BENCHMARK = Benchmark()
+
+def get_bench() -> Benchmark:
+    global BENCHMARK
+    return BENCHMARK
