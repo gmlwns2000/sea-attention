@@ -369,7 +369,7 @@ class BertSelfAttention(nn.Module):
         
         # self.perlin_performer_proj_updater.redraw_projections(q.device)
         with torch.autocast('cuda', torch.float32):
-            performer_context_layer = self.perlin_self_attention.attention.perlin_performer(q, k, v)
+            performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
         attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
         
         performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()

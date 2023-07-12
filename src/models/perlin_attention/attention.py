@@ -42,44 +42,44 @@ class PerlinAttention(nn.Module):
         
         #- attention predictor
         #-- mlp predictor
-        self.perlin_performer_nb_features = int(
+        self.performer_nb_features = int(
             self.attention_head_size * math.log(self.attention_head_size) / self.pconfig.performer_nb_factor
         )
-        self.perlin_performer = FastAttention(
+        self.performer = FastAttention(
             dim_heads = self.attention_head_size,
-            nb_features = self.perlin_performer_nb_features,
+            nb_features = self.performer_nb_features,
             causal=False,
             # no_projection=True,
         )
-        self.perlin_performer_proj_updater = ProjectionUpdater(
-            self.perlin_performer, 
+        self.performer_proj_updater = ProjectionUpdater(
+            self.performer, 
             1000,
         )
-        self.perlin_attention_predictor_enc = nn.Sequential(
+        self.attention_predictor_enc = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
         )
-        self.perlin_attention_predictor_dec_row = nn.Sequential(
+        self.attention_predictor_dec_row = nn.Sequential(
             nn.Linear(config.hidden_size, self.num_attention_heads * self.pconfig.attention_predictor_length),
         )
-        self.perlin_attention_predictor_dec_scaler = nn.Sequential(
+        self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(config.hidden_size, self.num_attention_heads),
         )
         #-- compressed predictor
-        self.perlin_attention_predictor_comp_length = \
+        self.attention_predictor_comp_length = \
             self.pconfig.attention_predictor_comp_patch_count * self.pconfig.attention_predictor_comp_patch_size
-        self.perlin_attention_predictor_comp_codebook = nn.Parameter(
+        self.attention_predictor_comp_codebook = nn.Parameter(
             torch.randn((self.pconfig.attention_predictor_comp_book_size, self.pconfig.attention_predictor_comp_patch_size))
         )
-        self.perlin_attention_predictor_comp_enc = nn.Sequential(
+        self.attention_predictor_comp_enc = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
         )
-        self.perlin_attention_predictor_comp_dec_row = nn.Sequential(
+        self.attention_predictor_comp_dec_row = nn.Sequential(
             nn.Linear(
                 config.hidden_size, 
                 self.num_attention_heads\
@@ -90,21 +90,21 @@ class PerlinAttention(nn.Module):
         #-- TODO VQVAE
         
         #- output
-        self.perlin_out = nn.Sequential(
+        self.out = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*2, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
             nn.Linear(config.hidden_size, config.hidden_size),
         )
-        self.perlin_out_random_lookup = nn.Sequential(
+        self.out_random_lookup = nn.Sequential(
             nn.Dropout(0.1),
             nn.Linear(self.all_head_size*3, config.hidden_size),
             nn.LayerNorm(config.hidden_size),
             nn.GELU(),
             nn.Linear(config.hidden_size, config.hidden_size),
         )
-        self.perlin_norm = nn.LayerNorm(config.hidden_size)
+        self.norm = nn.LayerNorm(config.hidden_size)
     
     def forward(
         self, 
@@ -125,11 +125,10 @@ class PerlinAttention(nn.Module):
         v = v * v_mask
         v_for_atten = v_for_atten * v_mask
         
-        # self.perlin_performer_proj_updater.redraw_projections(q.device)
         if not self.benchmarking:
             with torch.autocast('cuda', torch.float32):
                 q_type = q_for_atten.dtype
-                performer_context_layer = self.perlin_performer(
+                performer_context_layer = self.performer(
                     q_for_atten, 
                     k_for_atten, 
                     v_for_atten
@@ -138,7 +137,7 @@ class PerlinAttention(nn.Module):
                     performer_context_layer = performer_context_layer.to(q_type)
         else:
             # TODO: fix numerical stability...
-            performer_context_layer = self.perlin_performer(
+            performer_context_layer = self.performer(
                 q_for_atten, 
                 k_for_atten, 
                 v_for_atten
@@ -149,13 +148,13 @@ class PerlinAttention(nn.Module):
         
         # estimate attention scores
         if self.pconfig.attention_predictor_method == 'mlp':
-            t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
-            estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
+            t_attention_predictor = self.attention_predictor_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+            estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor)\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
         elif self.pconfig.attention_predictor_method == 'comp':
             warnings.warn('attention prediction method is compressed one.')
-            t_attention_predictor = self.perlin_attention_predictor_comp_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
-            estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
+            t_attention_predictor = self.attention_predictor_comp_enc(performer_value.permute(0,2,1,3).reshape(N, T, H*HID))
+            estimated_attention_score = self.attention_predictor_comp_dec_row(t_attention_predictor)\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
             estimated_attention_score = estimated_attention_score\
                 .view(N, H, T, self.pconfig.attention_predictor_comp_patch_count, self.pconfig.attention_predictor_comp_book_size)
@@ -163,7 +162,7 @@ class PerlinAttention(nn.Module):
             estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
             estimated_attention_score = torch.matmul(
                 estimated_attention_score.view(-1, BOOK_LEN), 
-                self.perlin_attention_predictor_comp_codebook
+                self.attention_predictor_comp_codebook
             )
             estimated_attention_score = estimated_attention_score.view(N, H, T, -1)
         else:
@@ -244,7 +243,7 @@ class PerlinAttention(nn.Module):
         
         if attention_mask is not None:
             partial_attention_scores = partial_attention_scores + attention_mask
-        estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
+        estimated_scale = self.attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
         partial_attention_probs = torch.softmax(partial_attention_scores, -1)
         partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
         
@@ -281,17 +280,17 @@ class PerlinAttention(nn.Module):
         performer_context_layer = performer_context_layer.view(new_context_layer_shape)
         
         if not self.pconfig.random_lookup:
-            partial_context_layer = self.perlin_out(torch.cat([
+            partial_context_layer = self.out(torch.cat([
                 partial_context_layer, 
                 performer_context_layer
             ], dim=-1)) + partial_context_layer
         else:
-            partial_context_layer = self.perlin_out_random_lookup(torch.cat([
+            partial_context_layer = self.out_random_lookup(torch.cat([
                 partial_context_layer, 
                 performer_context_layer,
                 random_context_layer,
             ], dim=-1)) + partial_context_layer
-        partial_context_layer = self.perlin_norm(partial_context_layer)
+        partial_context_layer = self.norm(partial_context_layer)
         
         # in layerwise train only norm
         if not self.benchmarking:

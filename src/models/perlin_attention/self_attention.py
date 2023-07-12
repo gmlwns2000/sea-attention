@@ -30,16 +30,16 @@ class PerlinSelfAttention(nn.Module):
         
         self.last_loss = None
 
-        self.perlin_query_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.perlin_key_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.perlin_value_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.query_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.key_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.value_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
         
-        self.perlin_query_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.perlin_key_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.query_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.key_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
         
-        self.perlin_query_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.perlin_key_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.perlin_value_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.query_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.key_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        self.value_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
         
         self.attention = PerlinAttention(
             config=config,
@@ -65,8 +65,6 @@ class PerlinSelfAttention(nn.Module):
         attention_scores_truth: Optional[torch.FloatTensor] = None,
         context_layer_truth: Optional[torch.FloatTensor] = None,
     ) -> Tuple[torch.Tensor]:
-        self.perlin_token_merging_attention_mask = attention_mask
-        
         if self.pconfig.layerwise:
             hidden_states = hidden_states.detach()
         
@@ -74,7 +72,7 @@ class PerlinSelfAttention(nn.Module):
         key_layer = self.transpose_for_scores(lora_forward_lora(
             linear=key, 
             linear_x=t_key_layer, 
-            lora=self.perlin_key_lora, 
+            lora=self.key_lora, 
             x=hidden_states, 
             enabled=self.pconfig.lora_enabed
         ))
@@ -82,14 +80,14 @@ class PerlinSelfAttention(nn.Module):
             key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
                 linear=key, 
                 linear_x=t_key_layer, 
-                lora=self.perlin_key_lora_for_approx_atten, 
+                lora=self.key_lora_for_approx_atten, 
                 x=hidden_states, 
                 enabled=self.pconfig.lora_in_approx_enabled
             ))
             key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
                 linear=key, 
                 linear_x=t_key_layer, 
-                lora=self.perlin_key_lora_for_approx_score, 
+                lora=self.key_lora_for_approx_score, 
                 x=hidden_states, 
                 enabled=self.pconfig.lora_in_approx_enabled
             ))
@@ -100,7 +98,7 @@ class PerlinSelfAttention(nn.Module):
         value_layer = self.transpose_for_scores(lora_forward_lora(
             linear=value, 
             linear_x=t_value_layer, 
-            lora=self.perlin_value_lora, 
+            lora=self.value_lora, 
             x=hidden_states, 
             enabled=self.pconfig.lora_enabed
         ))
@@ -108,7 +106,7 @@ class PerlinSelfAttention(nn.Module):
             value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
                 linear=value, 
                 linear_x=t_value_layer, 
-                lora=self.perlin_value_lora_for_approx_atten, 
+                lora=self.value_lora_for_approx_atten, 
                 x=hidden_states, 
                 enabled=self.pconfig.lora_in_approx_enabled
             ))
@@ -119,7 +117,7 @@ class PerlinSelfAttention(nn.Module):
         query_layer = self.transpose_for_scores(lora_forward_lora(
             linear=query, 
             linear_x=t_mixed_query_layer, 
-            lora=self.perlin_query_lora, 
+            lora=self.query_lora, 
             x=hidden_states, 
             enabled=self.pconfig.lora_enabed
         ))
@@ -127,14 +125,14 @@ class PerlinSelfAttention(nn.Module):
             query_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
                 linear=query, 
                 linear_x=t_mixed_query_layer, 
-                lora=self.perlin_query_lora_for_approx_atten, 
+                lora=self.query_lora_for_approx_atten, 
                 x=hidden_states, 
                 enabled=self.pconfig.lora_in_approx_enabled
             ))
             query_layer_for_score = self.transpose_for_scores(lora_forward_lora(
                 linear=query, 
                 linear_x=t_mixed_query_layer, 
-                lora=self.perlin_query_lora_for_approx_score, 
+                lora=self.query_lora_for_approx_score, 
                 x=hidden_states, 
                 enabled=self.pconfig.lora_in_approx_enabled
             ))
