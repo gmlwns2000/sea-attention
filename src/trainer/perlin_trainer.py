@@ -4,6 +4,8 @@ from torch import nn
 from .bert_glue_trainer import Trainer as BaseGlueTrainer
 from .lra_trainer import Trainer as BaseLraTrainer
 from ..models import perlin_bert as perlin
+from ..models.perlin_bert.compat import migrate_state_dict
+from ..models import perlin_attention
 from .bert_glue_trainer import task_to_batch_size
 
 bool2int = lambda x: 1 if x else 0
@@ -32,22 +34,42 @@ class BaseTrainer:
         self.perlin_lora = perlin_lora
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
+        # perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
-        perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
+        
+        self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
+        
+        self.perlin_config = perlin_attention.PerlinAttentionConfig(
+            performer_nb_factor = perlin_performer_nb_feature_factor,
+            k = perlin_k,
+            k_flatten = perlin_k_flatten,
+            random_lookup = perlin_random_lookup,
+            random_lookup_count = perlin_random_lookup_count,
+            attention_predictor_method = perlin_attention_predictor_method,
+            attention_predictor_length = 128,
+            attention_predictor_comp_book_size = 8,
+            attention_predictor_comp_patch_size = 16,
+            attention_predictor_comp_patch_count = 16,
+            layerwise = perlin_layerwise,
+            lora_r = 32,
+            lora_enabed = perlin_lora,
+            lora_in_approx_enabled = True,
+        )
+        perlin_attention.register_default_config(self.perlin_config)
     
     def apply_model_options(self, model: nn.Module):
         for module in model.modules():
             if isinstance(module, perlin.BertSelfAttention):
                 module.attention_method = self.attention_method
-                module.perlin_k_flatten = self.perlin_k_flatten
-                module.perlin_k = self.perlin_k
-                module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
-                module.perlin_random_lookup = self.perlin_random_lookup
-                module.perlin_random_lookup_count = self.perlin_random_lookup_count
+                # module.perlin_k_flatten = self.perlin_k_flatten
+                # module.perlin_k = self.perlin_k
+                # module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
+                # module.perlin_random_lookup = self.perlin_random_lookup
+                # module.perlin_random_lookup_count = self.perlin_random_lookup_count
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
@@ -60,9 +82,9 @@ class BaseTrainer:
                     param.requires_grad = False
 
             for module in model.modules():
-                if isinstance(module, perlin.BertSelfAttention):
-                    module.perlin_layerwise = True
-                    module.perlin_lora_enabled = self.perlin_lora
+                if isinstance(module, perlin_attention.PerlinSelfAttention):
+                    # module.pconfig.layerwise = True
+                    # module.pconfig.lora_enabed = self.perlin_lora
                     if not self.perlin_lora: # activate QKV
                         for p in module.parameters():
                             p.requires_grad = True
@@ -133,6 +155,9 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         )
         
         self.apply_model_options(self.model)
+    
+    def migrate_state_dict(self, state_dict):
+        return migrate_state_dict(state_dict)
 
 class LraTrainer(BaseLraTrainer, BaseTrainer):
     def __init__(
@@ -159,6 +184,9 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
         )
         
         self.apply_model_options(self.model)
+    
+    def migrate_state_dict(self, state_dict):
+        return migrate_state_dict(state_dict)
 
 def add_perlin_model_options(parser):
     parser.add_argument('--method', default='perlin', type=str)

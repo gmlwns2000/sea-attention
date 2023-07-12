@@ -420,13 +420,18 @@ class Trainer:
             'step': self.step,
         }, path)
     
+    def migrate_state_dict(self, state_dict):
+        pass
+    
     def load(self, path=None):
         try:
             if path is None:
                 path = self.checkpoint_path()
             print(f'Trainer: load {path}')
             state = torch.load(path, map_location='cpu')
-            self.model.load_state_dict(state['model'])
+            model_state_dict = state['model']
+            model_state_dict = self.migrate_state_dict(model_state_dict)
+            self.model.load_state_dict(model_state_dict)
             self.base_model.load_state_dict(state['base_model'])
             # self.optimizer.load_state_dict(state['optimizer'])
             del state
