@@ -409,6 +409,7 @@ class BertSelfAttention(nn.Module):
         self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
         self.perlin_k_flatten = True
         self.perlin_topk_type = 'relwise'
+        self.perlin_pad_attention = False
         self.perlin_k = 7
         self.last_loss = None
         self.perlin_layerwise = False
@@ -857,25 +858,25 @@ class BertSelfAttention(nn.Module):
                 # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
                 partial_attention_scores = attention_scores_dense
-                
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                
                 partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
-                
                 partial_attention_scores.scatter_(
                     dim=-1, index=indices, src=partial_attention_scores_gathered
                 )
-                
             else:
+                warnings.warn(f'k_flatten {k_flatten}, topk_type {topk_type}')
                 if topk_type == 'relwise':
                     # (N, H, T, T)
                     partial_attention_scores = attention_scores_dense
                     N, H, T, T = partial_attention_scores.shape
+                    if self.perlin_pad_attention:
+                        warnings.warn(f'pad_attention {self.perlin_pad_attention}')
+                        partial_attention_scores = partial_attention_scores + attention_mask.permute(0, 1, 3, 2).contiguous() # TODO check  # (N, 1, T, 1)
                     partial_attention_scores = partial_attention_scores.view(N, H, T*T)
                     value, indices = torch.topk(
-                        estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
-                        k=k*T, dim=-1
-                    )
+                    estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
+                    k=k*T, dim=-1
+                ) # TODO how to manage T? <- might scale to be smaller value, or use batch_size
                     # warnings.warn(f'topk({k*T}/{T*T})')
                     partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
                     partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
@@ -899,6 +900,7 @@ class BertSelfAttention(nn.Module):
                         dim=-1, index=indices, src=partial_attention_scores_gathered
                     )
                     partial_attention_scores = partial_attention_scores.view(N, H, T, T)
+                
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
@@ -927,7 +929,6 @@ class BertSelfAttention(nn.Module):
                     
                     random_context_index = (random_context_index * (1 - 1/T) * token_length).floor().long()
                     
-
                     random_context_layer = v.gather(dim=-2, index=random_context_index)
                     
                     random_context_weight = estimated_attention_probs_masked.gather(dim=-1, index=random_context_index)
@@ -940,24 +941,15 @@ class BertSelfAttention(nn.Module):
                         lookups = lookups + random_context_layer
                 
                 random_context_layer = random_context_layer.permute(0, 2, 1, 3).contiguous()
-                
                 new_context_layer_shape = random_context_layer.size()[:-2] + (self.all_head_size,)
-                
                 random_context_layer = random_context_layer.view(new_context_layer_shape)
-                
 
             partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous() # (N, T, H, HID)
-
             new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,) # [N, T, HID:768]
-
             partial_context_layer = partial_context_layer.view(new_context_layer_shape) # (N, T, HID:768)
-
             performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
-
             
             if not self.perlin_random_lookup:
                 partial_context_layer = self.perlin_out(torch.cat([
