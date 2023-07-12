@@ -121,26 +121,28 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
     ):
         N, H, T, HID = q.shape
-        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
-        v_for_atten = v_for_atten * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        v_mask = (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        v = v * v_mask
+        v_for_atten = v_for_atten * v_mask
         
         # self.perlin_performer_proj_updater.redraw_projections(q.device)
         if not self.benchmarking:
             with torch.autocast('cuda', torch.float32):
                 q_type = q_for_atten.dtype
-                if q_type != torch.float32:
-                    _q_for_atten = q_for_atten.float()
-                    _k_for_atten = k_for_atten.float()
-                    _v_for_atten = v_for_atten.float()
-                else:
-                    _q_for_atten = q_for_atten
-                    _k_for_atten = k_for_atten
-                    _v_for_atten = v_for_atten
-                performer_context_layer = self.perlin_performer(_q_for_atten, _k_for_atten, _v_for_atten)
+                performer_context_layer = self.perlin_performer(
+                    q_for_atten, 
+                    k_for_atten, 
+                    v_for_atten
+                )
                 if q_type != performer_context_layer.dtype:
                     performer_context_layer = performer_context_layer.to(q_type)
         else:
-            performer_context_layer = self.perlin_performer(q_for_atten, k_for_atten, v_for_atten)
+            # TODO: fix numerical stability...
+            performer_context_layer = self.perlin_performer(
+                q_for_atten, 
+                k_for_atten, 
+                v_for_atten
+            )
         performer_value = torch.cat([performer_context_layer, v], dim=-1)
         N, H, T, HID = performer_value.shape
         # (N, H, T, P)
@@ -156,7 +158,7 @@ class PerlinAttention(nn.Module):
             estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
                 .view(N, T, H, -1).permute(0, 2, 1, 3)
             estimated_attention_score = estimated_attention_score\
-                .view(N, H, T, self.pconfig.attention_predictor_comp_patch_count, self.perlin_attention_perdictor_comp_book_size)
+                .view(N, H, T, self.pconfig.attention_predictor_comp_patch_count, self.pconfig.attention_predictor_comp_book_size)
             _, _, _, CODE_SEQ_LEN, BOOK_LEN = estimated_attention_score.shape
             estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
             estimated_attention_score = torch.matmul(
@@ -169,13 +171,18 @@ class PerlinAttention(nn.Module):
         
         # interpolate and convert to probability
         original_dtype = estimated_attention_score.dtype
-        with torch.autocast('cuda', torch.float32):
-            if estimated_attention_score.dtype != torch.float32:
-                estimated_attention_score = estimated_attention_score.to(torch.float32)
+        
+        if torch.get_autocast_gpu_dtype() == torch.bfloat16: # F interpolate is not supported on bf16
+            with torch.autocast('cuda', torch.float16):
+                if estimated_attention_score.dtype != torch.float16:
+                    estimated_attention_score = estimated_attention_score.to(torch.float16)
+                interp_mode = 'bilinear' if T >= estimated_attention_score.shape[-1] else 'area'
+                estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
+            if estimated_attention_score.dtype != original_dtype:
+                estimated_attention_score = estimated_attention_score.to(original_dtype)
+        else:
             interp_mode = 'bilinear' if T >= estimated_attention_score.shape[-1] else 'area'
             estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
-        if estimated_attention_score.dtype != original_dtype:
-            estimated_attention_score = estimated_attention_score.to(original_dtype)
         
         estimated_attention_score = estimated_attention_score + attention_mask
         estimated_attention_probs = torch.softmax(estimated_attention_score, -1)

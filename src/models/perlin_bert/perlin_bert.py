@@ -368,7 +368,8 @@ class BertSelfAttention(nn.Module):
         v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
         
         # self.perlin_performer_proj_updater.redraw_projections(q.device)
-        performer_context_layer = self.perlin_performer(q, k, v)
+        with torch.autocast('cuda', torch.float32):
+            performer_context_layer = self.perlin_self_attention.attention.perlin_performer(q, k, v)
         attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
         
         performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
@@ -386,7 +387,7 @@ class BertSelfAttention(nn.Module):
         binary_mask = attention_mask > -1
         
         #pad
-        bucket_size = self.perlin_k
+        bucket_size = self.perlin_self_attention.pconfig.k
         pad_unit_size = bucket_size * 2
         to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
         TP = T + to_pad
@@ -514,11 +515,12 @@ class BertSelfAttention(nn.Module):
             
             binary_mask = (attention_mask > -1) * 1.0
             
-            synthesizer_context_layer, attention_probs = self.perlin_synth_atten(
-                query_layer, 
-                value_layer, 
-                mask = binary_mask
-            )
+            with torch.autocast('cuda', torch.float32):
+                synthesizer_context_layer, attention_probs = self.perlin_synth_atten(
+                    query_layer,
+                    value_layer,
+                    mask = binary_mask
+                )
             
             synthesizer_context_layer = synthesizer_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = synthesizer_context_layer.size()[:-2] + (self.all_head_size,)
@@ -537,7 +539,8 @@ class BertSelfAttention(nn.Module):
             binary_mask = attention_mask > -1
             
             #pad
-            to_pad = 0 if (T % self.perlin_k) == 0 else (self.perlin_k - (T % self.perlin_k))
+            perlin_k = self.perlin_self_attention.pconfig.k
+            to_pad = 0 if (T % perlin_k) == 0 else (perlin_k - (T % perlin_k))
             TP = T + to_pad
             if to_pad != 0:
                 pad_config = (0,0,0,to_pad)

@@ -7,6 +7,7 @@ from ..models import perlin_bert as perlin
 from ..models.perlin_bert.compat import migrate_state_dict
 from ..models import perlin_attention
 from .bert_glue_trainer import task_to_batch_size
+from ..utils import seed
 
 bool2int = lambda x: 1 if x else 0
 
@@ -236,6 +237,8 @@ if __name__ == '__main__':
     add_perlin_model_options(parser)
     
     args = parser.parse_args()
+    
+    seed()
     
     print(args)
     
