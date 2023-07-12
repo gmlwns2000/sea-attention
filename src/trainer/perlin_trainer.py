@@ -23,6 +23,7 @@ class BaseTrainer:
         perlin_token_merging = False,
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
+        perlin_topk_type = 'relwise',
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -38,6 +39,7 @@ class BaseTrainer:
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
+        self.perlin_topk_type = perlin_topk_type
     
     def apply_model_options(self, model: nn.Module):
         for module in model.modules():
@@ -51,6 +53,7 @@ class BaseTrainer:
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
+                module.perlin_topk_type = self.perlin_topk_type
         
         if self.perlin_layerwise:
             for name, param in model.named_parameters():
@@ -173,6 +176,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    parser.add_argument('--topk-type', default = "relwise", type=str)
     return parser
 
 def parse_perlin_model_options(args):
@@ -189,6 +193,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
+        'perlin_topk_type' : args.topk_type 
     }
     return kwargs
 
