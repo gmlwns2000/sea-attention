@@ -736,6 +736,7 @@ class BertSelfAttention(nn.Module):
             v_for_atten = value_layer_for_atten
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            v_for_atten = v_for_atten * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             if self.perlin_layerwise:
                 attention_scores_truth = attention_scores_truth.detach()
                 attention_probs_truth = attention_probs_truth.detach()
