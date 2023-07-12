@@ -117,7 +117,7 @@ def main(
     for i in range(len(test_batch['input_ids'])):
         token_len = int(test_batch['attention_mask'][i].sum().item())
         img = process_batch_index(attentions, i, token_len)
-        path = f"./plots/visualize_bert_glue/{i}.png"
+        path = f"./plots/visualize_bert_glue/{test_batch_size}_{i}.png"
         cv2.imwrite(path, img)
         print('img saved in ', path)
 
