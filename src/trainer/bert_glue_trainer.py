@@ -448,7 +448,7 @@ class Trainer:
                 "epochs": self.epochs,
             }
         )
-        wandb.watch(self.model, log='all')
+        # wandb.watch(self.model, log='all')
         
         for epoch in range(self.epochs):
             self.epoch = epoch
