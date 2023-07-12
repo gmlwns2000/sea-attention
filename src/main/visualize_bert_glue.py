@@ -3,19 +3,17 @@ from typing import List
 from matplotlib import cm
 
 import numpy as np
-from main.test_batch_generator import load_test_batch, make_save_test_batch
 
-from trainer.perlin_trainer import GlueTrainer, add_perlin_model_options, parse_perlin_model_options
-from .visualization.attentions_to_img import attentions_to_img
+from ..utils import batch_to
+from ..main.test_batch_generator import load_test_batch, make_save_test_batch
+
+from ..trainer.perlin_trainer import GlueTrainer, add_perlin_model_options, parse_perlin_model_options
+
 import torch
 import cv2
 from PIL import Image
-
-from ..models.initialize_model import create_model
-from ..models.sampling.sampling_attentions import sample_attentions_basem, sample_attentions_model
-
-from ..models.perlin_bert import perlin_bert
 from torch.utils.data import DataLoader, Dataset
+from ..models import perlin_bert
 
 ZOOM = 8
 
@@ -80,6 +78,7 @@ def main(
     trainer.load(checkpoint_path)
 
     test_batch = get_test_batch(trainer.valid_loader, subset, test_batch_size)
+    test_batch = batch_to(test_batch, trainer.device)
 
     bert = trainer.model
     teacher = trainer.base_model
@@ -96,7 +95,7 @@ def main(
 
     with torch.no_grad():
         teacher(**test_batch)
-        bert['teacher'] = teacher
+        test_batch['teacher'] = teacher
         bert(**test_batch)
     
     attentions = []
