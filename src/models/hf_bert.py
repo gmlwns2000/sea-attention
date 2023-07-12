@@ -266,9 +266,9 @@ class BertSelfAttention(nn.Module):
 
         self.is_decoder = config.is_decoder
         
-        self.last_dense_attention_prob = None
-        self.last_dense_attention_score = None
-        self.last_dense_context_layer = None
+        self.last_teacher_attention_probs = None
+        self.last_teacher_attention_score = None
+        self.last_teacher_context_layer = None
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -353,7 +353,7 @@ class BertSelfAttention(nn.Module):
             # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
             attention_scores = attention_scores + attention_mask
         
-        self.last_dense_attention_score = attention_scores
+        self.last_teacher_attention_score = attention_scores
 
         # Normalize the attention scores to probabilities.
         attention_probs = nn.functional.softmax(attention_scores, dim=-1)
@@ -374,8 +374,8 @@ class BertSelfAttention(nn.Module):
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
         
-        self.last_dense_attention_prob = attention_probs
-        self.last_dense_context_layer = context_layer
+        self.last_teacher_attention_probs = attention_probs
+        self.last_teacher_context_layer = context_layer
 
         if self.is_decoder:
             outputs = outputs + (past_key_value,)

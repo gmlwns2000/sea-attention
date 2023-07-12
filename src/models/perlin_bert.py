@@ -406,8 +406,6 @@ class BertSelfAttention(nn.Module):
         
         self.perlin_k_flatten = True
         self.perlin_redraw_proj = False
-        self.last_dense_attention_prob = None
-        self.last_sparse_attention_prob = None
 
         self.last_loss = None
         self.perlin_layerwise = False
@@ -420,6 +418,11 @@ class BertSelfAttention(nn.Module):
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
+
+        self.last_perlin_estimated_probs = None
+        self.last_perlin_dense_probs = None
+        self.last_perlin_partial_probs = None
+        self.last_performer_attention_probs = None
         
         #- lora
         self.perlin_query_lora = LoraLinear(config.hidden_size, self.all_head_size, perlin_lora_r)
@@ -766,7 +769,7 @@ class BertSelfAttention(nn.Module):
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             
             # perlin dense attention prob
-            self.last_dense_attention_prob = estimated_attention_probs
+            self.last_perlin_estimated_probs = estimated_attention_probs
 
             # in layerwise, train perlin attention predictor
             with torch.autocast('cuda', torch.float32):
@@ -785,7 +788,8 @@ class BertSelfAttention(nn.Module):
                 # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
                 attention_scores_dense = attention_scores_dense + attention_mask
             loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
-            
+            self.last_perlin_dense_probs = torch.softmax(attention_scores_dense, dim=-1)
+
             k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
             k_flatten = self.perlin_k_flatten
             warnings.warn(f'k_flatten {k_flatten}')
@@ -826,7 +830,7 @@ class BertSelfAttention(nn.Module):
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
             
             # perlin sparse attention prob
-            self.last_sparse_attention_prob = partial_attention_probs
+            self.last_perlin_partial_probs = partial_attention_probs
             
             partial_context_layer = torch.matmul(partial_attention_probs, v)
             
@@ -1645,9 +1649,9 @@ class BertModel(BertPreTrainedModel):
             layer_student = self.encoder.layer[i]
             attn_teacher = layer_teacher.attention.self # type: berts.BertSelfAttention
             attn_student = layer_student.attention.self # type: BertSelfAttention
-            attn_student.teacher_attention_prob = attn_teacher.last_dense_attention_prob
-            attn_student.teacher_attention_score = attn_teacher.last_dense_attention_score
-            attn_student.teacher_context_layer = attn_teacher.last_dense_context_layer
+            attn_student.teacher_attention_prob = attn_teacher.last_teacher_attention_probs
+            attn_student.teacher_attention_score = attn_teacher.last_teacher_attention_score
+            attn_student.teacher_context_layer = attn_teacher.last_teacher_context_layer
         
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

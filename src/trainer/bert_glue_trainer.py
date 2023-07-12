@@ -1,8 +1,7 @@
 import os
 import warnings
 from matplotlib import pyplot as plt
-from ..dataset.test_batch_save_load import load_test_batch
-from ..main.evaluation import get_attns_img
+
 import numpy as np
 import tqdm
 import transformers
@@ -70,7 +69,7 @@ task_to_valid = {
     "bert": "validation",
 }
 
-def get_dataloader(subset, tokenizer, batch_size, split='train', making_test_batch=False):
+def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if subset == 'bert':
         subset = "cola" #return dummy set
     
@@ -83,10 +82,7 @@ def get_dataloader(subset, tokenizer, batch_size, split='train', making_test_bat
         args = (
             (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
         )
-        if not making_test_batch:
-            result = tokenizer(*args, padding=True, max_length=256, truncation=True)
-        else:
-            result = tokenizer(*args, padding='max_length', max_length=256, truncation=True)
+        result = tokenizer(*args, padding=True, max_length=256, truncation=True)
         # result = tokenizer(*args, padding="max_length", max_length=512, truncation=True)
         # Map labels to IDs (not necessary for GLUE tasks)
         # if label_to_id is not None and "label" in examples:
@@ -356,32 +352,10 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 
-                
                 if ((istep+1) % self.eval_steps) == 0:
                     score = self.evaluate()
-                    # visualization
-                    img_title = f"train_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
-                    dense_attns_img, sparse_attns_img = get_attns_img(
-                        self.device,
-                        'bert',
-                        'glue', 
-                        self.subset, 
-                        self.attention_method, # it wouldn't be "base"
-                        self.model, 
-                        self.base_model,
-                        img_title,
-                        1,
-                        False
-                        )
-                    if dense_attns_img is not None:
-                        wandb.log({self.attention_method : dense_attns_img}, 
-                                  step=self.step)
-                    if sparse_attns_img is not None:
-                        wandb.log({self.attention_method : sparse_attns_img},
-                                   step=self.step)
-                    
+                    # TODO visualization
                     self.save()
-                    
                     self.model.train()
                     self.base_model.eval()
                     m = Metric()
@@ -463,6 +437,12 @@ class Trainer:
             self.model.load_state_dict(state['model'])
             self.base_model.load_state_dict(state['base_model'])
             # self.optimizer.load_state_dict(state['optimizer'])
+            if 'epoch' in state.keys():
+                self.epoch = state['epoch']
+            if 'step' in state.keys():
+                self.step = state['step']
+            if 'lr' in state.keys():
+                self.lr = state['lr']
             del state
         except Exception as ex:
             print('error while load', ex)
@@ -484,34 +464,12 @@ class Trainer:
                 "epochs": self.epochs,
             }
         )
-        wandb.watch(self.model, log='all')
+        # wandb.watch(self.model, log='all')
         
         for epoch in range(self.epochs):
             self.epoch = epoch
             self.train_epoch()
-            
-            # visualization
-            img_title = f"main_epoch/ep{self.epoch}_st{self.step}_lr{self.lr}"
-            dense_attns_img, sparse_attns_img = get_attns_img(
-                self.device,
-                'bert',
-                'glue', 
-                self.subset, 
-                self.attention_method, # it wouldn't be "base"
-                self.model, 
-                self.base_model, 
-                img_title,
-                1,
-                False
-                )
-            
-            if dense_attns_img is not None:
-                wandb.log({self.attention_method : dense_attns_img},
-                          step=self.step)
-            if sparse_attns_img is not None:
-                wandb.log({self.attention_method : sparse_attns_img},
-                          step=self.step)
-            
+            # TODO visualization
             valid_score = self.evaluate()
             train_score = self.evaluate(split='train', max_step=1000)
             wandb.log({

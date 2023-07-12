@@ -28,3 +28,4 @@ plots/
 *.csv
 
 src/utils/secrets.*
+src/models/dict/

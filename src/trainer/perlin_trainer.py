@@ -157,6 +157,40 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
         
         self.apply_model_options(self.model)
 
+def add_perlin_model_options(parser):
+    parser.add_argument('--method', default='perlin', type=str)
+    parser.add_argument('--layerwise', action='store_true', default=False)
+    parser.add_argument('--disable-lora', action='store_true', default=False)
+    parser.add_argument('--k', default=7, type=int)
+    parser.add_argument('--k-colwise', action='store_true', default=False)
+    parser.add_argument('--attention-predictor-method', default='mlp', type=str)
+    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    parser.add_argument('--random-lookup', action='store_true', default=False)
+    parser.add_argument('--random-lookup-count', default=3, type=int)
+    parser.add_argument('--token-merging', action='store_true', default=False)
+    parser.add_argument('--token-merging-preserve', default=0.2, type=float)
+    parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    parser.add_argument('--no-redraw-proj', action='store_true', default=False)
+    return parser
+
+def parse_perlin_model_options(args):
+    kwargs = {
+        'perlin_k':args.k,
+        'attention_method':args.method,
+        'perlin_k_flatten':not args.k_colwise,
+        'perlin_layerwise':args.layerwise,
+        'perlin_lora':not args.disable_lora,
+        'perlin_attention_predictor_method':args.attention_predictor_method,
+        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
+        'perlin_random_lookup': args.random_lookup,
+        'perlin_random_lookup_count': args.random_lookup_count,
+        'perlin_token_merging': args.token_merging,
+        'perlin_token_merging_preserve': args.token_merging_preserve,
+        'perlin_token_merging_ratio': args.token_merging_ratio,
+        'perlin_redraw_proj' : not args.no_redraw_proj,
+    }
+    return kwargs
+
 if __name__ == '__main__':
     import argparse
     
@@ -168,16 +202,6 @@ if __name__ == '__main__':
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
     parser.add_argument('--disable-amp', action='store_true', default=False)
-    
-    parser.add_argument('--method', default='perlin', type=str)
-    parser.add_argument('--layerwise', action='store_true', default=False)
-    parser.add_argument('--disable-lora', action='store_true', default=False)
-    parser.add_argument('--k', default=7, type=int)
-    parser.add_argument('--k-colwise', action='store_true', default=False)
-    parser.add_argument('--attention-predictor-method', default='mlp', type=str)
-    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
-    parser.add_argument('--random-lookup', action='store_true', default=False)
-    parser.add_argument('--no-redraw-proj', action='store_true', default=False)
 
     args = parser.parse_args()
     
@@ -193,20 +217,13 @@ if __name__ == '__main__':
     
     kwargs = {
         'subset':args.subset,
-        'perlin_k':args.k,
-        'attention_method':args.method,
-        'perlin_k_flatten':not args.k_colwise,
-        'perlin_layerwise':args.layerwise,
-        'perlin_lora':not args.disable_lora,
-        'perlin_attention_predictor_method':args.attention_predictor_method,
-        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
-        'perlin_random_lookup': args.random_lookup,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,
         'perlin_redraw_proj': not args.no_redraw_proj,
     }
-    
+    kwargs.update(parse_perlin_model_options(args))
+
     if args.dataset == 'glue':
         trainer = GlueTrainer(**kwargs)
     elif args.dataset == 'lra':

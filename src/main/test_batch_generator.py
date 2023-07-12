@@ -1,70 +1,32 @@
-from ..dataset.test_batch_save_load import save_test_batch
-from ...trainer import bert_glue_trainer
-from datasets import load_dataset
+import os
 
-bert_glue_task_to_valid = {
-    "cola": "validation",
-    "mnli": "validation_matched",
-    "mrpc": "test",
-    "qnli": "validation",
-    "qqp": "validation",
-    "rte": "validation",
-    "sst2": "validation",
-    "stsb": "validation",
-    "wnli": "validation",
-    "bert": "validation",
-}
+import torch
+from torch.utils.data import DataLoader
 
-def make_test_batch(base_model_type, dataset, subset, test_batch_size):
+def make_save_test_batch(valid_loader: DataLoader, dataset: str, subset: str, test_batch_size: int):
     # tokenizer, batch_size, tast_to_valid
-    if base_model_type == 'bert':
-        if dataset == "glue":
-            _, tokenizer = bert_glue_trainer.get_base_model(subset)
-            loaded_dataset = load_dataset(dataset, subset, split=bert_glue_task_to_valid[subset])
-            len_dataset = len(loaded_dataset)
-            batch_size = len_dataset//test_batch_size
-            # breakpoint()
-            valid_loader = bert_glue_trainer.get_dataloader(
-            subset, 
-            tokenizer, 
-            batch_size, # stepping size
-            split=bert_glue_task_to_valid[subset],
-            making_test_batch = True)
-            
-            # TODO check - torch has __getitem__?, how does it work?
-            test_batch = valid_loader.collate_fn(
-                [valid_loader.dataset.__getitem__(i*batch_size) # TODO check idx
-             for i in range(test_batch_size)])
-            
-            assert len(test_batch['labels']) == test_batch_size
-
-    # elif base_model_type =="glue":
-    # ...
+    if dataset == "glue":
+        test_batch = valid_loader.collate_fn(
+            [valid_loader.dataset.__getitem__(i*(len(valid_loader.dataset)//test_batch_size))
+            for i in range(test_batch_size)])
+        
+        assert len(test_batch['labels']) == test_batch_size
     
-    save_test_batch(dataset, subset, for_eval, test_batch, test_batch_size)
+    save_test_batch(dataset, subset, test_batch, test_batch_size)
     return test_batch
 
-if __name__ == '__main__':
-    import argparse
+def save_test_batch(dataset:str, subset:str, test_batch: torch.Tensor, test_batch_size: int):
+    os.makedirs(f'./saves/dataset/test_batch/', exist_ok=True)
+    path = f'./saves/dataset/test_batch/{dataset}_{subset}_bs{test_batch_size}.pth'
+    print(f'test_batch saved in "{path}"')
+    torch.save({
+        'test_batch': test_batch
+    }, path)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default="glue", type=str)
-    parser.add_argument('--subset', default="mnli", type=str)
-    parser.add_argument('--for-eval', action='store_true') # default=false -> default train
-    parser.add_argument('--test-batch-size', default=1, type=int)
-    parser.add_argument('--base-model-type', default='bert', type=str)
-
-    args = parser.parse_args()
-
-    dataset = args.dataset
-    subset = args.subset
-    for_eval = args.for_eval
-    test_batch_size = args.test_batch_size
-    base_model_type = args.base_model_type
-
-    if not for_eval:
-        assert test_batch_size == 1
-
-    make_test_batch(base_model_type, dataset, subset, test_batch_size)
-
-
+def load_test_batch(dataset:str, subset:str, test_batch_size:int):
+    path = f'./saves/dataset/test_batch/{dataset}_{subset}_bs{test_batch_size}.pth'
+    state = torch.load(path, map_location='cpu')
+    print(f'test_batch load "{path}"')
+    test_batch = state['test_batch']
+    del state
+    return test_batch
