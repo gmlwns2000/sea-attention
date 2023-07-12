@@ -53,7 +53,7 @@ from transformers.utils import (
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
-from . import hf_bert as berts
+from .. import hf_bert as berts
 
 
 logger = logging.get_logger(__name__)
