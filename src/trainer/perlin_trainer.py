@@ -56,9 +56,9 @@ class BaseTrainer:
             attention_predictor_comp_patch_size = 16,
             attention_predictor_comp_patch_count = 16,
             layerwise = perlin_layerwise,
-            lora_r = 32,
+            lora_r = 16,
             lora_enabed = perlin_lora,
-            lora_in_approx_enabled = True,
+            lora_in_approx_enabled = False,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -192,7 +192,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
 def add_perlin_model_options(parser):
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
-    parser.add_argument('--disable-lora', action='store_true', default=False)
+    parser.add_argument('--enable-lora', action='store_true', default=False)
     parser.add_argument('--k', default=7, type=int)
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
@@ -210,7 +210,8 @@ def parse_perlin_model_options(args):
         'attention_method':args.method,
         'perlin_k_flatten':not args.k_colwise,
         'perlin_layerwise':args.layerwise,
-        'perlin_lora':not args.disable_lora,
+        # 'perlin_lora':not args.disable_lora,
+        'perlin_lora':args.enable_lora,
         'perlin_attention_predictor_method':args.attention_predictor_method,
         'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
         'perlin_random_lookup': args.random_lookup,
