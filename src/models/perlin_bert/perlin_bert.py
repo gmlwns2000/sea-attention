@@ -53,7 +53,7 @@ from transformers.utils import (
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
-from . import hf_bert as berts
+from .. import hf_bert as berts
 
 
 logger = logging.get_logger(__name__)
@@ -270,16 +270,19 @@ def lora_forward(linear: nn.Linear, lora: LoraLinear, x: torch.Tensor, enabled: 
 
 # split for save memory
 def lora_forward_linear(linear: nn.Linear, x: torch.Tensor):
-    return F.linear(x, linear.weight)
+    return F.linear(x, linear.weight, linear.bias)
 
 def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinear, x: torch.Tensor, enabled: bool):
     if not enabled:
-        assert linear.bias.ndim == 1
-        assert linear_x.ndim == 3
-        if linear.bias is not None:
-            return linear_x + linear.bias.view(1, 1, linear.bias.shape[0])
         return linear_x
+        # assert linear.bias.ndim == 1
+        # assert linear_x.ndim == 3
+        # if linear.bias is not None:
+        #     return linear_x + linear.bias.view(1, 1, linear.bias.shape[0])
+        # return linear_x
     
+    if linear.bias is not None:
+        linear_x = linear_x - linear.bias.view(1, 1, linear.bias.shape[0])
     lora_x = lora(x)
     x = lora_x + linear_x
     if linear.bias is not None:
@@ -291,18 +294,18 @@ def kl_div_attention(input: torch.Tensor, target: torch.Tensor, attention_mask: 
     assert attention_mask.ndim == 4
     
     N, H, T, T = input.shape
-    breakpoint()
+    
     if not log_target: # default
         loss_pointwise = target * ((target + 1e-12).log() - input)
     else:
         loss_pointwise = target.exp() * (target - input)
-    breakpoint()
+    
     one_mask = mask = (attention_mask > -1) * 1.0
     mask = mask * mask.transpose(-1, -2)
-    breakpoint()
+    
     loss_pointwise = loss_pointwise * mask
     loss = loss_pointwise.sum() / (one_mask[:, :, 0, :].sum() + 1e-8)
-    breakpoint()
+    
     return loss
 
 from performer_pytorch import FastAttention
@@ -399,11 +402,13 @@ class BertSelfAttention(nn.Module):
 
         self.is_decoder = config.is_decoder
         
-        breakpoint()
+        
         ### Perlin
         #- configs
+        self.benchmarking = False
         self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
         self.perlin_k_flatten = True
+        self.perlin_topk_type = 'relwise'
         self.perlin_k = 7
         self.last_loss = None
         self.perlin_layerwise = False
@@ -411,8 +416,20 @@ class BertSelfAttention(nn.Module):
         self.perlin_lora_enabled = False
         self.perlin_lora_in_approx_enabled = True #TODO: Try False
         self.perlin_random_lookup = False
+        self.perlin_random_lookup_count = 3
+        self.perlin_token_merging = False
+        self.perlin_token_merging_preserve_ratio = 0.2
+        self.perlin_token_merging_ratio = 0.5
+        self.perlin_token_merging_score_source = 'probs'
+        # for temperary buffer
+        self.perlin_token_merging_key_layer = None
+        self.perlin_token_merging_attention_probs = None
         
         #- intermediate buffers
+        self.last_attention_probs = None
+        self.last_perlin_estimated_probs = None
+        self.last_perlin_dense_probs = None
+        self.last_perlin_partial_probs = None
         self.teacher_attention_prob = None
         self.teacher_attention_score = None
         self.teacher_context_layer = None
@@ -439,7 +456,8 @@ class BertSelfAttention(nn.Module):
         self.perlin_performer = FastAttention(
             dim_heads = self.attention_head_size,
             nb_features = self.perlin_performer_nb_features,
-            causal=False
+            causal=False,
+            # no_projection=True,
         )
         self.perlin_performer_proj_updater = ProjectionUpdater(
             self.perlin_performer, 
@@ -540,25 +558,25 @@ class BertSelfAttention(nn.Module):
 
     def forward_performer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         N, H, T, HID = q.shape
-        breakpoint()
+        
         v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
-        breakpoint()
+        
         
         # self.perlin_performer_proj_updater.redraw_projections(q.device)
         performer_context_layer = self.perlin_performer(q, k, v)
-        breakpoint()
+        
         attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
-        breakpoint()
+        
         
         performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-        breakpoint()
+        
         new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-        breakpoint()
+        
         performer_context_layer = performer_context_layer.view(new_context_layer_shape)
-        breakpoint()
+        
         
         context_layer = performer_context_layer
-        breakpoint()
+        
         
         return context_layer, attention_probs
 
@@ -630,11 +648,13 @@ class BertSelfAttention(nn.Module):
         past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
         output_attentions: Optional[bool] = False,
     ) -> Tuple[torch.Tensor]:
+        self.perlin_token_merging_attention_mask = attention_mask
+        
         if self.perlin_layerwise:
             hidden_states = hidden_states.detach()
             if encoder_hidden_states is not None:
                 encoder_hidden_states = encoder_hidden_states.detach()
-        breakpoint()
+        
         # if self.training and self.perlin_layerwise:
         #     hidden_states_std, hidden_states_mean = torch.std_mean(hidden_states.view(-1))
         #     noise = torch.randn_like(hidden_states) * hidden_states_std * 0.1
@@ -680,32 +700,36 @@ class BertSelfAttention(nn.Module):
             #     lora_forward(self.value, self.perlin_value_lora_for_approx_atten, hidden_states, True))
             t_key_layer = lora_forward_linear(self.key, hidden_states) # [16, 203, 768] <- Linear(in_features=768, out_features=768, bias=True), [16, 203, 768]
             key_layer = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled)) # [16, 12, 203, 64]
-            key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
-            key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
-                self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
-            t_value_layer = lora_forward_linear(self.value, hidden_states) # [16, 203, 768]
+                self.key, t_key_layer, self.perlin_key_lora, hidden_states, self.perlin_lora_enabled))
+            if self.attention_method in ['perlin']:
+                key_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                    self.key, t_key_layer, self.perlin_key_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+                key_layer_for_score = self.transpose_for_scores(lora_forward_lora(
+                    self.key, t_key_layer, self.perlin_key_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled))
+            t_value_layer = lora_forward_linear(self.value, hidden_states)
             value_layer = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled)) # [16, 12, 203, 64]
-            value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
-                self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)) # [16, 12, 203, 64]
-        breakpoint()
+                self.value, t_value_layer, self.perlin_value_lora, hidden_states, self.perlin_lora_enabled))
+            if self.attention_method in ['perlin']:
+                value_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
+                    self.value, t_value_layer, self.perlin_value_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled))
+
         # mixed_query_layer = lora_forward(self.query, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
         # mixed_query_layer_for_atten = lora_forward(self.query, self.perlin_query_lora_for_approx_atten, hidden_states, True)
         # mixed_query_layer_for_score = lora_forward(self.query, self.perlin_query_lora_for_approx_score, hidden_states, True)
         t_mixed_query_layer = lora_forward_linear(self.query, hidden_states) # [16, 203, 768] all below
         mixed_query_layer = lora_forward_lora(
             self.query, t_mixed_query_layer, self.perlin_query_lora, hidden_states, self.perlin_lora_enabled)
-        mixed_query_layer_for_atten = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
-        mixed_query_layer_for_score = lora_forward_lora(
-            self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
-        breakpoint()
-        query_layer = self.transpose_for_scores(mixed_query_layer) # [16, 12, 203, 64]
-        query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten) # [16, 12, 203, 64]
-        query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score) # [16, 12, 203, 64]
-        breakpoint()
+        query_layer = self.transpose_for_scores(mixed_query_layer)
+        if self.attention_method in ['perlin']:
+            mixed_query_layer_for_atten = lora_forward_lora(
+                self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_atten, hidden_states, self.perlin_lora_in_approx_enabled)
+            query_layer_for_atten = self.transpose_for_scores(mixed_query_layer_for_atten)
+            mixed_query_layer_for_score = lora_forward_lora(
+                self.query, t_mixed_query_layer, self.perlin_query_lora_for_approx_score, hidden_states, self.perlin_lora_in_approx_enabled)
+            query_layer_for_score = self.transpose_for_scores(mixed_query_layer_for_score)
+        
+        self.perlin_token_merging_key_layer = key_layer
+        
         # if perlin, overwrite attention_probs, context_layer
         if self.attention_method == 'perlin':
             attention_scores_truth = self.teacher_attention_score
@@ -721,56 +745,65 @@ class BertSelfAttention(nn.Module):
             v = value_layer
             v_for_atten = value_layer_for_atten
             N, H, T, HID = q.shape
-            breakpoint()
-            # leaving only 
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # [16, 12, 203, 64] <- [16, 12, 203, 64] * [16, 1, 203, 1] (: [16, 1, 1, 203], [16, 1, 203, 1])
-            breakpoint()
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            v_for_atten = v_for_atten * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             if self.perlin_layerwise:
                 attention_scores_truth = attention_scores_truth.detach()
                 attention_probs_truth = attention_probs_truth.detach()
                 context_layer_truth = context_layer_truth.detach()
             
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
-            with torch.autocast('cuda', torch.float32):
-                q_type = q.dtype
-                performer_context_layer = self.perlin_performer(q_for_atten.float(), k_for_atten.float(), v_for_atten.float())
-                performer_context_layer = performer_context_layer.to(q_type) # [16, 12, 203, 64]
-            breakpoint()
+            if not self.benchmarking:
+                with torch.autocast('cuda', torch.float32):
+                    q_type = q_for_atten.dtype
+                    if q_type != torch.float32:
+                        _q_for_atten = q_for_atten.float()
+                        _k_for_atten = k_for_atten.float()
+                        _v_for_atten = v_for_atten.float()
+                    else:
+                        _q_for_atten = q_for_atten
+                        _k_for_atten = k_for_atten
+                        _v_for_atten = v_for_atten
+                    performer_context_layer = self.perlin_performer(_q_for_atten, _k_for_atten, _v_for_atten)
+                    if q_type != performer_context_layer.dtype:
+                        performer_context_layer = performer_context_layer.to(q_type)
+            else:
+                performer_context_layer = self.perlin_performer(q_for_atten, k_for_atten, v_for_atten)
             performer_value = torch.cat([performer_context_layer, v], dim=-1)
-            breakpoint()
+            
             N, H, T, HID = performer_value.shape # [16, 12, 203, 128]
-            breakpoint()
+            
             # (N, H, T, P)
             
             # estimate attention scores
             if self.perlin_attention_predictor_method == 'mlp':
-                breakpoint()
+                
                 t_attention_predictor = self.perlin_attention_predictor_enc(performer_value.permute(0, 2, 1, 3).reshape(N, T, H*HID))
                 estimated_attention_score = self.perlin_attention_predictor_dec_row(t_attention_predictor)\
                     .view(N, T, H, -1).permute(0, 2, 1, 3)
-                breakpoint()
+                
             elif self.perlin_attention_predictor_method == 'comp':
                 warnings.warn('attention prediction method is compressed one.')
-                breakpoint()
+                
                 t_attention_predictor = self.perlin_attention_predictor_comp_enc(performer_value.permute(0, 2, 1, 3).reshape(N, T, H*HID))
-                breakpoint()
+                
                 estimated_attention_score = self.perlin_attention_predictor_comp_dec_row(t_attention_predictor)\
                     .view(N, T, H, -1).permute(0, 2, 1, 3)
-                breakpoint()
+                
                 estimated_attention_score = estimated_attention_score\
                     .view(N, H, T, self.perlin_attention_predictor_comp_patch_count, self.perlin_attention_perdictor_comp_book_size)
-                breakpoint()
+                
                 _, _, _, CODE_SEQ_LEN, BOOK_LEN = estimated_attention_score.shape
-                breakpoint()
+                
                 estimated_attention_score = torch.softmax(estimated_attention_score, dim = -1)
-                breakpoint()
+                
                 estimated_attention_score = torch.matmul(
                     estimated_attention_score.view(-1, BOOK_LEN), 
                     self.perlin_attention_predictor_comp_codebook
                 )
-                breakpoint()
+                
                 estimated_attention_score = estimated_attention_score.view(N, H, T, -1)
-                breakpoint()
+                
             else:
                 raise Exception()
             
@@ -783,33 +816,39 @@ class BertSelfAttention(nn.Module):
                 estimated_attention_score = F.interpolate(estimated_attention_score, (T, T), mode=interp_mode)
             if estimated_attention_score.dtype != original_dtype:
                 estimated_attention_score = estimated_attention_score.to(original_dtype)
-            breakpoint()
+            
             estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
-            breakpoint()
+            self.last_perlin_estimated_probs = estimated_attention_probs
+            
             # in layerwise, train perlin attention predictor
-            with torch.autocast('cuda', torch.float32):
-                loss = kl_div_attention(
-                    F.log_softmax(estimated_attention_score, dim=-1),
-                    F.softmax(attention_scores_truth, dim=-1),
-                    attention_mask,
-                ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
-            breakpoint()
+            if not self.benchmarking:
+                with torch.autocast('cuda', torch.float32):
+                    loss = kl_div_attention(
+                        F.log_softmax(estimated_attention_score, dim=-1),
+                        F.softmax(attention_scores_truth, dim=-1),
+                        attention_mask,
+                    ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
+            else:
+                loss = 0
+            
             # Take the dot product between "query" and "key" to get the raw attention scores.
             attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
-            breakpoint()
+            
             if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
                 raise Exception()
             attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
-            breakpoint()
+            
             if attention_mask is not None:
                 # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
                 attention_scores_dense = attention_scores_dense + attention_mask
-            loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
-            breakpoint()
-            k = min(max(int(self.perlin_k), int(T*0.01)), int(T * 1.0))
-            breakpoint()
+            if not self.benchmarking:
+                loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+                self.last_perlin_dense_probs = torch.softmax(attention_scores_dense, dim=-1)
+            
+            k = min(max(int(self.perlin_k), 1), T)
             k_flatten = self.perlin_k_flatten
+            topk_type = self.perlin_topk_type
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
@@ -818,131 +857,147 @@ class BertSelfAttention(nn.Module):
                 # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
                 partial_attention_scores = attention_scores_dense
-                breakpoint()
+                
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                breakpoint()
+                
                 partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
-                breakpoint()
+                
                 partial_attention_scores.scatter_(
-                    -1, indices, partial_attention_scores_gathered
+                    dim=-1, index=indices, src=partial_attention_scores_gathered
                 )
-                breakpoint()
+                
             else:
-                # (N, H, T, T)
-                partial_attention_scores = attention_scores_dense
-                breakpoint()
-                N, H, T, T = partial_attention_scores.shape
-                breakpoint()
-                partial_attention_scores = partial_attention_scores.view(N, H, T*T)
-                value, indices = torch.topk(
-                    estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
-                    k=k*T, dim=-1
-                )
-                breakpoint()
-                # warnings.warn(f'topk({k*T}/{T*T})')
-                partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                breakpoint()
-                partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
-                breakpoint()
-                partial_attention_scores.scatter_(
-                    -1, indices, partial_attention_scores_gathered
-                )
-                breakpoint()
-                partial_attention_scores = partial_attention_scores.view(N, H, T, T)
-                breakpoint()
-            breakpoint()
+                if topk_type == 'relwise':
+                    # (N, H, T, T)
+                    partial_attention_scores = attention_scores_dense
+                    N, H, T, T = partial_attention_scores.shape
+                    partial_attention_scores = partial_attention_scores.view(N, H, T*T)
+                    value, indices = torch.topk(
+                        estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
+                        k=k*T, dim=-1
+                    )
+                    # warnings.warn(f'topk({k*T}/{T*T})')
+                    partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
+                    partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
+                    partial_attention_scores.scatter_(
+                        dim=-1, index=indices, src=partial_attention_scores_gathered
+                    )
+                    partial_attention_scores = partial_attention_scores.view(N, H, T, T)
+                elif topk_type == "headswise":
+                    # (N, H, T, T)
+                    partial_attention_scores = attention_scores_dense
+                    N, H, T, T = partial_attention_scores.shape
+                    partial_attention_scores = partial_attention_scores.view(N, H*T*T)
+                    value, indices = torch.topk(
+                        estimated_attention_probs.view(N, H*T*T), # estimation gradient is cut here
+                        k=k*H*T, dim=-1
+                    )
+                    # warnings.warn(f'topk({k*T}/{T*T})')
+                    partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
+                    partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
+                    partial_attention_scores.scatter_(
+                        dim=-1, index=indices, src=partial_attention_scores_gathered
+                    )
+                    partial_attention_scores = partial_attention_scores.view(N, H, T, T)
+            
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
-            breakpoint()
-            estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3)
-            breakpoint()
-            partial_attention_probs = torch.softmax(partial_attention_scores, -1)
-            breakpoint()
-            partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
-            breakpoint()
+            estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3) # [N, H, T, 1]
+
+            partial_attention_probs = torch.softmax(partial_attention_scores, -1) # (N, H, T, T)
+
+            partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale) # 
+
+            self.last_perlin_partial_probs = partial_attention_probs # [N, H, T, T]
             
-            partial_context_layer = torch.matmul(partial_attention_probs, v)
-            breakpoint()
+            partial_context_layer = torch.matmul(partial_attention_probs, v) # [N, H, T, HID]
+
             
             if self.perlin_random_lookup:
                 # lookup randomly that not looked up by partial context
-                num_lookups = 3
+                num_lookups = self.perlin_random_lookup_count
                 lookups = None
                 estimated_attention_probs_masked = estimated_attention_probs * (attention_mask > -1) * (partial_attention_scores > -9999)
-                breakpoint()
+                
                 for n in range(num_lookups):
                     token_length = (attention_mask.view(N, T) > -1).float().sum(dim=-1).view(N, 1, 1, 1)
-                    breakpoint()
+                    
                     # N, H, T, HID
                     random_context_index = torch.rand_like(partial_context_layer)
-                    breakpoint()
+                    
                     random_context_index = (random_context_index * (1 - 1/T) * token_length).floor().long()
-                    breakpoint()
+                    
 
                     random_context_layer = v.gather(dim=-2, index=random_context_index)
-                    breakpoint()
+                    
                     random_context_weight = estimated_attention_probs_masked.gather(dim=-1, index=random_context_index)
-                    breakpoint()
+                    
                     random_context_layer = random_context_weight * random_context_layer
-                    breakpoint()
+                    
                     if lookups is None:
                         lookups = random_context_layer
                     else:
                         lookups = lookups + random_context_layer
                 
                 random_context_layer = random_context_layer.permute(0, 2, 1, 3).contiguous()
-                breakpoint()
+                
                 new_context_layer_shape = random_context_layer.size()[:-2] + (self.all_head_size,)
-                breakpoint()
+                
                 random_context_layer = random_context_layer.view(new_context_layer_shape)
-                breakpoint()
+                
 
-            partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
-            breakpoint()
-            new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
-            breakpoint()
-            partial_context_layer = partial_context_layer.view(new_context_layer_shape)
-            breakpoint()
+            partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous() # (N, T, H, HID)
+
+            new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,) # [N, T, HID:768]
+
+            partial_context_layer = partial_context_layer.view(new_context_layer_shape) # (N, T, HID:768)
+
             performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-            breakpoint()
+
             new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
-            breakpoint()
+
             performer_context_layer = performer_context_layer.view(new_context_layer_shape)
-            breakpoint()
+
             
             if not self.perlin_random_lookup:
                 partial_context_layer = self.perlin_out(torch.cat([
                     partial_context_layer, 
                     performer_context_layer
                 ], dim=-1)) + partial_context_layer
-                breakpoint()
+                
             else:
                 partial_context_layer = self.perlin_out_random_lookup(torch.cat([
                     partial_context_layer, 
                     performer_context_layer,
                     random_context_layer,
                 ], dim=-1)) + partial_context_layer
-                breakpoint()
+                
             partial_context_layer = self.perlin_norm(partial_context_layer)
-            breakpoint()
+            
             
             # in layerwise train only norm
-            loss += F.mse_loss(context_layer_truth, partial_context_layer)
+            if not self.benchmarking:
+                loss += F.mse_loss(context_layer_truth, partial_context_layer)
             self.last_loss = loss
-            breakpoint()
+            
             
             attention_probs = partial_attention_probs
             context_layer = partial_context_layer
+            self.perlin_token_merging_key_layer = k_for_score
+            self.perlin_token_merging_attention_probs = estimated_attention_probs
             if self.perlin_layerwise:
                 attention_probs = attention_probs.detach()
                 context_layer = context_layer.detach()
-            breakpoint()
+            
         elif self.attention_method == 'performer':
             q = query_layer
             k = key_layer
             v = value_layer
             
             context_layer, attention_probs = self.forward_performer(q, k, v, attention_mask)
+            
+            self.perlin_token_merging_key_layer = k
+            self.perlin_token_merging_attention_probs = None
             
             self.last_loss = 0
         elif self.attention_method == 'synthesizer':
@@ -1084,9 +1139,14 @@ class BertSelfAttention(nn.Module):
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
             context_layer = context_layer.view(new_context_layer_shape)
             
+            self.perlin_token_merging_key_layer = key_layer
+            self.perlin_token_merging_attention_probs = attention_probs
+            
             self.last_loss = 0
         else:
             raise Exception(self.attention_method)
+
+        self.last_attention_probs = attention_probs
 
         outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
 
@@ -1094,6 +1154,151 @@ class BertSelfAttention(nn.Module):
             outputs = outputs + (past_key_value,)
         return outputs
 
+class TokenMergingStart():
+    def __init__(self, parent_attention: BertSelfAttention):
+        self.parent = parent_attention
+    
+    def __call__(self, x): return self.forward(x)
+    
+    def forward(self, x:torch.Tensor):
+        if not self.parent.perlin_token_merging: return x
+        
+        N, T, H = x.shape
+        if self.parent.perlin_token_merging_score_source == 'probs':
+            probs = self.parent.perlin_token_merging_attention_probs
+        elif self.parent.perlin_token_merging_score_source == 'key':
+            k = self.parent.perlin_token_merging_key_layer
+            probs = torch.matmul(k, k.transpose(-1, -2))
+        else:
+            raise Exception(self.parent.perlin_token_merging_score_source)
+        probs = probs.mean(1)
+        assert probs.shape == (N, T, T)
+        sig = probs.mean(1)
+        assert sig.shape == (N, T)
+        N_CLS = 1
+        assert T > 2
+        N_PRESERVE = round((T-1)*self.parent.perlin_token_merging_preserve_ratio)
+        N_TOME = T - N_CLS - N_PRESERVE
+        # if (N_TOME % 2) != 0:
+        #     N_PRESERVE += N_TOME % 2
+        #     N_TOME -= N_TOME % 2
+        
+        if N_TOME > 0:
+            x_cls = x[:, :N_CLS, :]
+            x_tokens = x[:, N_CLS:, :]
+            
+            sig_tokens = sig[:, N_CLS:]
+            _, sig_tokens_sorted_indices = torch.sort(sig_tokens, dim=-1, descending=True)
+            x_tokens_sorted = x_tokens.gather(dim=1, index = sig_tokens_sorted_indices.view(N, T-N_CLS, 1).expand(N, T-N_CLS, H))
+            
+            x_tokens_preserve = x_tokens_sorted[:, :N_PRESERVE, :]
+            x_tokens_tome = x_tokens_sorted[:, N_PRESERVE:, :]
+            assert x_tokens_tome.shape == (N, N_TOME, H)
+            T_TOK = T-N_CLS
+            sim = probs[:, N_CLS:, N_CLS:].gather(dim=1, index=sig_tokens_sorted_indices.view(N, T_TOK, 1).expand(N, T_TOK, T_TOK))
+            sim = sim.gather(dim=2, index=sig_tokens_sorted_indices.view(N, 1, T_TOK).expand(N, T_TOK, T_TOK))
+            sim = sim[:, N_PRESERVE:, N_PRESERVE:]
+            x_tokens_tome, x_tokens_tome_state = self.token_merging(x_tokens_tome, sim)
+            
+            self.last_tome_state = x_tokens_tome_state
+            self.last_token_index = sig_tokens_sorted_indices
+            
+            x = torch.cat([x_cls, x_tokens_preserve, x_tokens_tome], dim=1)
+        else:
+            raise Exception()
+        
+        return x
+    
+    def token_merging(self, x: torch.Tensor, sim: torch.Tensor):
+        N, T, H = x.shape
+        assert sim.shape == (N, T, T)
+        # assert (T % 2) == 0
+        # print('tome merge x', x.shape)
+        
+        N_SRC = math.floor(self.parent.perlin_token_merging_ratio * T) # num of merged out
+        N_DST = max(1, T - N_SRC)
+        N_SRC = T - N_DST
+        if N_SRC == 0: return x, (None, N_SRC, N_DST)
+        assert N_SRC > 0
+        
+        src = x[:, :N_SRC, :]
+        dst = x[:, N_SRC:, :]
+        
+        scores = sim[:, :N_SRC, N_SRC:] + sim[:, N_SRC:, :N_SRC].transpose(-1, -2)
+        
+        _, node_idx = scores.max(dim=-1, keepdim=True)
+        #TODO weighted sum
+        dst = dst.scatter_reduce(
+            dim=1, 
+            index=node_idx.expand(N, N_SRC, H), 
+            src=src, 
+            reduce='mean'
+        )
+        
+        # print('tome merge NSRC, NDST, x->dst.shape', N_SRC, N_DST, x.shape, dst.shape)
+        
+        return dst, (node_idx, N_SRC, N_DST)
+    
+class TokenMergingEnd():
+    def __init__(self, start_block: TokenMergingStart):
+        self.start_block = start_block
+        self.parent = self.start_block.parent
+        
+    def __call__(self, x): return self.forward(x)
+    
+    def forward(self, x:torch.Tensor):
+        if not self.parent.perlin_token_merging: return x
+
+        N_CLS = 1
+        T = self.start_block.last_token_index.shape[1] + N_CLS
+        N, T1, H = x.shape
+        assert T > 2
+        N_PRESERVE = round((T-1)*self.parent.perlin_token_merging_preserve_ratio)
+        N_TOME = T - N_CLS - N_PRESERVE
+        # if (N_TOME % 2) != 0:
+        #     N_PRESERVE += N_TOME % 2
+        #     N_TOME -= N_TOME % 2
+        # print('npre ntome', N_PRESERVE, N_TOME)
+        
+        if N_TOME > 0:
+            x_cls = x[:, :N_CLS, :]
+            x_tokens_sorted = x[:, N_CLS:, :]
+            
+            x_tokens_preserve = x_tokens_sorted[:, :N_PRESERVE, :]
+            x_tokens_tome = x_tokens_sorted[:, N_PRESERVE:, :]
+            # assert x_tokens_tome.shape == (N, N_TOME, H), x_tokens_tome.shape
+            # tome_indices = sig_tokens_sorted_indices[:, N_PRESERVE:] - N_PRESERVE
+            x_token_tome_state = self.start_block.last_tome_state
+            x_tokens_tome = self.token_unmerging(x_tokens_tome, x_token_tome_state)
+            
+            x_tokens_sorted = torch.cat([x_tokens_preserve, x_tokens_tome], dim=1)
+            x_tokens = torch.empty_like(x_tokens_sorted)
+            sig_tokens_sorted_indices = self.start_block.last_token_index
+            x_tokens.scatter_(dim=1, index=sig_tokens_sorted_indices.view(N, T-N_CLS, 1).expand(N, T-N_CLS, H), src=x_tokens_sorted)
+            
+            x = torch.cat([x_cls, x_tokens], dim=1)
+        else:
+            raise Exception()
+        
+        assert x.shape[1] == T, x.shape
+        
+        return x
+
+    def token_unmerging(self, x: torch.Tensor, tome_state):
+        node_idx, N_SRC, N_DST = tome_state
+        if N_SRC == 0:
+            return x
+        # print('tome unmerge x', x.shape)
+        N, T1, H = x.shape
+        T = N_SRC + N_DST
+        # print('t t1 unmidx srcidx dstidx', T, T1, N_SRC, N_DST)
+        T1 = T // 2
+        
+        dst = x
+        src = torch.gather(dst, dim=1, index=node_idx.expand(N, N_SRC, H))
+        out = torch.cat([src, dst], dim=1)
+        
+        return out
 
 class BertSelfOutput(nn.Module):
     def __init__(self, config):
@@ -1166,8 +1371,11 @@ class BertIntermediate(nn.Module):
             self.intermediate_act_fn = ACT2FN[config.hidden_act]
         else:
             self.intermediate_act_fn = config.hidden_act
+        self.token_merging_start = None
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        if self.token_merging_start is not None:
+            hidden_states = self.token_merging_start(hidden_states)
         hidden_states = self.dense(hidden_states)
         hidden_states = self.intermediate_act_fn(hidden_states)
         return hidden_states
@@ -1179,11 +1387,15 @@ class BertOutput(nn.Module):
         self.dense = nn.Linear(config.intermediate_size, config.hidden_size)
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.token_merging_end = None
 
     def forward(self, hidden_states: torch.Tensor, input_tensor: torch.Tensor) -> torch.Tensor:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
-        hidden_states = self.LayerNorm(hidden_states + input_tensor)
+        if self.token_merging_end is not None:
+            hidden_states = self.token_merging_end(hidden_states)
+        hidden_states = hidden_states + input_tensor
+        hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
 
@@ -1201,6 +1413,11 @@ class BertLayer(nn.Module):
             self.crossattention = BertAttention(config, position_embedding_type="absolute")
         self.intermediate = BertIntermediate(config)
         self.output = BertOutput(config)
+        
+        start = TokenMergingStart(self.attention.self)
+        end = TokenMergingEnd(start)
+        self.intermediate.token_merging_start = start
+        self.output.token_merging_end = end
 
     def forward(
         self,

@@ -19,6 +19,11 @@ class BaseTrainer:
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
         perlin_random_lookup = False,
+        perlin_random_lookup_count = 3,
+        perlin_token_merging = False,
+        perlin_token_merging_preserve = 0.2,
+        perlin_token_merging_ratio = 0.5,
+        perlin_topk_type = 'relwise',
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -29,7 +34,12 @@ class BaseTrainer:
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
+        self.perlin_random_lookup_count = perlin_random_lookup_count
         perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
+        self.perlin_token_merging = perlin_token_merging
+        self.perlin_token_merging_preserve = perlin_token_merging_preserve
+        self.perlin_token_merging_ratio = perlin_token_merging_ratio
+        self.perlin_topk_type = perlin_topk_type
     
     def apply_model_options(self, model: nn.Module):
         for module in model.modules():
@@ -39,6 +49,11 @@ class BaseTrainer:
                 module.perlin_k = self.perlin_k
                 module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
                 module.perlin_random_lookup = self.perlin_random_lookup
+                module.perlin_random_lookup_count = self.perlin_random_lookup_count
+                module.perlin_token_merging = self.perlin_token_merging
+                module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
+                module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
+                module.perlin_topk_type = self.perlin_topk_type
         
         if self.perlin_layerwise:
             for name, param in model.named_parameters():
@@ -61,11 +76,12 @@ class BaseTrainer:
         name_lora = '_full' if not self.perlin_lora else ''
         name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
-        name_random_lookup = f'_rl' if self.perlin_random_lookup else ''
+        name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
+        name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}'
         return name
 
 class GlueTrainer(BaseGlueTrainer, BaseTrainer):
@@ -132,6 +148,8 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
     ):
         BaseTrainer.__init__(self, **kwargs)
         
+        warnings.warn(f'epochs({kwargs.get("epochs", 20)}) are ignored')
+        
         BaseLraTrainer.__init__(
             self,
             exp_name=self.format_exp(f'lra_{subset}'),
@@ -145,18 +163,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
         
         self.apply_model_options(self.model)
 
-if __name__ == '__main__':
-    import argparse
-    
-    parser = argparse.ArgumentParser()
-    
-    parser.add_argument('--dataset', default='glue', type=str)
-    parser.add_argument('--subset', default=None, type=str)
-    
-    parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
-    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
-    parser.add_argument('--disable-amp', action='store_true', default=False)
-    
+def add_perlin_model_options(parser):
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
     parser.add_argument('--disable-lora', action='store_true', default=False)
@@ -165,6 +172,45 @@ if __name__ == '__main__':
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
     parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
     parser.add_argument('--random-lookup', action='store_true', default=False)
+    parser.add_argument('--random-lookup-count', default=3, type=int)
+    parser.add_argument('--token-merging', action='store_true', default=False)
+    parser.add_argument('--token-merging-preserve', default=0.2, type=float)
+    parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    parser.add_argument('--topk-type', default = "relwise", type=str)
+    return parser
+
+def parse_perlin_model_options(args):
+    kwargs = {
+        'perlin_k':args.k,
+        'attention_method':args.method,
+        'perlin_k_flatten':not args.k_colwise,
+        'perlin_layerwise':args.layerwise,
+        'perlin_lora':not args.disable_lora,
+        'perlin_attention_predictor_method':args.attention_predictor_method,
+        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
+        'perlin_random_lookup': args.random_lookup,
+        'perlin_random_lookup_count': args.random_lookup_count,
+        'perlin_token_merging': args.token_merging,
+        'perlin_token_merging_preserve': args.token_merging_preserve,
+        'perlin_token_merging_ratio': args.token_merging_ratio,
+        'perlin_topk_type' : args.topk_type 
+    }
+    return kwargs
+
+if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument('--dataset', default='glue', type=str)
+    parser.add_argument('--subset', default=None, type=str)
+    parser.add_argument('--epochs', default=None, type=int)
+    
+    parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
+    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
+    parser.add_argument('--disable-amp', action='store_true', default=False)
+    
+    add_perlin_model_options(parser)
     
     args = parser.parse_args()
     
@@ -180,18 +226,12 @@ if __name__ == '__main__':
     
     kwargs = {
         'subset':args.subset,
-        'perlin_k':args.k,
-        'attention_method':args.method,
-        'perlin_k_flatten':not args.k_colwise,
-        'perlin_layerwise':args.layerwise,
-        'perlin_lora':not args.disable_lora,
-        'perlin_attention_predictor_method':args.attention_predictor_method,
-        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
-        'perlin_random_lookup': args.random_lookup,
+        'epochs': args.epochs,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,
     }
+    kwargs.update(parse_perlin_model_options(args))
     
     if args.dataset == 'glue':
         trainer = GlueTrainer(**kwargs)
