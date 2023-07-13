@@ -408,6 +408,24 @@ class PerlinAttention(nn.Module):
                     #         att_mask=sparse_mask
                     #     )
                     # partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
+                    
+                    # N, H, T, HEAD_H = q_for_score.shape
+                    # with timer("attention.coo"):
+                    #     sparse_attention_mask = partial_attention_mask.view(N*H, T, T).to_sparse_coo()
+                    # from .masked_mm import sparse_attn
+                    # with timer("attention.sparse"):
+                    #     partial_attention_scores = sparse_attn(
+                    #         q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                    #         k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                    #         sparse_attention_mask
+                    #     )
+                    # with timer("attention.sparse_softmax"):
+                    #     partial_attention_probs = torch.sparse.softmax(
+                    #         partial_attention_scores, dim=2
+                    #     )
+                    # with timer("attention.bmm"):
+                    #     partial_context_layer = torch.bmm(partial_attention_probs, v.view(N*H, T, HEAD_H))
+                    #     partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
             
             if self.pconfig.random_lookup:
                 # lookup randomly that not looked up by partial context
