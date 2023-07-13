@@ -24,7 +24,7 @@ class BaseTrainer:
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
         perlin_topk_type = 'relwise',
-        perlin_pad_attention = False,
+        perlin_diagonal_attn_mask = 0,
         # perlin_redraw_proj = True
         **kwargs
     ) -> None:
@@ -42,7 +42,7 @@ class BaseTrainer:
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
         self.perlin_topk_type = perlin_topk_type
-        self.perlin_pad_attention = perlin_pad_attention
+        self.perlin_diagonal_attn_mask = perlin_diagonal_attn_mask
         # self.perlin_redraw_proj = perlin_redraw_proj
     
     def apply_model_options(self, model: nn.Module):
@@ -58,7 +58,7 @@ class BaseTrainer:
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
                 module.perlin_topk_type = self.perlin_topk_type
-                module.perlin_pad_attention = self.perlin_pad_attention
+                module.perlin_diagonal_attn_mask = self.perlin_diagonal_attn_mask
         
         if self.perlin_layerwise:
             for name, param in model.named_parameters():
@@ -84,13 +84,13 @@ class BaseTrainer:
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_topk_type = f'_topk_type({self.perlin_topk_type})' if self.perlin_topk_type!='relwise' and self.perlin_k_flatten else ''
-        name_pad_attention = f'_pad_attn{bool2int(self.perlin_pad_attention)}' if self.perlin_pad_attention else ''
+        name_diagonal_attn_mask = f'_pad_attn{self.perlin_diagonal_attn_mask}' if self.perlin_diagonal_attn_mask else ''
         # name_redraw_proj = f'_redraw_proj{self.perlin_redraw_proj}' if not self.perlin_redraw_proj else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'{name_topk_type}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_pad_attention}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_diagonal_attn_mask}'
         return name
 
 class GlueTrainer(BaseGlueTrainer, BaseTrainer):
@@ -133,7 +133,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             subset=subset,
             model_cls=perlin.BertForSequenceClassification,
             amp_enabled=not disable_amp,
-            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
+            trainer_name= self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
             eval_steps=2000,
@@ -186,7 +186,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--topk-type', default = "relwise", type=str)
-    parser.add_argument('--pad-attention', action='store_true', default=False)
+    parser.add_argument('--diagonal-attn-mask', default=0, type=int)
     # parser.add_argument('--no-redraw-proj', action='store_true', default=False)
 
     return parser
@@ -206,7 +206,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_topk_type' : args.topk_type,
-        'perlin_pad_attention' : args.pad_attention
+        'perlin_diagonal_attn_mask' : args.diagonal_attn_mask
         # 'perlin_redraw_proj' : not args.no_redraw_proj
     }
     return kwargs

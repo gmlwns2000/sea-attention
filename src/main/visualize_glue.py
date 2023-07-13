@@ -105,11 +105,11 @@ def main(
                 'partial_attn': partial_attn,
             })
     
-    os.makedirs(f"./plots/visualize_glue", exist_ok=True)
+    os.makedirs(f"./plots/visualize_glue/{trainer.exp_name}/", exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
         img = process_batch_index(attentions, i, token_length)
-        path = f"./plots/visualize_glue/{i}.png"
+        path = f"./plots/visualize_glue/{trainer.exp_name}/{i}.png"
         cv2.imwrite(path, img)
         print('processed', path)
     

@@ -53,6 +53,8 @@ from transformers.utils import (
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
+from ...utils import raise_if_nan
+
 from .. import hf_bert as berts
 
 
@@ -409,7 +411,7 @@ class BertSelfAttention(nn.Module):
         self.attention_method = 'perlin' # in ['none', 'performer', 'perlin', 'synthesizer', 'sinkhorn']
         self.perlin_k_flatten = True
         self.perlin_topk_type = 'relwise'
-        self.perlin_pad_attention = False
+        self.perlin_diagonal_attn_mask = False
         self.perlin_k = 7
         self.last_loss = None
         self.perlin_layerwise = False
@@ -551,6 +553,9 @@ class BertSelfAttention(nn.Module):
             n_hashes=8,
             return_attn=False,
         )
+
+        ### Longformer
+
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
@@ -818,7 +823,8 @@ class BertSelfAttention(nn.Module):
             if estimated_attention_score.dtype != original_dtype:
                 estimated_attention_score = estimated_attention_score.to(original_dtype)
             
-            estimated_attention_score = estimated_attention_score + attention_mask
+            if attention_mask is not None:
+                estimated_attention_score = estimated_attention_score + attention_mask
             estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             self.last_perlin_estimated_probs = estimated_attention_probs
             
@@ -829,7 +835,8 @@ class BertSelfAttention(nn.Module):
                         F.log_softmax(estimated_attention_score, dim=-1),
                         F.softmax(attention_scores_truth, dim=-1),
                         attention_mask,
-                    ) * 0.1 + F.mse_loss(estimated_attention_score, attention_scores_truth)
+                    ) * 0.1 + F.mse_loss(torch.clamp(estimated_attention_score, min=0), torch.clamp(attention_scores_truth, min=0))
+                    raise_if_nan(loss)
             else:
                 loss = 0
             
@@ -844,12 +851,17 @@ class BertSelfAttention(nn.Module):
                 # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
                 attention_scores_dense = attention_scores_dense + attention_mask
             if not self.benchmarking:
-                loss += F.mse_loss(attention_scores_dense, attention_scores_truth)
+                loss += F.mse_loss(torch.clamp(attention_scores_dense, min=0), torch.clamp(attention_scores_truth,min=0))
                 self.last_perlin_dense_probs = torch.softmax(attention_scores_dense, dim=-1)
+                raise_if_nan(loss)
             
             k = min(max(int(self.perlin_k), 1), T)
             k_flatten = self.perlin_k_flatten
             topk_type = self.perlin_topk_type
+
+            partial_attention_scores = attention_scores_dense
+            if self.perlin_diagonal_attn_mask > 0:
+                partial_attention_scores = partial_attention_scores + attention_mask.permute(0, 1, 3, 2).contiguous() # TODO check  # (N, 1, T, 1)
             if not k_flatten:
                 value, indices = torch.topk(
                     estimated_attention_probs, # estimation gradient is cut here
@@ -857,9 +869,8 @@ class BertSelfAttention(nn.Module):
                 )
                 # warnings.warn(f'topk({k}/{estimated_attention_probs.shape[-1]})')
                 # (N, H, T, T)
-                partial_attention_scores = attention_scores_dense
                 partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)
+                partial_attention_scores = torch.empty_like(attention_scores_truth).fill_(-10000)           
                 partial_attention_scores.scatter_(
                     dim=-1, index=indices, src=partial_attention_scores_gathered
                 )
@@ -867,26 +878,34 @@ class BertSelfAttention(nn.Module):
                 warnings.warn(f'k_flatten {k_flatten}, topk_type {topk_type}')
                 if topk_type == 'relwise':
                     # (N, H, T, T)
-                    partial_attention_scores = attention_scores_dense
                     N, H, T, T = partial_attention_scores.shape
-                    if self.perlin_pad_attention:
-                        warnings.warn(f'pad_attention {self.perlin_pad_attention}')
-                        partial_attention_scores = partial_attention_scores + attention_mask.permute(0, 1, 3, 2).contiguous() # TODO check  # (N, 1, T, 1)
+                    warnings.warn(f'diagonal_attn_mask {self.perlin_diagonal_attn_mask}')
+                    # if self.perlin_diagonal_attn_mask == 2: TODO
+                    #     # stack query using different batch_size
+                    #     partial_attention_scores = partial_attention_scores + attention_mask.permute(0, 1, 3, 2).contiguous() # TODO check  # (N, 1, T, 1)
+                    #     per_batch =[]
+                    #     for b in range(N): # attention_mask [N, 1, 1, T]
+                    #         token_len = torch.sum(attention_mask[b])
+                    #         value, indices = torch.topk(
+                    #             estimated_attention_probs.view(N, H, T*T),
+                    #             k=k*token_len, dim=-1
+                    #         )
+                    #         per_batch.append()
                     partial_attention_scores = partial_attention_scores.view(N, H, T*T)
                     value, indices = torch.topk(
                     estimated_attention_probs.view(N, H, T*T), # estimation gradient is cut here
                     k=k*T, dim=-1
                 ) # TODO how to manage T? <- might scale to be smaller value, or use batch_size
                     # warnings.warn(f'topk({k*T}/{T*T})')
-                    partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices)
-                    partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000)
+                    # indices [16, 12, 1421(k*T)] 
+                    partial_attention_scores_gathered = partial_attention_scores.gather(-1, indices) # [16, 12, 1421(k*T)]
+                    partial_attention_scores = torch.empty_like(partial_attention_scores).fill_(-10000) # [16, 12, 41209(T*T)]
                     partial_attention_scores.scatter_(
-                        dim=-1, index=indices, src=partial_attention_scores_gathered
+                        dim=-1, index=indices, src=partial_attention_scores_gathered # [16, 12, 41209]
                     )
-                    partial_attention_scores = partial_attention_scores.view(N, H, T, T)
+                    partial_attention_scores = partial_attention_scores.view(N, H, T, T) # [N, H, T, T]
                 elif topk_type == "headswise":
                     # (N, H, T, T)
-                    partial_attention_scores = attention_scores_dense
                     N, H, T, T = partial_attention_scores.shape
                     partial_attention_scores = partial_attention_scores.view(N, H*T*T)
                     value, indices = torch.topk(
@@ -900,20 +919,14 @@ class BertSelfAttention(nn.Module):
                         dim=-1, index=indices, src=partial_attention_scores_gathered
                     )
                     partial_attention_scores = partial_attention_scores.view(N, H, T, T)
-                
             
             if attention_mask is not None:
                 partial_attention_scores = partial_attention_scores + attention_mask
             estimated_scale = self.perlin_attention_predictor_dec_scaler(t_attention_predictor).view(N, T, H, -1).permute(0, 2, 1, 3) # [N, H, T, 1]
-
             partial_attention_probs = torch.softmax(partial_attention_scores, -1) # (N, H, T, T)
-
             partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale) # 
-
             self.last_perlin_partial_probs = partial_attention_probs # [N, H, T, T]
-            
             partial_context_layer = torch.matmul(partial_attention_probs, v) # [N, H, T, HID]
-
             
             if self.perlin_random_lookup:
                 # lookup randomly that not looked up by partial context
@@ -926,15 +939,10 @@ class BertSelfAttention(nn.Module):
                     
                     # N, H, T, HID
                     random_context_index = torch.rand_like(partial_context_layer)
-                    
                     random_context_index = (random_context_index * (1 - 1/T) * token_length).floor().long()
-                    
                     random_context_layer = v.gather(dim=-2, index=random_context_index)
-                    
                     random_context_weight = estimated_attention_probs_masked.gather(dim=-1, index=random_context_index)
-                    
                     random_context_layer = random_context_weight * random_context_layer
-                    
                     if lookups is None:
                         lookups = random_context_layer
                     else:
