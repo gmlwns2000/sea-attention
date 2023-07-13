@@ -12,7 +12,7 @@ from typing import List, Tuple, Optional
 from matplotlib import cm
 import torch.nn.functional as F
 
-ZOOM = 8
+ZOOM = 1
 
 def gather_fixed_batch(dataloader: DataLoader, batch_size: int):
     items = [
@@ -50,9 +50,9 @@ def process_layer(teacher: torch.Tensor, est: torch.Tensor, dense: torch.Tensor,
         ], axis=0))
     stacks = np.concatenate(stacks, axis=1)
     
-    top = 96
+    top = 12*ZOOM
     stacks = np.concatenate([np.zeros((top, stacks.shape[1], stacks.shape[2]), dtype=np.uint8), stacks], axis=0)
-    cv2.putText(stacks, f"Layer {idx}", (16, 72), fontFace=cv2.FONT_HERSHEY_PLAIN, thickness=4, fontScale=4.0, color=(0, 255, 0))
+    cv2.putText(stacks, f"Layer {idx}", (2*ZOOM, 9*ZOOM), fontFace=cv2.FONT_HERSHEY_PLAIN, thickness=max(1, ZOOM//2), fontScale=max(1, ZOOM//2), color=(0, 255, 0))
     
     return stacks
 
@@ -108,12 +108,13 @@ def main(
     os.makedirs(f"./plots/visualize_glue", exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
+        # token_length = batch['input_ids'].shape[-1]
         img = process_batch_index(attentions, i, token_length)
         path = f"./plots/visualize_glue/{i}.png"
         cv2.imwrite(path, img)
         print('processed', path)
     
-    print('accuracy', trainer.evaluate())
+    # print('accuracy', trainer.evaluate())
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

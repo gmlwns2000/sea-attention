@@ -12,6 +12,7 @@ class PerlinAttentionConfig:
     performer_nb_factor: int = 1
     k: int = 7
     k_flatten: bool = True
+    k_flatten_dim: str = 'batch'
     random_lookup: bool = False
     random_lookup_count: int = 3
     attention_predictor_method: str = 'mlp'
@@ -23,7 +24,7 @@ class PerlinAttentionConfig:
     lora_r: int = 32
     lora_enabed: bool = False
     lora_in_approx_enabled: bool = False
-    partial_attention_scaler: bool = False
+    partial_attention_scaler: bool = True
     
     def to_json(self):
         return asdict(self)

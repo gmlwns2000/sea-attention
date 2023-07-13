@@ -286,6 +286,7 @@ class Trainer:
                 loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
+            loss_kd = loss_kd + torch.nn.functional.mse_loss(output_base.logits, output.logits) * 0.1
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
@@ -427,8 +428,8 @@ class Trainer:
         try:
             if path is None:
                 path = self.checkpoint_path()
-            print(f'Trainer: load {path}')
             state = torch.load(path, map_location='cpu')
+            print(f'Trainer: load {path} @ {state["step"] if "step" in state else None}')
             model_state_dict = state['model']
             model_state_dict = self.migrate_state_dict(model_state_dict)
             self.model.load_state_dict(model_state_dict)

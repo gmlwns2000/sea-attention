@@ -14,14 +14,18 @@ from ...utils import seed, get_bench
 
 def main():
     get_bench().synchronize = True
-    N_WARMUP = 30
-    N_SAMPLE = 100
-    BENCH_PRECISION = torch.float16
+    T_WARMUP = 2
+    T_SAMPLE = 5
+    BENCH_PRECISION = torch.float32
     BSIZE = 1
     SEQ_LEN = 4096
     layerwise = True
     BENCHMARK = True
     
+    print(f"config(fp={BENCH_PRECISION}, bsize={BSIZE}, seq_len={SEQ_LEN})")
+    
+    if get_bench().synchronize:
+        print('WARN: benchmark timer is synchronized. therefore the total latency will not be correct!')
     device = torch.device('cuda')
 
     config = AutoConfig.from_pretrained('bert-base-uncased')
@@ -32,7 +36,7 @@ def main():
         performer_nb_factor=8,
         lora_enabed=False,
         lora_in_approx_enabled=False,
-        partial_attention_scaler=False,
+        partial_attention_scaler=True,
         k_flatten=True,
     ))
     perlin = BertModel(config).to(device).eval()
@@ -69,23 +73,38 @@ def main():
             output_perf = performer(input_ids=input_ids, attention_mask=attention_mask, teacher=teacher)
     torch.cuda.synchronize()
 
-    def bench(fn):
+    def bench(name, fn):
         torch.cuda.synchronize()
         gc.collect()
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         start_mem = torch.cuda.max_memory_allocated()
         torch.cuda.synchronize()
-        for i in tqdm.tqdm(range(N_WARMUP), desc='warmup'):
-            with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
-                fn()
-        torch.cuda.synchronize()
+        print(f'[{name}] warmup... ', end = '', flush=True)
         t = time.time()
-        for i in tqdm.tqdm(range(N_SAMPLE), desc='benchmarking'):
+        while True:
             with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
                 fn()
+            if time.time() - t > T_WARMUP:
+                break
         torch.cuda.synchronize()
-        return time.time() - t, torch.cuda.max_memory_allocated() - start_mem
+        print('benchmarking', end = '', flush=True)
+        t = time.time()
+        sample_count = 0
+        last_report = time.time()
+        while True:
+            with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
+                fn()
+            sample_count += 1
+            if time.time() - t > T_SAMPLE:
+                break
+            if time.time() - last_report > 0.5:
+                last_report = time.time()
+                print('.', end='', flush=True)
+        torch.cuda.synchronize()
+        elapsed = time.time() - t
+        print(f' done. sampled {sample_count}its. {elapsed/sample_count*1000:.2f}ms/it', flush=True)
+        return (elapsed) / sample_count, torch.cuda.max_memory_allocated() - start_mem
     
     hidden_states = torch.randn((BSIZE, SEQ_LEN, teacher.config.hidden_size), device=device, dtype=BENCH_PRECISION)
     attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
@@ -106,23 +125,23 @@ def main():
     
     def test_performer():
         if layerwise:
-            layer = perlin.encoder.layer[0] # type: BertLayer
+            layer = performer.encoder.layer[0] # type: BertLayer
             layer(hidden_states=hidden_states, attention_mask=attention_mask_expand)
         else:
             performer(input_ids=input_ids, attention_mask=attention_mask, teacher=teacher)
     
-    t_bert, m_bert = bench(lambda: test_bert())
-    t_perlin, m_perlin = bench(lambda: test_perlin())
-    t_performer, m_performer = bench(lambda: test_performer())
+    t_perlin, m_perlin = bench("perlin", test_perlin)
+    t_performer, m_performer = bench("performer", test_performer)
+    t_bert, m_bert = bench("bert", test_bert)
 
     bench_result = get_bench().todict()
     print(
         # output.last_hidden_state.shape, 
         # output_teacher.last_hidden_state.shape, 
         json.dumps({k: (v/bench_result['perlin'])*100 for k, v in bench_result.items()}, indent=2),
-        f'timer_bert: {t_bert}s, mem_bert: {m_bert // 1024 // 1024}MB', 
-        f'time peformer: {t_performer}s, mem_performer: {m_performer // 1024 // 1024}MB', 
-        f'time_perlin: {t_perlin}s, mem_perlin: {m_perlin // 1024 // 1024}MB', 
+        f'time_bert: {t_bert*1000}ms/it, mem_bert: {m_bert // 1024 // 1024}MB', 
+        f'time peformer: {t_performer*1000}ms/it, mem_performer: {m_performer // 1024 // 1024}MB', 
+        f'time_perlin: {t_perlin*1000}ms/it, mem_perlin: {m_perlin // 1024 // 1024}MB', 
         f'speedup w.r.t performer: {t_performer / t_perlin}',
         f'speedup w.r.t bert: {t_bert / t_perlin}',
         f'max_mem: {torch.cuda.max_memory_allocated() // 1024 // 1024}MB',
