@@ -230,6 +230,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', default='glue', type=str)
     parser.add_argument('--subset', default=None, type=str)
     parser.add_argument('--epochs', default=None, type=int)
+    parser.add_argument('--load-checkpoint', default=None, type=str)
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
@@ -266,5 +267,11 @@ if __name__ == '__main__':
         trainer = LraTrainer(**kwargs)
     else:
         raise Exception()
+    
+    if args.load_checkpoint is not None:
+        if args.load_checkpoint in ['auto', 'defualt', '']: 
+            trainer.load()
+        else:
+            trainer.load(args.load_checkpoint)
 
     trainer.main()

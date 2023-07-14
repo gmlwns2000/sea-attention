@@ -80,12 +80,24 @@ class PerlinAttention(nn.Module):
         )
         self.attention_predictor_enc = nn.Sequential(
             nn.Dropout(0.1),
-            nn.Linear(self.attention_head_size*2, self.attention_head_size*2),
+            nn.Linear(self.attention_head_size*3, self.attention_head_size*2),
             nn.LayerNorm(self.attention_head_size*2),
             nn.GELU(),
         )
         self.attention_predictor_dec_row = nn.Sequential(
             nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
+        )
+        self.attention_predictor_cnn = nn.Sequential(
+            nn.Conv2d(12, 12, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(12, 12, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(12, 12, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(12, 12, 3, padding=1),
+            nn.GELU(),
+            nn.Conv2d(12, 12, 3, padding=1),
+            nn.GELU(),
         )
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 1),
@@ -174,12 +186,13 @@ class PerlinAttention(nn.Module):
                         dtype=v_for_atten.dtype, 
                         device=v_for_atten.device
                     ).view(1, 1, 128, 128)
-                v_for_atten = interpolate(
+                v_for_atten_identity = interpolate(
                     x=T_EYE,
                     size=v_for_atten.shape[-2:],
                     interp_mode='nearest'
                 ).expand(v_for_atten.shape).contiguous()
                 
+                v_for_atten = torch.cat([v_for_atten_identity, v_for_atten], dim=-1)
                 v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
             
             with timer("performer"):
@@ -214,6 +227,7 @@ class PerlinAttention(nn.Module):
                 if self.pconfig.attention_predictor_method == 'mlp':
                     t_attention_predictor = self.attention_predictor_enc(performer_value)
                     estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
+                    estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
                 elif self.pconfig.attention_predictor_method == 'comp':
                     raise Exception()
                     warnings.warn('attention prediction method is compressed one.')
@@ -257,6 +271,7 @@ class PerlinAttention(nn.Module):
             
             # in layerwise, train perlin attention predictor
             if not self.benchmarking:
+                # for loss calculation
                 estimated_attention_probs_resized = interpolate(
                     x=estimated_attention_probs, 
                     size=(T, T), 
@@ -273,10 +288,10 @@ class PerlinAttention(nn.Module):
                         F.log_softmax(estimated_attention_score_resized + attention_mask, dim=-1),
                         F.softmax(attention_scores_truth + attention_mask, dim=-1),
                         attention_mask,
-                    ) * 0.25
+                    ) * 0.1
                     loss_mse = F.mse_loss(
-                        estimated_attention_score_resized.masked_fill(attention_mask < -1, 0), 
-                        attention_scores_truth.masked_fill(attention_mask < -1, 0)
+                        torch.softmax(estimated_attention_score_resized + attention_mask, dim=-1), 
+                        torch.softmax(attention_scores_truth + attention_mask, dim=-1)
                     )
                     loss = loss_kl + loss_mse
             else:
@@ -359,12 +374,14 @@ class PerlinAttention(nn.Module):
             with timer("attention"):
                 if not self.benchmarking:
                     # print((partial_attention_mask[0,0][:15, :15] > -1).long())
+                    # NOTE: checking avearge k is expected. uncomment following print, and then run visualize_glue
                     # print(
                     #     (partial_attention_mask > -1).long().sum(-1).sum(-1)[:,0].view(-1),
                     #     (attention_mask > -1).long().sum(-1).view(-1),
                     #     (partial_attention_mask > -1).long().sum(-1).sum(-1)[:,0].view(-1) / (attention_mask > -1).long().sum(-1).view(-1),
                     #     k, T, T_M
                     # )
+                    
                     # start of attention mechanism
                     attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
                     attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
@@ -386,6 +403,11 @@ class PerlinAttention(nn.Module):
                         partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scale)
                     
                     partial_context_layer = torch.matmul(partial_attention_probs, v)
+                    # if self.training:
+                    #     partial_context_layer_estimated = torch.matmul(
+                    #         estimated_attention_probs_resized, v
+                    #     )
+                    #     partial_context_layer = (partial_context_layer + partial_context_layer_estimated) / 2
                 else:
                     attention_probs_dense = partial_attention_probs = attention_scores_dense = None
                     partial_context_layer = q_for_score
@@ -454,8 +476,8 @@ class PerlinAttention(nn.Module):
                 partial_context_layer = partial_context_layer.permute(0, 2, 1, 3).contiguous()
                 new_context_layer_shape = partial_context_layer.size()[:-2] + (self.all_head_size,)
                 partial_context_layer = partial_context_layer.view(new_context_layer_shape)
-                performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
-                performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+                # performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+                # performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
             with timer("out"):
                 if not self.pconfig.random_lookup:
