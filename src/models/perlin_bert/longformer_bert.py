@@ -7,6 +7,11 @@ from typing import Tuple
 from transformers import LongformerSelfAttention
 
 # NOTE global attention is based on [CLS]
+# TODO need to change 2w+1 to 2w+2 or add row global pattern
+# TODO is_index_global_attn shape is [N, T], check line 237
+# TODO check hidden states padding in perlin_bert
+# TODO check attention mechanism: diagonal calculated twice? but the size is 2w+1 tho
+
 class BertLongformerSelfAttention(LongformerSelfAttention):
     def __init__(self, config):
         nn.Module.__init__(self)
@@ -235,5 +240,6 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         attn_probs = attn_probs.transpose(1, 2) # [N, T, H, 6<2w+1+global(1)>]->[N, H, T, 2w+1+global(1)]
         global_attn_probs = global_attn_probs.transpose(2, 3) # [N, H, 1, T]->[N, H, T, 1]
         attn_probs[:, :, :, 0] = global_attn_probs.squeeze() # NOTE put global_attn_probs to attn_probs
+        warnings.warn(f"attn_probs shape {attn_probs.shape}")
         outputs += (attn_probs,) 
         return outputs
