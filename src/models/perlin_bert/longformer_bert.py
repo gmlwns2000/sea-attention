@@ -25,11 +25,9 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         self.value_global = nn.Linear(config.hidden_size, self.embed_dim)
 
         self.dropout = config.attention_probs_dropout_prob
-        
-        self.perlin_k = 7
-        self.one_sided_attn_window_size = 2 # 2w+1 == 5
 
         self.config = config
+        self.one_sided_attn_window_size = 2
     
     def _sliding_chunks_query_key_matmul(self, query: torch.Tensor, key: torch.Tensor, window_overlap: int):
         """
@@ -37,21 +35,21 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         implementation splits the input into overlapping chunks of size 2w (e.g. 512 for pretrained Longformer) with an
         overlap of size window_overlap
         """
-        batch_size, seq_len, num_heads, head_dim = query.size()
+        N, T, num_heads, head_dim = query.size()
         assert (
-            seq_len % (window_overlap * 2) == 0
-        ), f"Sequence length should be multiple of {window_overlap * 2}. Given {seq_len}"
+            T % (window_overlap * 2) == 0
+        ), f"Sequence length should be multiple of {window_overlap * 2}. Given {T}"
         assert query.size() == key.size()
-        chunks_count = torch.div(seq_len, window_overlap, rounding_mode="trunc") - 1
-        # group batch_size and num_heads dimensions into one, then chunk seq_len into chunks of size window_overlap * 2
-        query = query.transpose(1, 2).reshape(batch_size * num_heads, seq_len, head_dim)
-        key = key.transpose(1, 2).reshape(batch_size * num_heads, seq_len, head_dim)
+        chunks_count = torch.div(T, window_overlap, rounding_mode="trunc") - 1
+        # group N and num_heads dimensions into one, then chunk T into chunks of size window_overlap * 2
+        query = query.transpose(1, 2).reshape(N * num_heads, T, head_dim)
+        key = key.transpose(1, 2).reshape(N * num_heads, T, head_dim)
         query = self._chunk(query, window_overlap, getattr(self.config, "onnx_export", False))
         key = self._chunk(key, window_overlap, getattr(self.config, "onnx_export", False))
         # matrix multiplication
-        # bcxd: batch_size * num_heads x chunks x 2window_overlap x head_dim
-        # bcyd: batch_size * num_heads x chunks x 2window_overlap x head_dim
-        # bcxy: batch_size * num_heads x chunks x 2window_overlap x 2window_overlap
+        # bcxd: N * num_heads x chunks x 2window_overlap x head_dim
+        # bcyd: N * num_heads x chunks x 2window_overlap x head_dim
+        # bcxy: N * num_heads x chunks x 2window_overlap x 2window_overlap
         diagonal_chunked_attention_scores = torch.einsum("bcxd,bcyd->bcxy", (query, key))  # multiply
         # convert diagonals into columns
         diagonal_chunked_attention_scores = self._pad_and_transpose_last_two_dims(
@@ -63,7 +61,7 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         # followed by window_overlap columns for the upper triangle.
 
         diagonal_attention_scores = diagonal_chunked_attention_scores.new_zeros(
-            (batch_size * num_heads, chunks_count + 1, window_overlap, window_overlap * 2 + 1)
+            (N * num_heads, chunks_count + 1, window_overlap, window_overlap * 2 + 1)
         )
         # copy parts from diagonal_chunked_attention_scores into the combined matrix of attentions
         # - copying the main diagonal and the upper triangle
@@ -79,11 +77,13 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         ]
         diagonal_attention_scores[:, 0, 1:window_overlap, 1:window_overlap] = diagonal_chunked_attention_scores[
             :, 0, : window_overlap - 1, 1 - window_overlap :
-        ]
-        # separate batch_size and num_heads dimensions again
+        ] # [N*H, chunk_count, w, 2w+1]
+
+        # separate N and num_heads dimensions again
         diagonal_attention_scores = diagonal_attention_scores.view(
-            batch_size, num_heads, seq_len, 2 * window_overlap + 1
+            N, num_heads, T, 2 * window_overlap + 1
         ).transpose(2, 1)
+
         self._mask_invalid_locations(diagonal_attention_scores.float(), window_overlap) # NOTE added .float()
         return diagonal_attention_scores
         
@@ -93,10 +93,12 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         q : torch.Tensor, # [N, H, T, HID]
         k : torch.Tensor, 
         v : torch.Tensor,
-        perlin_k = 7,
+        is_index_masked=None,
+        is_index_global_attn=None,
+        is_global_attn=None,
+        one_sided_attn_window_size = 2,
         attention_mask=None,
         layer_head_mask=None,
-        output_attentions=False,
         )-> Tuple[torch.Tensor, torch.Tensor]: 
         """
         [`LongformerSelfAttention`] expects *len(hidden_states)* to be multiple of *attention_window*. Padding to
@@ -108,35 +110,25 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
             - 0: local attention
             - +10000: global attention
         """
-        is_index_masked = attention_mask < 0
-        is_index_global_attn = attention_mask > 0
-        # Record `is_global_attn == True` to enable ONNX export
-        is_global_attn = is_index_global_attn.flatten().any().item()
-
-        # NOTE [CLS] as global attention, it will be applied symmetrically, 2w+1 == perlin_k-2
-        attention_mask[..., 0] = float('inf') # TODO check
-        assert self.perlin_k %2 != 0
-        self.perlin_k = perlin_k
-        self.one_sided_attn_window_size = (self.perlin_k-3)//2
-        warnings.warn(f"perlin_k {self.perlin_k}, one_sided_attn_window_size {self.one_sided_attn_window_size}")
-
         hidden_states = hidden_states.transpose(0, 1) # [N, T, H*HID]->[T, N, H*HID]
 
-        seq_len, batch_size, embed_dim = hidden_states.size() # [T, N, H*HID]
+        T, N, embed_dim = hidden_states.size() # [T, N, H*HID]
         assert (
             embed_dim == self.embed_dim
         ), f"hidden_states should have embed_dim = {self.embed_dim}, but has {embed_dim}"
 
         # normalize query
-        query_vectors = q.permute(2, 0, 1, 3).contiguous().view(seq_len, batch_size, embed_dim) # [N, H, T, HID]->[T, N, H, HID]->[T, N, H*HID]
+        query_vectors = q.permute(2, 0, 1, 3).contiguous().view(T, N, embed_dim) # [N, H, T, HID]->[T, N, H, HID]->[T, N, H*HID]
         query_vectors /= math.sqrt(self.head_dim)
-        query_vectors = query_vectors.view(seq_len, batch_size, self.num_heads, self.head_dim).transpose(0, 1) # [N, T, H, HID]
+        query_vectors = query_vectors.view(T, N, self.num_heads, self.head_dim).transpose(0, 1) # [N, T, H, HID]
         key_vectors = k.transpose(1, 2) # [N, H, T, HID]->[N, T, H, HID]
         value_vectors = v.transpose(1,2)
 
+        self.one_sided_attn_window_size = one_sided_attn_window_size
+        warnings.warn(f"one_sided_attn_window_size {one_sided_attn_window_size}")
         attn_scores = self._sliding_chunks_query_key_matmul(
-            query_vectors, key_vectors, self.one_sided_attn_window_size
-        )
+            query_vectors, key_vectors, one_sided_attn_window_size
+        ) # [N, T, H, 2w+1]
         # values to pad for attention probs
         remove_from_windowed_attention_mask = (attention_mask != 0)[:, :, None, None]
         # cast to fp32/fp16 then replace 1's with -inf
@@ -145,18 +137,18 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         )
         # diagonal mask with zeros everywhere and -inf inplace of padding
         diagonal_mask = self._sliding_chunks_query_key_matmul(
-            float_mask.new_ones(size=float_mask.size()), float_mask, self.one_sided_attn_window_size
-        )
+            float_mask.new_ones(size=float_mask.size()), float_mask, one_sided_attn_window_size
+        ) # [N, T, 1, 2w+1]
         # pad local attention probs
         attn_scores += diagonal_mask
         assert list(attn_scores.size()) == [
-            batch_size,
-            seq_len,
+            N,
+            T,
             self.num_heads,
-            self.one_sided_attn_window_size * 2 + 1,
+            one_sided_attn_window_size * 2 + 1,
         ], (
-            f"local_attn_probs should be of size ({batch_size}, {seq_len}, {self.num_heads},"
-            f" {self.one_sided_attn_window_size * 2 + 1}), but is of size {attn_scores.size()}"
+            f"local_attn_probs should be of size ({N}, {T}, {self.num_heads},"
+            f" {one_sided_attn_window_size * 2 + 1}), but is of size {attn_scores.size()}"
         )
         # compute local attention probs from global attention keys and contact over window dim
         if is_global_attn:
@@ -177,7 +169,7 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
                 is_local_index_no_global_attn_nonzero=is_local_index_no_global_attn_nonzero,
             )
             # concat to local_attn_probs
-            # (batch_size, seq_len, num_heads, extra attention count + 2*window+1)
+            # (N, T, num_heads, extra attention count + 2*window+1)
             attn_scores = torch.cat((global_key_attn_scores, attn_scores), dim=-1)
             # free memory
             del global_key_attn_scores
@@ -211,10 +203,10 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         else:
             # compute local attn only
             attn_output = self._sliding_chunks_matmul_attn_probs_value(
-                attn_probs, value_vectors, self.one_sided_attn_window_size
+                attn_probs, value_vectors, one_sided_attn_window_size
             )
-        assert attn_output.size() == (batch_size, seq_len, self.num_heads, self.head_dim), "Unexpected size"
-        attn_output = attn_output.transpose(0, 1).reshape(seq_len, batch_size, embed_dim).contiguous() # [T, N, HID]
+        assert attn_output.size() == (N, T, self.num_heads, self.head_dim), "Unexpected size"
+        attn_output = attn_output.transpose(0, 1).reshape(T, N, embed_dim).contiguous() # [T, N, H*HID]
         # compute value for global attention and overwrite to attention output
         # TODO: remove the redundant computation
         if is_global_attn:
@@ -238,8 +230,10 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
             # The attention weights for tokens with global attention are
             # just filler values, they were never used to compute the output.
             # Fill with 0 now, the correct values are in 'global_attn_probs'.
-            attn_probs[is_index_global_attn_nonzero] = 0
-        outputs = (attn_output.transpose(0, 1),)
-
-        outputs += (attn_probs,)
-        return outputs + (global_attn_probs,) if (is_global_attn and output_attentions) else outputs + (None, )
+            attn_probs[is_index_global_attn_nonzero] = 0 # [16, 204, 12, 6] NOTE 0 is_index_global_attn_nonzero (0,0), (1,0) to (16, 0) might be a bug
+        outputs = (attn_output.transpose(0, 1),) # [T, N, H*HID]->[N, T, H*HID]
+        attn_probs = attn_probs.transpose(1, 2) # [N, T, H, 6<2w+1+global(1)>]->[N, H, T, 2w+1+global(1)]
+        global_attn_probs = global_attn_probs.transpose(2, 3) # [N, H, 1, T]->[N, H, T, 1]
+        attn_probs[:, :, :, 0] = global_attn_probs.squeeze() # NOTE put global_attn_probs to attn_probs
+        outputs += (attn_probs,) 
+        return outputs

@@ -603,19 +603,72 @@ class BertSelfAttention(nn.Module):
             
             self.last_loss = 0
         elif self.attention_method == 'longformer':
-            longformer_context_layer, longformer_attn_probs, longformer_global_attn_probs = self.perlin_longformer_attn(
+            q, k, v = query_layer, key_layer, value_layer
+            N, H, T, HID = q.shape
+            # NOTE [CLS] as global attention, it will be applied symmetrically, 2w+1 == perlin_k-2
+            attention_mask[..., 0] = torch.finfo(torch.bfloat16).max # TODO check
+            attention_mask = attention_mask[:, 0, 0, :]
+
+            # pad
+            perlin_k = self.perlin_self_attention.pconfig.k
+            assert perlin_k % 2 != 0
+            one_sided_attn_window_size = (perlin_k-3)//2
+            pad_unit_size = 2*one_sided_attn_window_size
+            warnings.warn(f"perlin_k {perlin_k} one_sided_attn_window_size {one_sided_attn_window_size}")
+
+            to_pad = 0 if (T % (pad_unit_size)) == 0 else (pad_unit_size - (T % pad_unit_size))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                k = F.pad(k, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                attention_mask = F.pad(
+                    attention_mask, (0, to_pad), value=torch.finfo(torch.bfloat16).min
+                )  # no attention on the padding tokens
+                hidden_states = F.pad(hidden_states, pad_config).float() # TODO check : is it okay to modify hidden_states?
+                assert q.shape == (N, H, T+to_pad, HID)
+                # assert binary_mask.shape == (N, T+to_pad)
+            else:
+                q = q.float()
+                k = k.float()
+                v = v.float()
+            
+            is_index_masked = attention_mask < 0
+            is_index_global_attn = attention_mask > 0 # TODO longformer's bug? shape is [N, T]
+            # Record `is_global_attn == True` to enable ONNX export
+            is_global_attn = is_index_global_attn.flatten().any().item()
+
+            longformer_context_layer, longformer_attn_probs = self.perlin_longformer_attn(
                 hidden_states,
-                q=query_layer,
-                k=key_layer,
-                v=value_layer,
-                perlin_k = self.perlin_self_attention.pconfig.k,
+                q=q,
+                k=k,
+                v=v,
+                is_index_masked = is_index_masked,
+                is_index_global_attn = is_index_global_attn,
+                is_global_attn = is_global_attn,
+                one_sided_attn_window_size = one_sided_attn_window_size,
                 attention_mask=attention_mask,
                 layer_head_mask=head_mask,
-                output_attentions=output_attentions
             )
+            # unpad
+            if to_pad !=0:
+                q = None
+                k = None
+                v = None
+                longformer_context_layer = longformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3) # [N, H, TP, HID]
+                longformer_context_layer = longformer_context_layer[:, :, :T, :]
+            else:
+                longformer_context_layer = longformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            
+            # [N, H, T, HID] [N, T, H, HID]
 
+            longformer_context_layer = longformer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = longformer_context_layer.size()[:-2] + (self.all_head_size,)
+            longformer_context_layer = longformer_context_layer.view(new_context_layer_shape)
+            
             context_layer = longformer_context_layer
-            attention_probs = longformer_attn_probs+longformer_global_attn_probs
+            attention_probs = longformer_attn_probs
 
             self.last_loss = 0
 
