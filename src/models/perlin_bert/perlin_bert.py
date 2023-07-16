@@ -52,6 +52,8 @@ from transformers.utils import (
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
+from ...models.perlin_bert.longformer_bert import BertLongformerSelfAttention
+
 from .. import hf_bert as berts
 
 
@@ -354,6 +356,11 @@ class BertSelfAttention(nn.Module):
             return_attn=False,
         )
 
+        ### Longformer
+        self.perlin_longformer_attn = BertLongformerSelfAttention(
+            config
+        )
+
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)
@@ -595,6 +602,23 @@ class BertSelfAttention(nn.Module):
             attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
             
             self.last_loss = 0
+        elif self.attention_method == 'longformer':
+            longformer_context_layer, longformer_attn_probs, longformer_global_attn_probs = self.perlin_longformer_attn(
+                hidden_states,
+                q=query_layer,
+                k=key_layer,
+                v=value_layer,
+                perlin_k = self.perlin_self_attention.pconfig.k,
+                attention_mask=attention_mask,
+                layer_head_mask=head_mask,
+                output_attentions=output_attentions
+            )
+
+            context_layer = longformer_context_layer
+            attention_probs = longformer_attn_probs+longformer_global_attn_probs
+
+            self.last_loss = 0
+
         elif self.attention_method == 'none':
             use_cache = past_key_value is not None
             if self.is_decoder:
