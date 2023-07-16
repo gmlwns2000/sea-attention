@@ -1,13 +1,15 @@
 import warnings
+
 import torch
 from torch import nn
-from .bert_glue_trainer import Trainer as BaseGlueTrainer
-from .lra_trainer import Trainer as BaseLraTrainer
+
+from ..models import perlin_attention
 from ..models import perlin_bert as perlin
 from ..models.perlin_bert.compat import migrate_state_dict
-from ..models import perlin_attention
-from .bert_glue_trainer import task_to_batch_size
 from ..utils import seed
+from .bert_glue_trainer import Trainer as BaseGlueTrainer
+from .bert_glue_trainer import task_to_batch_size
+from .lra_trainer import Trainer as BaseLraTrainer
 
 bool2int = lambda x: 1 if x else 0
 
@@ -35,7 +37,6 @@ class BaseTrainer:
         self.perlin_lora = perlin_lora
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
-        # perlin.PERLIN_PERFORMER_NB_FACTOR = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
         
@@ -44,6 +45,7 @@ class BaseTrainer:
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
         
+        # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
             performer_nb_factor = perlin_performer_nb_feature_factor,
             k = perlin_k,
@@ -51,14 +53,8 @@ class BaseTrainer:
             random_lookup = perlin_random_lookup,
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
-            attention_predictor_length = 128,
-            attention_predictor_comp_book_size = 8,
-            attention_predictor_comp_patch_size = 16,
-            attention_predictor_comp_patch_count = 16,
             layerwise = perlin_layerwise,
-            lora_r = 16,
             lora_enabed = perlin_lora,
-            lora_in_approx_enabled = False,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -66,11 +62,6 @@ class BaseTrainer:
         for module in model.modules():
             if isinstance(module, perlin.BertSelfAttention):
                 module.attention_method = self.attention_method
-                # module.perlin_k_flatten = self.perlin_k_flatten
-                # module.perlin_k = self.perlin_k
-                # module.perlin_attention_predictor_method = self.perlin_attention_predictor_method
-                # module.perlin_random_lookup = self.perlin_random_lookup
-                # module.perlin_random_lookup_count = self.perlin_random_lookup_count
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
@@ -84,8 +75,6 @@ class BaseTrainer:
 
             for module in model.modules():
                 if isinstance(module, perlin_attention.PerlinSelfAttention):
-                    # module.pconfig.layerwise = True
-                    # module.pconfig.lora_enabed = self.perlin_lora
                     if not self.perlin_lora: # activate QKV
                         for p in module.parameters():
                             p.requires_grad = True
@@ -117,6 +106,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
     ):
         BaseTrainer.__init__(self, **kwargs)
         
+        # NOTE HJ origimal batch sizes
         # task_to_batch_size = {
         #     "cola": 64,
         #     "mnli": 4,
@@ -210,7 +200,8 @@ def parse_perlin_model_options(args):
         'attention_method':args.method,
         'perlin_k_flatten':not args.k_colwise,
         'perlin_layerwise':args.layerwise,
-        # 'perlin_lora':not args.disable_lora,
+        # NOTE HJ now lora is disable by default
+        # 'perlin_lora':not args.disable_lora, 
         'perlin_lora':args.enable_lora,
         'perlin_attention_predictor_method':args.attention_predictor_method,
         'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
@@ -231,6 +222,7 @@ if __name__ == '__main__':
     parser.add_argument('--subset', default=None, type=str)
     parser.add_argument('--epochs', default=None, type=int)
     parser.add_argument('--load-checkpoint', default=None, type=str)
+    parser.add_argument('--load-only-additionals', action='store_true')
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
@@ -273,5 +265,8 @@ if __name__ == '__main__':
             trainer.load()
         else:
             trainer.load(args.load_checkpoint)
+    
+    if args.load_only_additionals:
+        trainer.load_state_from_base()
 
     trainer.main()

@@ -72,6 +72,7 @@ def process_batch_index(attentions: List[torch.Tensor], i: int, T: int):
 def main(
     subset = 'mnli',
     checkpoint_path = None,
+    evaluate = False,
     **kwargs
 ):
     trainer = GlueTrainer(
@@ -114,13 +115,15 @@ def main(
         cv2.imwrite(path, img)
         print('processed', path)
     
-    # print('accuracy', trainer.evaluate())
+    if evaluate:
+        print('accuracy', trainer.evaluate())
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--subset', type=str, default='mnli')
     parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--evaluate', action='store_true')
     add_perlin_model_options(parser)
     
     args = parser.parse_args()
@@ -130,6 +133,7 @@ if __name__ == '__main__':
     kwargs.update({
         'subset': args.subset,
         'checkpoint_path': args.checkpoint,
+        'evaluate': args.evaluate
     })
     
     main(**kwargs)

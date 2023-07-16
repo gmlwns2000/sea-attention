@@ -1,11 +1,13 @@
+import json
+import math
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional, Tuple
+
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
-import math
-from dataclasses import dataclass, asdict
+
 from ..hf_bert import BertConfig
-from typing import Optional, Tuple, List, Dict
-import json
 
 @dataclass
 class PerlinAttentionConfig:
@@ -21,10 +23,13 @@ class PerlinAttentionConfig:
     attention_predictor_comp_patch_size: int = 16
     attention_predictor_comp_patch_count: int = 16
     layerwise: bool = False
-    lora_r: int = 32
+    lora_r: int = 16
     lora_enabed: bool = False
     lora_in_approx_enabled: bool = False
     partial_attention_scaler: bool = True
+    out_add_performer_context: bool = False
+    v_eye_length: int = 128
+    out_norm: bool = False
     
     def to_json(self):
         return asdict(self)

@@ -15,7 +15,6 @@
 # limitations under the License.
 """PyTorch BERT model."""
 
-from turtle import hideturtle
 import torch.nn.functional as F
 
 import math
@@ -328,14 +327,12 @@ class BertSelfAttention(nn.Module):
         self.perlin_self_attention = PerlinSelfAttention(config=config)
         
         ### Synthesizer
-        
         self.perlin_synth_atten = SynthesizerDenseAttention(
             max_seq_len=512,
             d_k=self.attention_head_size,
         )
         
         ### Sinkhorn
-        
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornAttention
         
         self.perlin_sinkhorn_atten = SinkhornAttention(
@@ -348,7 +345,6 @@ class BertSelfAttention(nn.Module):
         )
         
         ### Reformer
-        
         from reformer_pytorch.reformer_pytorch import LSHAttention
         
         self.perlin_reformer_atten = LSHAttention(
