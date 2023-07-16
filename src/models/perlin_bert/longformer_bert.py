@@ -1,6 +1,5 @@
 import math
 from torch import nn
-import warnings
 import torch
 from typing import Tuple
 
@@ -130,7 +129,7 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         value_vectors = v.transpose(1,2)
 
         self.one_sided_attn_window_size = one_sided_attn_window_size
-        warnings.warn(f"one_sided_attn_window_size {one_sided_attn_window_size}")
+
         attn_scores = self._sliding_chunks_query_key_matmul(
             query_vectors, key_vectors, one_sided_attn_window_size
         ) # [N, T, H, 2w+1]
@@ -240,6 +239,5 @@ class BertLongformerSelfAttention(LongformerSelfAttention):
         attn_probs = attn_probs.transpose(1, 2) # [N, T, H, 6<2w+1+global(1)>]->[N, H, T, 2w+1+global(1)]
         global_attn_probs = global_attn_probs.transpose(2, 3) # [N, H, 1, T]->[N, H, T, 1]
         attn_probs[:, :, :, 0] = global_attn_probs.squeeze() # NOTE put global_attn_probs to attn_probs
-        warnings.warn(f"attn_probs shape {attn_probs.shape}")
         outputs += (attn_probs,) 
         return outputs

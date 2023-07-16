@@ -669,6 +669,7 @@ class BertSelfAttention(nn.Module):
             
             context_layer = longformer_context_layer
             attention_probs = longformer_attn_probs
+            warnings.warn(f"longformer attn_probs shape {attention_probs.shape}")
 
             self.last_loss = 0
 
