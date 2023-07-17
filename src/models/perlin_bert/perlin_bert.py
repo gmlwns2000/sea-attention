@@ -52,8 +52,6 @@ from transformers.utils import (
 )
 from transformers.models.bert.configuration_bert import BertConfig
 
-from ...models.perlin_bert.longformer_bert import BertLongformerSelfAttention
-
 from .. import hf_bert as berts
 
 
@@ -357,8 +355,17 @@ class BertSelfAttention(nn.Module):
         )
 
         ### Longformer
-        self.perlin_longformer_attn = BertLongformerSelfAttention(
+        from ...models.perlin_bert.longformer_bert import BertLongformerSelfAttention
+
+        self.perlin_longformer_atten = BertLongformerSelfAttention(
             config
+        )
+
+        ### Cosformer
+        from ...models.perlin_bert.cosformer_bert import CosformerAttention
+
+        self.perlin_cosformer_attn = CosformerAttention(
+            config.hidden_size, # TODO check
         )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
@@ -469,10 +476,9 @@ class BertSelfAttention(nn.Module):
             t_value_layer = self.value(hidden_states)
             if self.attention_method not in ['perlin']:
                 value_layer = self.transpose_for_scores(t_value_layer)
-        
-        t_query_layer = self.query(hidden_states)
+        t_query_layer = self.query(hidden_states) # t_query_layer, hidden_states [N, T, H*HID]
         if self.attention_method not in ['perlin']:
-            query_layer = self.transpose_for_scores(t_query_layer)
+            query_layer = self.transpose_for_scores(t_query_layer) # N, H, T, HID
         
         # if perlin, overwrite attention_probs, context_layer
         if self.attention_method == 'perlin':
@@ -639,7 +645,7 @@ class BertSelfAttention(nn.Module):
             # Record `is_global_attn == True` to enable ONNX export
             is_global_attn = is_index_global_attn.flatten().any().item()
 
-            longformer_context_layer, longformer_attn_probs = self.perlin_longformer_attn(
+            longformer_context_layer, longformer_attn_probs = self.perlin_longformer_atten(
                 hidden_states,
                 q=q,
                 k=k,
@@ -673,6 +679,32 @@ class BertSelfAttention(nn.Module):
 
             self.last_loss = 0
 
+        elif self.attention_method == 'cosformer':
+            q = query_layer
+            k = key_layer
+            v = value_layer
+            
+            # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+
+            cosformer_context_layer, cosformer_attn_probs = self.perlin_cosformer_attn(
+                q,
+                k,
+                v,
+                eps = 1e-6,
+                act_fun = "relu", # TODO can change to "elu"
+                has_outproj = True, # TODO change(hardcoding),
+                causal = False,
+                attn_mask = None, # for causal attention
+            )
+            
+            cosformer_context_layer = cosformer_context_layer.permute(0, 2, 1, 3).contiguous() # [N, T, H, HID]
+            new_context_layer_shape = cosformer_context_layer.size()[:-2] + (self.all_head_size,) # [N, T, H*HID]
+            cosformer_context_layer = cosformer_context_layer.view(new_context_layer_shape)
+
+            context_layer = cosformer_context_layer
+            attention_probs = cosformer_attn_probs
+
+            self.last_loss = 0
         elif self.attention_method == 'none':
             use_cache = past_key_value is not None
             if self.is_decoder:
@@ -726,9 +758,9 @@ class BertSelfAttention(nn.Module):
             if head_mask is not None:
                 attention_probs = attention_probs * head_mask
 
-            context_layer = torch.matmul(attention_probs, value_layer)
+            context_layer = torch.matmul(attention_probs, value_layer) # [N, H, T, HID]
 
-            context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+            context_layer = context_layer.permute(0, 2, 1, 3).contiguous() # [N, T, H, HID]
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
             context_layer = context_layer.view(new_context_layer_shape)
             
