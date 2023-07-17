@@ -361,10 +361,20 @@ class BertSelfAttention(nn.Module):
             config
         )
 
+        ### BigBird
+        self.bigbird_block_size = 1 
+        self.bigbird_num_random_blocks = 2 # when perlin_k == 2
+        self.bigbird_layer_id = 0
+        from ...models.perlin_bert.bigbird_bert import BertBigBirdSelfAttention
+
+        self.perlin_bigbird_atten = BertBigBirdSelfAttention(
+            config,
+        )
+
         ### Cosformer
         from ...models.perlin_bert.cosformer_bert import CosformerAttention
 
-        self.perlin_cosformer_attn = CosformerAttention(
+        self.perlin_cosformer_atten = CosformerAttention(
             config.hidden_size, # TODO check
         )
 
@@ -447,7 +457,45 @@ class BertSelfAttention(nn.Module):
         context_layer = reformer_context_layer
         
         return context_layer, attention_probs
+    
+    @staticmethod
+    def perlin_bigbird_create_masks_for_block_sparse_attn(attention_mask: torch.Tensor, block_size: int):
+        batch_size, seq_length = attention_mask.size()
+        if seq_length % block_size != 0:
+            raise ValueError(
+                f"Sequence length must be multiple of block size, but sequence length is {seq_length}, while block"
+                f" size is {block_size}."
+            )
 
+        def create_band_mask_from_inputs(from_blocked_mask, to_blocked_mask):
+            """
+            Create 3D attention mask from a 2D tensor mask.
+
+            Args:
+                from_blocked_mask: 2D Tensor of shape [batch_size,
+                from_seq_length//from_block_size, from_block_size].
+                to_blocked_mask: int32 Tensor of shape [batch_size,
+                to_seq_length//to_block_size, to_block_size].
+
+            Returns:
+                float Tensor of shape [batch_size, 1, from_seq_length//from_block_size-4, from_block_size,
+                3*to_block_size].
+            """
+            exp_blocked_to_pad = torch.cat(
+                [to_blocked_mask[:, 1:-3], to_blocked_mask[:, 2:-2], to_blocked_mask[:, 3:-1]], dim=2
+            )
+            band_mask = torch.einsum("blq,blk->blqk", from_blocked_mask[:, 2:-2], exp_blocked_to_pad)
+            band_mask.unsqueeze_(1)
+            return band_mask
+
+        blocked_encoder_mask = attention_mask.view(batch_size, seq_length // block_size, block_size)
+        band_mask = create_band_mask_from_inputs(blocked_encoder_mask, blocked_encoder_mask)
+
+        from_mask = attention_mask.view(batch_size, 1, seq_length, 1)
+        to_mask = attention_mask.view(batch_size, 1, 1, seq_length)
+
+        return blocked_encoder_mask, band_mask, from_mask, to_mask
+    
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -667,6 +715,7 @@ class BertSelfAttention(nn.Module):
             else:
                 longformer_context_layer = longformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
             
+            assert longformer_context_layer.shape == (N, H, T, HID)
             # [N, H, T, HID] [N, T, H, HID]
 
             longformer_context_layer = longformer_context_layer.permute(0, 2, 1, 3).contiguous()
@@ -678,6 +727,127 @@ class BertSelfAttention(nn.Module):
             warnings.warn(f"longformer attn_probs shape {attention_probs.shape}")
 
             self.last_loss = 0
+        
+        elif self.attention_method == 'bigbird':
+            # BigBird block-sparse attention as suggested in paper
+
+            # ITC:
+            #     global tokens: 2 x block_size
+            #     window tokens: 3 x block_size
+            #     random tokens: num_rand_tokens x block_size
+
+            # ETC:
+            #     global tokens: extra_globals_tokens + 2 x block_size
+            #     window tokens: 3 x block_size
+            #     random tokens: num_rand_tokens x block_size
+
+            # Note:
+            #     1) Currently, ETC is not supported.
+            #     2) Window size is fixed to 3 blocks & it can be changed only by
+            #     changing `block_size`.
+            #     3) Number of global blocks are fixed (2 blocks here) & global tokens can be
+            #     controlled only by `block_size`.
+
+            # attention is calculated separately for q[0], q[1], q[2:-2], q[-2], q[-1] in order to use special trick of shifting tokens (for calculating sliding attention)
+            # hence following code can be divided into 5 parts.
+
+            q = query_layer
+            k = key_layer
+            v = value_layer
+
+            N, H, T, HID = q.shape
+            perlin_k = self.perlin_self_attention.pconfig.k
+            if perlin_k != 7:
+                if self.bigbird_block_size ==1 : # TODO add args in perlin_bert if you want to use block_size > 1
+                    self.bigbird_num_random_blocks = perlin_k-5
+                else:
+                    raise Exception(f'perlin_k {perlin_k} block_size {self.bigbird_block_size} num_random_blocks {self.bigbird_num_random_blocks}')
+            assert perlin_k == (5+self.bigbird_num_random_blocks)*self.bigbird_block_size
+            # warnings.warn(f'perlin_k {perlin_k} block_size {self.bigbird_block_size} num_random_blocks {self.bigbird_num_random_blocks}')
+            # in order to use block_sparse attention, sequence_length has to be at least
+            # bigger than all global attentions: 2 * block_size
+            # + sliding tokens: 3 * block_size
+            # + random tokens: 2 * num_random_blocks * block_size
+            # total count : (5 + 2*num_random_blocks) * block_size
+            max_tokens_to_attend = (5 + self.bigbird_num_random_blocks) * self.bigbird_block_size # TODO modified 2*self.bigbird_num_random_blocks (think it's a bug)
+            assert T > max_tokens_to_attend
+            
+            # pad
+            attention_mask # [N, 1, 1, T]
+            attention_mask = ((attention_mask == 0).bfloat16())[:,0,0,:] # TODO check whether using bfloat16 is right
+
+            to_pad = 0 if (T % self.bigbird_block_size) == 0 else (self.bigbird_block_size - (T % self.bigbird_block_size))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                k = F.pad(k, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                attention_mask = F.pad(attention_mask, (0, to_pad), value=0.0)
+                assert q.shape == (N, H, T+to_pad, HID)
+                assert attention_mask.shape == (N, T+to_pad)
+            else:
+                q = q.float()
+                k = k.float()
+                v = v.float()
+            
+            # change attention_mask to before the extended state
+            blocked_encoder_mask, band_mask, from_mask, to_mask = self.perlin_bigbird_create_masks_for_block_sparse_attn(
+                attention_mask = attention_mask, block_size = self.bigbird_block_size
+            )
+            attention_mask = None
+
+            # parameters
+            '''
+            band_mask
+            from_mask
+            to_mask
+            blocked_encoder_mask
+            '''
+            if band_mask is not None:
+                band_mask = band_mask.to(hidden_states.dtype)
+            if from_mask is not None:
+                from_mask = from_mask.to(hidden_states.dtype)
+            if to_mask is not None:
+                to_mask = to_mask.to(hidden_states.dtype)
+            
+            # warnings.warn(f"bigbird layer id {self.bigbird_layer_id}")
+            bigbird_context_layer, bigbird_attn_probs = self.perlin_bigbird_atten(
+                q=q,
+                k=k,
+                v=v,
+                band_mask = band_mask,
+                from_mask = from_mask,
+                to_mask = to_mask,
+                from_blocked_mask = blocked_encoder_mask,
+                to_blocked_mask = blocked_encoder_mask,
+                seed = self.bigbird_layer_id, # NOTE check effect of bert_glue_trainer and perlin_trainer seed()
+                block_size = self.bigbird_block_size,
+                num_random_blocks = self.bigbird_num_random_blocks
+            )
+            # unpad
+            if to_pad != 0:
+                # q = None # TODO check
+                # k = None
+                # v = None
+                q = q[:, :, :T, :]
+                k = k[:, :, :T, :]
+                v = v[:, :, :T, :]
+                bigbird_context_layer = bigbird_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3) # [N, TP, H*HID]->[N, TP, H, HID]->[N, H, TP, HID]
+                bigbird_context_layer = bigbird_context_layer[:, :, :T, :] # [N, H, T, HID]
+            else:
+                bigbird_context_layer = bigbird_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+
+            assert bigbird_context_layer.shape == (N, H, T, HID)
+    
+            bigbird_context_layer = bigbird_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = bigbird_context_layer.size()[:-2] + (self.all_head_size,)
+            bigbird_context_layer = bigbird_context_layer.view(new_context_layer_shape)
+            
+            context_layer = bigbird_context_layer
+            attention_probs = bigbird_attn_probs
+
+            self.last_loss = 0
 
         elif self.attention_method == 'cosformer':
             q = query_layer
@@ -686,7 +856,7 @@ class BertSelfAttention(nn.Module):
             
             # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
 
-            cosformer_context_layer, cosformer_attn_probs = self.perlin_cosformer_attn(
+            cosformer_context_layer, cosformer_attn_probs = self.perlin_cosformer_atten(
                 q,
                 k,
                 v,

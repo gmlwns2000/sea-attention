@@ -78,6 +78,12 @@ class BaseTrainer:
                     if not self.perlin_lora: # activate QKV
                         for p in module.parameters():
                             p.requires_grad = True
+        if self.attention_method == 'bigbird':
+            global BIGBIRD_LAYER_ID
+            for module in model.modules():
+                if isinstance(module, perlin.BertSelfAttention):
+                    module.bigbird_layer_id = BIGBIRD_LAYER_ID
+                    BIGBIRD_LAYER_ID = BIGBIRD_LAYER_ID+1
         return model
 
     def format_exp(self, name: str):
@@ -214,6 +220,9 @@ def parse_perlin_model_options(args):
     return kwargs
 
 if __name__ == '__main__':
+
+    BIGBIRD_LAYER_ID = 0
+
     import argparse
     
     parser = argparse.ArgumentParser()
