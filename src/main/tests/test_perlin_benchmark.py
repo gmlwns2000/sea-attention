@@ -13,7 +13,7 @@ from ...models.perlin_attention.config import PerlinAttentionConfig, register_de
 from ...utils import seed, get_bench
 
 def main():
-    get_bench().synchronize = True
+    get_bench().synchronize = False
     T_WARMUP = 2
     T_SAMPLE = 5
     BENCH_PRECISION = torch.float32

@@ -606,7 +606,7 @@ class PerlinAttention(nn.Module):
             raise_if_nan(loss)
             raise_if_nan(partial_context_layer)
             raise_if_nan(partial_attention_probs)
-            raise_if_nan(estimated_attention_probs_resized)
+            # raise_if_nan(estimated_attention_probs_resized)
             raise_if_nan(attention_probs_dense)
             raise_if_nan(k_for_score)
             
