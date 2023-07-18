@@ -659,6 +659,7 @@ class BertSelfAttention(nn.Module):
         elif self.attention_method == 'longformer':
             q, k, v = query_layer, key_layer, value_layer
             N, H, T, HID = q.shape
+            # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             # NOTE [CLS] as global attention, it will be applied symmetrically, 2w+1 == perlin_k-2
             attention_mask[..., 0] = torch.finfo(torch.bfloat16).max # TODO check
             attention_mask = attention_mask[:, 0, 0, :]
@@ -756,6 +757,7 @@ class BertSelfAttention(nn.Module):
             v = value_layer
 
             N, H, T, HID = q.shape
+            # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             perlin_k = self.perlin_self_attention.pconfig.k
             if perlin_k != 7:
                 if self.bigbird_block_size ==1 : # TODO add args in perlin_bert if you want to use block_size > 1
@@ -795,7 +797,7 @@ class BertSelfAttention(nn.Module):
             blocked_encoder_mask, band_mask, from_mask, to_mask = self.perlin_bigbird_create_masks_for_block_sparse_attn(
                 attention_mask = attention_mask, block_size = self.bigbird_block_size
             )
-            attention_mask = None
+            attention_mask = None # TODO check
 
             # parameters
             '''
@@ -853,8 +855,8 @@ class BertSelfAttention(nn.Module):
             q = query_layer
             k = key_layer
             v = value_layer
-            
-            # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1) # NOTE I added this later : previous cosformers(3) are wrong
 
             cosformer_context_layer, cosformer_attn_probs = self.perlin_cosformer_atten(
                 q,
