@@ -37,9 +37,9 @@ def interpolate(x: torch.Tensor, size, interp_mode: str = None):
     
     if torch.get_autocast_gpu_dtype() == torch.bfloat16: # F interpolate is not supported on bf16
         original_dtype = x.dtype
-        with torch.autocast('cuda', torch.float16):
-            if x.dtype != torch.float16:
-                x = x.to(torch.float16)
+        with torch.autocast('cuda', torch.float32):
+            if x.dtype != torch.float32:
+                x = x.to(torch.float32)
             x = F.interpolate(x, size, mode=interp_mode)
         if x.dtype != original_dtype:
             x = x.to(original_dtype)
@@ -101,16 +101,15 @@ class PerlinAttention(nn.Module):
             nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
         )
         self.attention_predictor_cnn = nn.Sequential(
-            nn.Conv2d(12, 12, 3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(12, 12, 3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(12, 12, 3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(12, 12, 3, padding=1),
-            nn.GELU(),
-            nn.Conv2d(12, 12, 3, padding=1),
-            nn.GELU(),
+            nn.Conv2d(12, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 12, 3, padding=1),
         )
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 2),
@@ -198,11 +197,17 @@ class PerlinAttention(nn.Module):
                     interp_mode='nearest'
                 ).expand(v_for_atten.shape).contiguous()
                 
+                # token_index_y = (((attention_mask > -1).float().cumsum(-1) - 1) / ((attention_mask > -1).float().sum(-1).view(N, 1, 1, 1) + 1e-6) * 2 - 1).view(N, T, 1, 1).expand(N, T, HID, 1)
+                # token_index_x = (torch.arange(HID, device=q.device, dtype=q.dtype) / HID * 2 - 1).view(1, 1, HID, 1).expand(N, T, HID, 1)
+                # token_index = torch.cat([token_index_x, token_index_y], dim=-1)
+                # v_for_atten_identity = F.grid_sample(v_for_atten_identity, token_index, mode='nearest')
+                
                 v_for_atten = torch.cat([
                     v_for_atten_identity, 
                     v_for_atten
                 ], dim=-1)
                 v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
+                v.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
             
             with timer("performer"):
                 if not self.benchmarking:
@@ -228,14 +233,19 @@ class PerlinAttention(nn.Module):
                 performer_value = torch.cat([
                     performer_context_layer, 
                     v
-                ], dim=-1).detach()
+                ], dim=-1)#.detach()
+                raise_if_nan(performer_value)
             
             # estimate attention scores
             with timer("predictor"):
                 if self.pconfig.attention_predictor_method == 'mlp':
+                    raise_if_nan(performer_value)
                     t_attention_predictor = self.attention_predictor_enc(performer_value)
+                    raise_if_nan(t_attention_predictor)
                     estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
+                    raise_if_nan(estimated_attention_score)
                     estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
+                    raise_if_nan(estimated_attention_score)
                 elif self.pconfig.attention_predictor_method == 'comp':
                     warnings.warn('attention prediction method is compressed one.')
                     t_attention_predictor = self.attention_predictor_comp_enc(performer_value)
@@ -254,11 +264,28 @@ class PerlinAttention(nn.Module):
             
             # interpolate and convert to probability
             with timer("mask_softmax"):
+                T_M = estimated_attention_score.shape[-1]
+                # TODO: this should be grid sample to T, T
                 resized_attention_mask = interpolate(
                     x=attention_mask, 
-                    size=(1, estimated_attention_score.shape[-1]), 
+                    size=(1, T_M), 
                     interp_mode='nearest',
                 )
+                
+                # token_index_x = (resized_attention_mask > -1).float().view(N, 1, T_M)
+                # token_index_x = token_index_x.cumsum(-1) - 1.0
+                # token_index_x = (token_index_x / T * 2 - 1).expand(N, T, T_M)
+                # token_index_y = (
+                #     torch.arange(T, dtype=token_index_x.dtype, device=token_index_x.device)\
+                #         .view(1, T, 1) / T * 2 - 1)\
+                #         .expand(N, T, T_M)
+                # token_index = torch.cat([token_index_x.unsqueeze(-1), token_index_y.unsqueeze(-1)], dim=-1)
+                # estimated_attention_score = F.grid_sample(
+                #     input=estimated_attention_score, 
+                #     grid=token_index,
+                #     mode='nearest'
+                # )
+                
                 resized_attention_mask_binary = resized_attention_mask < -1
                 # resized_attention_mask = (resized_attention_mask < -1) * FP_MIN
                 if not self.benchmarking:
@@ -272,6 +299,26 @@ class PerlinAttention(nn.Module):
                         mask=resized_attention_mask_binary,
                         value=FP_MIN
                     )
+                
+                # token_index_x = (attention_mask > -1).float().view(N, 1, T)
+                # token_index_x = token_index_x.cumsum(-1) - 1.0
+                # token_index_x = (token_index_x / ((attention_mask > -1).float().sum(-1).view(N, 1, 1) + 1e-6) * 2 - 1).expand(N, T, T)
+                # token_index_y = (
+                #     torch.arange(T, dtype=token_index_x.dtype, device=token_index_x.device)\
+                #         .view(1, T, 1) / T * 2 - 1)\
+                #         .expand(N, T, T)
+                # token_index = torch.cat([token_index_x.unsqueeze(-1), token_index_y.unsqueeze(-1)], dim=-1)
+                # estimated_attention_score = F.grid_sample(
+                #     input=estimated_attention_score, 
+                #     grid=token_index,
+                #     mode='nearest'
+                # )
+                # estimated_attention_score_unmasked = estimated_attention_score
+                # estimated_attention_score = estimated_attention_score.masked_fill_(
+                #     mask=attention_mask < -1,
+                #     value=FP_MIN
+                # )
+                
                 estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             
             # in layerwise, train perlin attention predictor
@@ -290,15 +337,19 @@ class PerlinAttention(nn.Module):
                 )
                 
                 with torch.autocast('cuda', torch.float32):
+                    raise_if_nan(estimated_attention_score_resized)
+                    raise_if_nan(attention_scores_truth)
+                    raise_if_nan(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN))
+                    raise_if_nan(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN))
                     loss_kl = kl_div_attention(
-                        F.log_softmax(estimated_attention_score_resized + attention_mask, dim=-1),
-                        F.softmax(attention_scores_truth + attention_mask, dim=-1),
+                        F.log_softmax(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                        F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
                         attention_mask,
                     ) * 0.1
                     raise_if_nan(loss_kl)
                     loss_mse = F.mse_loss(
-                        torch.softmax(estimated_attention_score_resized + attention_mask, dim=-1), 
-                        torch.softmax(attention_scores_truth + attention_mask, dim=-1)
+                        torch.softmax(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                        torch.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
                     )
                     raise_if_nan(loss_mse)
                     loss += loss_kl + loss_mse
@@ -392,10 +443,15 @@ class PerlinAttention(nn.Module):
                     
                     attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
                     attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
+                    loss += kl_div_attention(
+                        F.log_softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                        F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                        attention_mask,
+                    ) * 0.1
                     loss += F.mse_loss(
-                        attention_scores_dense.masked_fill(attention_mask < -1, 0), 
-                        attention_scores_truth.masked_fill(attention_mask < -1, 0),
-                    ) * 0.5
+                        torch.softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                        torch.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                    )
                     raise_if_nan(loss)
                     
                     # NOTE HJ `attention_probs_dense` is for visualization, therefore it will not computed on benchmarking mode

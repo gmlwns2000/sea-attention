@@ -300,7 +300,7 @@ class Trainer:
         # self.scaler.unscale_(self.optimizer)
         # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         
-        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+        if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
             self.scaler.step(self.optimizer)
             self.optimizer.zero_grad()
             self.scaler.update()
@@ -354,16 +354,16 @@ class Trainer:
                     self.base_model.eval()
                     m = Metric()
                     
-                    wandb.log({'eval/score': score}, step=self.step)
+                    wandb.log({'eval/score': score}, step=int(self.step))
                 
                 if ((istep + 1) % 15) == 0:
                     wandb_data = {}
                     for k, v in self.loss_details.items():
                         wandb_data[f'train/{k}'] = v
                     wandb_data['train/epoch'] = (istep / len(pbar)) + self.epoch
-                    wandb.log(wandb_data, step=self.step)
+                    wandb.log(wandb_data, step=int(self.step))
                 
-                self.step += 1
+                self.step += 1 / self.gradient_accumulation_steps
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -466,7 +466,7 @@ class Trainer:
             wandb.log({
                 'eval/score': valid_score,
                 'train/score': train_score,
-            }, step=self.step)
+            }, step=int(self.step))
             self.save()
 
 if __name__ == '__main__':
