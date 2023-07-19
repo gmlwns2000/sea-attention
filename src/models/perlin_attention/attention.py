@@ -193,17 +193,16 @@ class PerlinAttention(nn.Module):
             N, H, T, HID = q.shape
             with timer("vmask"):
                 v_for_atten_identity = interpolate(
-                    x=self._v_eye,
-                    size=v_for_atten.shape[-2:],
+                    x=self._v_eye, #[1,1, 128, 128]
+                    size=v_for_atten.shape[-2:], # [T, HID]
                     interp_mode='nearest'
-                ).expand(v_for_atten.shape).contiguous()
-                
+                ) #[1,1, T, HID]
+                v_for_atten_identity = v_for_atten_identity.expand(v_for_atten.shape).contiguous() # [N, H, T, HID]
                 v_for_atten = torch.cat([
                     v_for_atten_identity, 
                     v_for_atten
                 ], dim=-1)
-                v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
-            
+                v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0) # NOTE JIN this is for masking in perlin like others ?
             with timer("performer"):
                 if not self.benchmarking:
                     q_type = q_for_atten.dtype
@@ -292,7 +291,7 @@ class PerlinAttention(nn.Module):
                 with torch.autocast('cuda', torch.float32):
                     loss_kl = kl_div_attention(
                         F.log_softmax(estimated_attention_score_resized + attention_mask, dim=-1),
-                        F.softmax(attention_scores_truth + attention_mask, dim=-1),
+                        F.softmax(attention_scores_truth + attention_mask, dim=-1), # [N, H, T, T]
                         attention_mask,
                     ) * 0.1
                     raise_if_nan(loss_kl)
