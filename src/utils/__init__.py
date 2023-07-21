@@ -342,6 +342,21 @@ class BenchmarkRegion:
         self.t = time.time() - self.t
         self.benchmark.add_data(self.name, self.t)
 
+class BenchmarkMemRegion:
+    def __init__(self, benchmark: "Benchmark", name: str) -> None:
+        self.benchmark = benchmark
+        self.name = name
+    
+    def __enter__(self):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = torch.cuda.memory_allocated()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = torch.cuda.memory_allocated() - self.t
+        print(self.name, self.t // 1024)
+        # self.benchmark.add_data(self.name, self.t)
+
 class Benchmark:
     def __init__(self):
         self.synchronize = False
@@ -353,6 +368,9 @@ class Benchmark:
     
     def region(self, name):
         return BenchmarkRegion(benchmark=self, name=name)
+    
+    def mem_region(self, name):
+        return BenchmarkMemRegion(benchmark=self, name=name)
 
     def todict(self):
         data = {}

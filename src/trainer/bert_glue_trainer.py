@@ -297,10 +297,10 @@ class Trainer:
         
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
-        # self.scaler.unscale_(self.optimizer)
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         
         if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.optimizer.zero_grad()
             self.scaler.update()

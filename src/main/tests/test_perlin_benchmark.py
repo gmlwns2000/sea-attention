@@ -103,8 +103,9 @@ def main():
                 print('.', end='', flush=True)
         torch.cuda.synchronize()
         elapsed = time.time() - t
-        print(f' done. sampled {sample_count}its. {elapsed/sample_count*1000:.2f}ms/it', flush=True)
-        return (elapsed) / sample_count, torch.cuda.max_memory_allocated() - start_mem
+        mem = torch.cuda.max_memory_allocated() - start_mem
+        print(f' done. sampled {sample_count}its. {elapsed/sample_count*1000:.2f}ms/it {mem // 1024 // 1024} MB', flush=True)
+        return (elapsed) / sample_count, mem
     
     hidden_states = torch.randn((BSIZE, SEQ_LEN, teacher.config.hidden_size), device=device, dtype=BENCH_PRECISION)
     attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
