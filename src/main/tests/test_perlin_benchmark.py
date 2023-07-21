@@ -13,7 +13,7 @@ from ...models.perlin_attention.config import PerlinAttentionConfig, register_de
 from ...utils import seed, get_bench
 
 def main():
-    get_bench().synchronize = False
+    get_bench().synchronize = True
     T_WARMUP = 2
     T_SAMPLE = 5
     BENCH_PRECISION = torch.float32
@@ -74,38 +74,42 @@ def main():
     torch.cuda.synchronize()
 
     def bench(name, fn):
-        torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        start_mem = torch.cuda.max_memory_allocated()
-        torch.cuda.synchronize()
-        print(f'[{name}] warmup... ', end = '', flush=True)
-        t = time.time()
-        while True:
-            with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
-                fn()
-            if time.time() - t > T_WARMUP:
-                break
-        torch.cuda.synchronize()
-        print('benchmarking', end = '', flush=True)
-        t = time.time()
         sample_count = 0
-        last_report = time.time()
-        while True:
-            with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
-                fn()
-            sample_count += 1
-            if time.time() - t > T_SAMPLE:
-                break
-            if time.time() - last_report > 0.5:
-                last_report = time.time()
-                print('.', end='', flush=True)
-        torch.cuda.synchronize()
+        try:
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats()
+            start_mem = torch.cuda.max_memory_allocated()
+            torch.cuda.synchronize()
+            print(f'[{name}] warmup... ', end = '', flush=True)
+            t = time.time()
+            while True:
+                with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
+                    fn()
+                if time.time() - t > T_WARMUP:
+                    break
+            torch.cuda.synchronize()
+            print('benchmarking', end = '', flush=True)
+            t = time.time()
+            last_report = time.time()
+            while True:
+                with torch.no_grad(), torch.autocast('cuda', BENCH_PRECISION):
+                    fn()
+                sample_count += 1
+                if time.time() - t > T_SAMPLE:
+                    break
+                if time.time() - last_report > 0.5:
+                    last_report = time.time()
+                    print('.', end='', flush=True)
+            torch.cuda.synchronize()
+            mem = torch.cuda.max_memory_allocated() - start_mem
+        except torch.cuda.OutOfMemoryError as ex:
+            mem = 0
         elapsed = time.time() - t
-        mem = torch.cuda.max_memory_allocated() - start_mem
-        print(f' done. sampled {sample_count}its. {elapsed/sample_count*1000:.2f}ms/it {mem // 1024 // 1024} MB', flush=True)
-        return (elapsed) / sample_count, mem
+        interval = elapsed/(sample_count + 1e-8)
+        print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem // 1024 // 1024} MB', flush=True)
+        return interval, mem
     
     hidden_states = torch.randn((BSIZE, SEQ_LEN, teacher.config.hidden_size), device=device, dtype=BENCH_PRECISION)
     attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()

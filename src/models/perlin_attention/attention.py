@@ -523,10 +523,14 @@ class PerlinAttention(nn.Module):
                         per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
-                        t_dead_mask = partial_attention_mask >= per_item_top_k
-                        # partial_attention_mask.fill_(FP_MIN)
-                        # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
-                        partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
+                        if not self.benchmarking:
+                            t_dead_mask = partial_attention_mask >= per_item_top_k
+                            # partial_attention_mask.fill_(FP_MIN)
+                            # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
+                            partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
+                        else:
+                            t_alive_mask = partial_attention_mask < per_item_top_k
+                            partial_attention_mask = t_alive_mask.float()
                     partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
             
             with timer("interp"):
@@ -539,7 +543,7 @@ class PerlinAttention(nn.Module):
                 # )
                 with timer("interp.resize"):
                     # print(torch.unique(partial_attention_mask).shape)
-                    partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN)
+                    partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0)
                     # print(torch.unique(partial_attention_mask).shape)
                     # print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
                     # input()
@@ -549,6 +553,10 @@ class PerlinAttention(nn.Module):
                 #         value=FP_MIN,
                 #     )
                 raise_if_nan(partial_attention_mask)
+            
+            get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
+            get_bench().register_temp_buffer('q_for_score', q_for_score)
+            get_bench().register_temp_buffer('k_for_score', k_for_score)
             
             with timer("attention"):
                 if not self.benchmarking:
@@ -576,6 +584,7 @@ class PerlinAttention(nn.Module):
                         torch.softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
                         torch.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
                     )
+                    get_bench().register_temp_buffer('partial_attention_scores', attention_scores_dense)
                     raise_if_nan(loss)
                     
                     # NOTE HJ `attention_probs_dense` is for visualization, therefore it will not computed on benchmarking mode
@@ -595,6 +604,7 @@ class PerlinAttention(nn.Module):
                     raise_if_nan(partial_attention_scores)
                     partial_attention_probs = torch.softmax(partial_attention_scores, -1)
                     partial_attention_probs = partial_attention_probs * (partial_attention_mask > -1)
+                    get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
                     raise_if_nan(partial_attention_probs)
                     
                     # perform scaling, however this pervent to use spase attention kernel
@@ -649,21 +659,44 @@ class PerlinAttention(nn.Module):
                     # using Numba
                     N, H, T, HEAD_H = q_for_score.shape
                     # print((partial_attention_mask > -1).sum(), (partial_attention_mask > -1).sum() / partial_attention_mask.numel())
-                    with timer("attention.coo"):
-                        sparse_attention_mask = (partial_attention_mask > -1).float().view(N*H, T, T).to_sparse_coo()
-                    with timer("attention.sparse"):
-                        partial_attention_scores = sparse_attn(
-                            q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
-                            k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
-                            sparse_attention_mask
-                        )
-                    with timer("attention.sparse_softmax"):
-                        partial_attention_probs = torch.sparse.softmax(
-                            partial_attention_scores, dim=2
-                        )
-                    with timer("attention.bmm"):
-                        partial_context_layer = torch.bmm(partial_attention_probs, v.view(N*H, T, HEAD_H))
-                        partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
+                    with mem("attention"):
+                        with timer("attention.coo"), mem("attention.coo"):
+                            sparse_attention_mask = partial_attention_mask.float().view(N*H, T, T).to_sparse_coo()
+                            del partial_attention_mask
+                        with timer("attention.sparse"), mem("attention.sparse"):
+                            # print(torch.min(q_for_score))
+                            # print(torch.min(k_for_score))
+                            # print(torch.min(sparse_attention_mask))
+                            partial_attention_scores = sparse_attn(
+                                q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                                k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                                sparse_attention_mask
+                            ) / math.sqrt(self.attention_head_size)
+                            # print(partial_attention_scores)
+                            get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
+                            del sparse_attention_mask
+                        with timer("attention.sparse_softmax"), mem("attention.sparse_softmax"):
+                            partial_attention_probs = torch.sparse.softmax(
+                                partial_attention_scores, dim=2
+                            )
+                            get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
+                            del partial_attention_scores
+                            estimated_scales = self.attention_predictor_dec_scaler(t_attention_predictor)
+                            if self.pconfig.partial_attention_scaler:
+                                partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scales[..., 0].view(N*H, T, 1))
+                            
+                        with timer("attention.bmm"), mem("attention.bmm"):
+                            partial_context_layer = torch.bmm(partial_attention_probs, v.reshape(N*H, T, HEAD_H))
+                            partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
+                        
+                        with timer("attention.avg_pool"):
+                            average_context_layer = (
+                                v *\
+                                (attention_mask.transpose(-1, -2) > -1) *\
+                                interpolate(estimated_attention_probs.mean(-2, keepdim=True), (1, T)).transpose(-1, -2)
+                            ).sum(-2, keepdim=True)
+                            average_scale = torch.sigmoid(estimated_scales[..., 1:2])
+                            partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
             
             if self.pconfig.random_lookup:
                 # lookup randomly that not looked up by partial context

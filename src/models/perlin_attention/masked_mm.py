@@ -129,7 +129,7 @@ def sparse_attn(a, bt: torch.Tensor, mask: torch.Tensor):
     # the output should init to zero
     # because it is the initial value
     # for accumulation in the kernel function
-    output = torch.empty(nnz, dtype=a.dtype, device='cuda')  # [nnz, 1]
+    output = torch.zeros(nnz, dtype=a.dtype, device='cuda')  # [nnz, 1]
     cuda_output = cuda.as_cuda_array(output)
 
     # note:We create a one-dimensional grid of length nnz

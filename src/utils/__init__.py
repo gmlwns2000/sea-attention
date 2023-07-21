@@ -354,12 +354,14 @@ class BenchmarkMemRegion:
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.benchmark.synchronize: torch.cuda.synchronize()
         self.t = torch.cuda.memory_allocated() - self.t
-        print(self.name, self.t // 1024)
+        # print(self.name, self.t // 1024)
         # self.benchmark.add_data(self.name, self.t)
 
 class Benchmark:
     def __init__(self):
         self.synchronize = False
+        self.activate_temp_buffers = False
+        self.buffers = {}
         self.data = {}
     
     def add_data(self, name, t):
@@ -377,6 +379,13 @@ class Benchmark:
         for key, (c, s) in self.data.items():
             data[key] = s / (c+1e-10)
         return data
+
+    def register_temp_buffer(self, name, v):
+        if not self.activate_temp_buffers: return
+        self.buffers[name] = v
+    
+    def get_temp_buffer(self, name):
+        return self.buffers[name]
 
 BENCHMARK = Benchmark()
 
