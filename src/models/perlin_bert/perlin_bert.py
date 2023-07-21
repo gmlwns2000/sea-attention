@@ -328,7 +328,7 @@ class BertSelfAttention(nn.Module):
         
         ### Synthesizer
         self.perlin_synth_atten = SynthesizerDenseAttention(
-            max_seq_len=512,
+            max_seq_len=config.max_position_embeddings,
             d_k=self.attention_head_size,
         )
         

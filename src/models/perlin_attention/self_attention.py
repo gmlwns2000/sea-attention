@@ -29,7 +29,7 @@ class PerlinSelfAttention(nn.Module):
         
         self.config = config
         self.pconfig = perlin_config if perlin_config is not None else get_default_config()
-        warnings.warn(f'PerlinSelfAttentionConfig: {self.pconfig}')
+        # warnings.warn(f'PerlinSelfAttentionConfig: {self.pconfig}')
 
         self.num_attention_heads = config.num_attention_heads
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
