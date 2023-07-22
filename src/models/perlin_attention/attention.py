@@ -232,6 +232,8 @@ class PerlinAttention(nn.Module):
         zero_one_attention_mask_cumsum = zero_one_attention_mask.cumsum(-1)
         zero_one_attention_mask_sum = zero_one_attention_mask.sum(-1)
         
+        get_bench().register_temp_buffer('attention_mask', attention_mask)
+        
         with timer("perlin"):
             N, H, T, HID = q.shape
             with timer("vmask"):
@@ -395,6 +397,8 @@ class PerlinAttention(nn.Module):
                 
                 estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             
+            get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
+            
             # in layerwise, train perlin attention predictor
             def resize_from_m_to_t(x, masked_fill_value):
                 N, H, T, T_M = x.shape
@@ -520,7 +524,7 @@ class PerlinAttention(nn.Module):
                         # print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
                         # input()
-                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
+                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.round(T_M / token_length)
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
@@ -532,6 +536,8 @@ class PerlinAttention(nn.Module):
                             t_alive_mask = partial_attention_mask < per_item_top_k
                             partial_attention_mask = t_alive_mask.float()
                     partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
+            
+            get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
             
             with timer("interp"):
                 # NOTE: partial attention mask should be filled with 0 and -inf only.
@@ -767,11 +773,14 @@ class PerlinAttention(nn.Module):
             raise_if_nan(attention_probs_dense)
             raise_if_nan(k_for_score)
             
+            estimated_attention_probs_for_output = estimated_attention_probs if self.benchmarking else estimated_attention_probs_resized
+            get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
+            
             return PerlinAttentionOutput(
                 loss=loss,
                 context_layer=partial_context_layer,
                 partial_attention_probs=partial_attention_probs,
-                estimated_attention_probs=estimated_attention_probs if self.benchmarking else estimated_attention_probs_resized,
+                estimated_attention_probs=estimated_attention_probs_for_output,
                 dense_attention_probs=attention_probs_dense,
                 key_for_score=k_for_score,
             )

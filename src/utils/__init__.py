@@ -382,10 +382,12 @@ class Benchmark:
 
     def register_temp_buffer(self, name, v):
         if not self.activate_temp_buffers: return
-        self.buffers[name] = v
+        buffer = self.buffers.get(name, [])
+        buffer.append(v)
+        self.buffers[name] = buffer
     
-    def get_temp_buffer(self, name):
-        return self.buffers[name]
+    def get_temp_buffer(self, name, index=-1):
+        return self.buffers[name][index]
 
 BENCHMARK = Benchmark()
 
