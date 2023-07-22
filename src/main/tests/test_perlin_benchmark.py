@@ -38,6 +38,7 @@ def main():
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,
+        k=128,
     ))
     perlin = BertModel(config).to(device).eval()
     for module in perlin.modules():
@@ -104,7 +105,7 @@ def main():
                     print('.', end='', flush=True)
             torch.cuda.synchronize()
             mem = torch.cuda.max_memory_allocated() - start_mem
-        except torch.cuda.OutOfMemoryError as ex:
+        except torch.cuda.OutOfMemoryError as ex: #type: ignore
             mem = 0
         elapsed = time.time() - t
         interval = elapsed/(sample_count + 1e-8)

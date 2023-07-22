@@ -483,7 +483,11 @@ class PerlinAttention(nn.Module):
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
                     with timer("mask.view"):
-                        t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H*T*T_M)
+                        if k_flatten_dim == 'batch':
+                            t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H*T*T_M)
+                        elif k_flatten_dim == 'head':
+                            t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H, T*T_M)
+                        else: raise Exception()
                     with timer("mask.topk"):
                         _, indices = torch.topk(
                             input=t,
@@ -549,6 +553,7 @@ class PerlinAttention(nn.Module):
                 # )
                 with timer("interp.resize"):
                     # print(torch.unique(partial_attention_mask).shape)
+                    # TODO Fix this function to return COO tensor
                     partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0)
                     # print(torch.unique(partial_attention_mask).shape)
                     # print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
