@@ -5,6 +5,7 @@ import numpy as np
 import tqdm
 import transformers
 from datasets import load_dataset, load_metric
+from ..dataset.glue import get_dataloader, TASK_TO_VALID
 import random, copy
 import torch
 
@@ -17,18 +18,6 @@ from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
 
 import wandb
-
-task_to_keys = {
-    "cola": ("sentence", None),
-    "mnli": ("premise", "hypothesis"),
-    "mrpc": ("sentence1", "sentence2"),
-    "qnli": ("question", "sentence"),
-    "qqp": ("question1", "question2"),
-    "rte": ("sentence1", "sentence2"),
-    "sst2": ("sentence", None),
-    "stsb": ("sentence1", "sentence2"),
-    "wnli": ("sentence1", "sentence2"),
-}
 
 task_to_epochs = {
     "cola": 100,
@@ -55,53 +44,6 @@ task_to_batch_size = {
     "wnli": 32,
     "bert": 4,
 }
-
-task_to_valid = {
-    "cola": "validation",
-    "mnli": "validation_matched",
-    "mrpc": "test",
-    "qnli": "validation",
-    "qqp": "validation",
-    "rte": "validation",
-    "sst2": "validation",
-    "stsb": "validation",
-    "wnli": "validation",
-    "bert": "validation",
-}
-
-def get_dataloader(subset, tokenizer, batch_size, split='train'):
-    if subset == 'bert':
-        subset = "cola" #return dummy set
-    
-    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
-    
-    sentence1_key, sentence2_key = task_to_keys[subset]
-
-    def encode(examples):
-        # Tokenize the texts
-        args = (
-            (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*args, padding=True, max_length=256, truncation=True)
-        # result = tokenizer(*args, padding="max_length", max_length=512, truncation=True)
-        # Map labels to IDs (not necessary for GLUE tasks)
-        # if label_to_id is not None and "label" in examples:
-        #     result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
-        return result
-    
-    if split.startswith('train'): #shuffle when train set
-        dataset = dataset.sort('label')
-        dataset = dataset.shuffle(seed=random.randint(0, 10000))
-    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=384)
-    dataset = dataset.map(encode, batched=True, batch_size=384)
-    dataset.set_format(type='torch', columns=['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
-
-    dataloader = torch.utils.data.DataLoader(
-        dataset, 
-        batch_size=batch_size, 
-        num_workers=0,
-    )
-    return dataloader
 
 def get_base_model(dataset, only_tokenizer=False):
     checkpoint = {
@@ -185,7 +127,7 @@ class Trainer:
         self.base_model.to(self.device)
         
         self.reset_trainloader()
-        self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
+        self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=TASK_TO_VALID[self.subset])
         
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -297,10 +239,10 @@ class Trainer:
         
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
-        # self.scaler.unscale_(self.optimizer)
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         
-        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+        if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.optimizer.zero_grad()
             self.scaler.update()
@@ -354,16 +296,16 @@ class Trainer:
                     self.base_model.eval()
                     m = Metric()
                     
-                    wandb.log({'eval/score': score}, step=self.step)
+                    wandb.log({'eval/score': score}, step=int(self.step))
                 
                 if ((istep + 1) % 15) == 0:
                     wandb_data = {}
                     for k, v in self.loss_details.items():
                         wandb_data[f'train/{k}'] = v
                     wandb_data['train/epoch'] = (istep / len(pbar)) + self.epoch
-                    wandb.log(wandb_data, step=self.step)
+                    wandb.log(wandb_data, step=int(self.step))
                 
-                self.step += 1
+                self.step += 1 / self.gradient_accumulation_steps
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -466,7 +408,7 @@ class Trainer:
             wandb.log({
                 'eval/score': valid_score,
                 'train/score': train_score,
-            }, step=self.step)
+            }, step=int(self.step))
             self.save()
 
 if __name__ == '__main__':

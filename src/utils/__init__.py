@@ -342,9 +342,26 @@ class BenchmarkRegion:
         self.t = time.time() - self.t
         self.benchmark.add_data(self.name, self.t)
 
+class BenchmarkMemRegion:
+    def __init__(self, benchmark: "Benchmark", name: str) -> None:
+        self.benchmark = benchmark
+        self.name = name
+    
+    def __enter__(self):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = torch.cuda.memory_allocated()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.benchmark.synchronize: torch.cuda.synchronize()
+        self.t = torch.cuda.memory_allocated() - self.t
+        # print(self.name, self.t // 1024)
+        # self.benchmark.add_data(self.name, self.t)
+
 class Benchmark:
     def __init__(self):
         self.synchronize = False
+        self.activate_temp_buffers = False
+        self.buffers = {}
         self.data = {}
     
     def add_data(self, name, t):
@@ -353,12 +370,24 @@ class Benchmark:
     
     def region(self, name):
         return BenchmarkRegion(benchmark=self, name=name)
+    
+    def mem_region(self, name):
+        return BenchmarkMemRegion(benchmark=self, name=name)
 
     def todict(self):
         data = {}
         for key, (c, s) in self.data.items():
             data[key] = s / (c+1e-10)
         return data
+
+    def register_temp_buffer(self, name, v):
+        if not self.activate_temp_buffers: return
+        buffer = self.buffers.get(name, [])
+        buffer.append(v)
+        self.buffers[name] = buffer
+    
+    def get_temp_buffer(self, name, index=-1):
+        return self.buffers[name][index]
 
 BENCHMARK = Benchmark()
 

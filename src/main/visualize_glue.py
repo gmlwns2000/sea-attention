@@ -87,6 +87,9 @@ def main(
     teacher = trainer.base_model
     bert = trainer.model
     
+    teacher.eval()
+    bert.eval()
+    
     with torch.no_grad():
         teacher(**batch)
         batch['teacher'] = teacher
