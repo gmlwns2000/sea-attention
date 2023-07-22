@@ -524,7 +524,7 @@ class PerlinAttention(nn.Module):
                         # print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
                         # input()
-                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.round(T_M / token_length)
+                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
