@@ -465,7 +465,7 @@ class PerlinAttention(nn.Module):
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
                 # col / row selection before topk
-                perlin_col_select = True # TODO 
+                perlin_col_select = False # TODO 
                 perlin_row_select = False # TODO 
                 warnings.warn(f'perlin_col_select {perlin_col_select}')
                 if perlin_col_select: # NOTE selected col count : num_attention_heads
@@ -489,9 +489,13 @@ class PerlinAttention(nn.Module):
                             largest_indx = sum_per_col.argmax(dim=-1) # would be [N, H] 0~T_M-1 in each row
                             large_inx = largest_indx.view(N, H, 1, 1)\
                                 .expand_as(estimated_attention_probs) # [N, H, T, T_M]
-                            inx = torch.arange(T_M).view(1,1,1,T_M)\
+                            inx = torch.arange(
+                                T_M,
+                                dtype=large_inx.dtype, # TODO check dtype device
+                                device=large_inx.device,
+                                ).view(1,1,1,T_M)\
                                 .expand_as(estimated_attention_probs) # [N, H, T, T_M]
-                            col_select_mask = inx == large_inx
+                            col_select_mask = (inx == large_inx) # TODO check device
                             estimated_attention_probs[col_select_mask] = 0.0 # [N, H, T, T_M]
                             if k_flatten and k_flatten_dim == 'head':
                                 t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H, T*T_M) # TODO check for head
@@ -519,6 +523,7 @@ class PerlinAttention(nn.Module):
                     if perlin_col_select:
                         partial_attention_mask[col_select_mask] = 0.0
                 else:
+                    warnings.warn(f"k_flatten_dim {k_flatten_dim}")
                     if not perlin_col_select:
                         with timer("mask.view"):
                             if k_flatten_dim == 'batch':
@@ -579,7 +584,7 @@ class PerlinAttention(nn.Module):
                             t_alive_mask = partial_attention_mask < per_item_top_k
                             partial_attention_mask = t_alive_mask.float()
                     if perlin_col_select:
-                        if k_flatten_dim=='batch':
+                        if k_flatten_dim=='batch': # partial_attention_mask [N, T*H*T_M]
                             partial_attention_mask = partial_attention_mask.view(N, T, H*T_M) # NOTE memory order is carefully considered
                             partial_attention_mask.scatter_(dim=-1, index=large_inx, value=0.0) # [N, T, H] ~> (N, T, H*T_M)
                             partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).permute(0,2,1,3)

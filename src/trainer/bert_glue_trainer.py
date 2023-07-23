@@ -349,7 +349,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/aft_col(headwise)_checkpoint.pth'
         return path
     
     def save(self):
@@ -374,7 +374,7 @@ class Trainer:
             print(f'Trainer: load {path} @ {state["step"] if "step" in state else None}')
             model_state_dict = state['model']
             model_state_dict = self.migrate_state_dict(model_state_dict)
-            self.model.load_state_dict(model_state_dict)
+            self.model.load_state_dict(model_state_dict, strict=False)
             self.base_model.load_state_dict(state['base_model'])
             # self.optimizer.load_state_dict(state['optimizer'])
             del state
