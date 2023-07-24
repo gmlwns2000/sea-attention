@@ -26,7 +26,7 @@ TASK_TO_KEYS = {
     "wnli": ("sentence1", "sentence2"),
 }
 
-def get_dataloader(subset, tokenizer, batch_size, split='train'):
+def get_dataloader(subset, tokenizer, batch_size, split='train', encode_batch_size=384):
     if subset == 'bert':
         subset = "cola" #return dummy set
     
@@ -49,8 +49,8 @@ def get_dataloader(subset, tokenizer, batch_size, split='train'):
     if split.startswith('train'): #shuffle when train set
         dataset = dataset.sort('label')
         dataset = dataset.shuffle(seed=random.randint(0, 10000))
-    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=384)
-    dataset = dataset.map(encode, batched=True, batch_size=384)
+    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=encode_batch_size)
+    dataset = dataset.map(encode, batched=True, batch_size=encode_batch_size)
     dataset.set_format(type='torch', columns=['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
 
     dataloader = torch.utils.data.DataLoader(

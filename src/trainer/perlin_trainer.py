@@ -102,6 +102,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         disable_amp = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
+        batch_size = None,
         **kwargs,
     ):
         BaseTrainer.__init__(self, **kwargs)
@@ -128,6 +129,9 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         task_to_batch_size['sst2'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
         task_to_batch_size['stsb'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
         task_to_batch_size['wnli'] = (64 if not self.perlin_layerwise else 96) // gradient_accumulation_steps
+        
+        if batch_size is not None:
+            task_to_batch_size[subset] = batch_size
         
         BaseGlueTrainer.__init__(
             self,
