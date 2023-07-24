@@ -247,9 +247,9 @@ class Trainer:
             self.optimizer.zero_grad()
             self.scaler.update()
         
-        for module in self.model.modules():
-            if hasattr(module, 'redraw_projections'):
-                module.redraw_projections(self.device)
+            for module in self.model.modules():
+                if hasattr(module, 'redraw_projections'):
+                    module.redraw_projections(self.device)
         
         self.loss = loss.item()
         self.loss_details = {
