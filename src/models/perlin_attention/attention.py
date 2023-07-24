@@ -164,7 +164,7 @@ class PerlinAttention(nn.Module):
             # ResBlock(48),
             # nn.PixelShuffle(2),
             # nn.UpsamplingNearest2d(scale_factor=2),
-            UpsampleFP32(2),
+            # UpsampleFP32(2),
             nn.ConvTranspose2d(48, 12, 3, stride=2, padding=0),
             nn.ReLU(),
             nn.Conv2d(12, 12, 3, padding=0),
