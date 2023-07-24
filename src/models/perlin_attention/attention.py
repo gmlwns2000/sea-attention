@@ -220,6 +220,11 @@ class PerlinAttention(nn.Module):
         # self._v_eye = torch.eye(
         #     self.pconfig.v_eye_length, dtype=torch.float32
         # ).view(1, 1, self.pconfig.v_eye_length, self.pconfig.v_eye_length)
+        
+        self.v_eye_learned = nn.Parameter(
+            data=torch.rand((1, 1, self.attention_head_size, self.attention_head_size)),
+            requires_grad=True
+        )
     
     def forward(
         self,
@@ -264,15 +269,19 @@ class PerlinAttention(nn.Module):
                 with timer("vmaks.eye"):
                     # E_N = min(T, HID)
                     E_N = HID
-                    if self._v_eye is None or self._v_eye.shape[-1] != E_N:
-                        v_for_atten_identity = torch.eye(
-                            n=E_N,
-                            dtype=v.dtype,
-                            device=v.device,
-                        ).view(1, 1, E_N, E_N)
-                        self._v_eye = v_for_atten_identity
-                    else:
-                        v_for_atten_identity = self._v_eye
+                    
+                    # if self._v_eye is None or self._v_eye.shape[-1] != E_N:
+                    #     v_for_atten_identity = torch.eye(
+                    #         n=E_N,
+                    #         dtype=v.dtype,
+                    #         device=v.device,
+                    #     ).view(1, 1, E_N, E_N)
+                    #     self._v_eye = v_for_atten_identity
+                    # else:
+                    #     v_for_atten_identity = self._v_eye
+                    
+                    v_for_atten_identity = self.v_eye_learned
+                    
                     v_for_atten_identity = v_for_atten_identity.expand(v_for_atten.shape[:2] + (E_N, E_N))
                 
                 with timer("vmask.grid"):
@@ -292,7 +301,7 @@ class PerlinAttention(nn.Module):
                     v_for_atten_identity = F.grid_sample(
                         input=v_for_atten_identity, 
                         grid=token_index, 
-                        mode='nearest',
+                        mode='bilinear',
                         align_corners=False,
                     )
                 
@@ -803,6 +812,8 @@ class PerlinAttention(nn.Module):
                             partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
             
             if self.pconfig.random_lookup:
+                raise Exception()
+                # TODO please consider updated estimated attention probs
                 # lookup randomly that not looked up by partial context
                 num_lookups = self.pconfig.random_lookup_count
                 lookups = None
