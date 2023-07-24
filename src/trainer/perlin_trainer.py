@@ -68,6 +68,9 @@ class BaseTrainer:
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
+            elif isinstance(module, perlin_opt.OPTAttention):
+                assert not self.perlin_token_merging, "opt does not support this!"
+                module.attention_method = self.attention_method
         
         if self.perlin_layerwise:
             for name, param in model.named_parameters():

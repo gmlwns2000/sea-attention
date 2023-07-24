@@ -11,6 +11,11 @@ from matplotlib import cm
 model_config = 'facebook/opt-125m'
 
 model = perlin_opt.OPTForCausalLM.from_pretrained(model_config)
+for module in model.modules():
+    if isinstance(module, perlin_opt.OPTAttention):
+        module.attention_method = 'none'
+        module.attention_method = 'reformer'
+
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_config)
 input_ids = tokenizer(
     """
@@ -73,9 +78,9 @@ def imsave(img: torch.Tensor, filename):
     
     def convert_to_colormap(arr: np.ndarray):
         def norm(x):
-            return (x / np.max(x)) ** 0.2
+            return (x / (np.max(x) + 1e-12)) ** 0.2
         T, T = arr.shape
-        im = Image.fromarray((norm(cm.gist_earth((arr-np.min(arr)) / (np.max(arr) - np.min(arr))))*255).astype(np.uint8))
+        im = Image.fromarray((norm(cm.gist_earth((arr-np.min(arr)) / (np.max(arr) - np.min(arr) + 1e-12)))*255).astype(np.uint8))
         arr = np.asarray(im)[:, :, :3]
         # arr = cv2.resize(arr, None, fx=1, fy=1, interpolation=cv2.INTER_NEAREST)
         border = np.ones((arr.shape[0]+2, arr.shape[1]+2, arr.shape[2]), dtype=np.uint8)

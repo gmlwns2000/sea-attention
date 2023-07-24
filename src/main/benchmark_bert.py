@@ -171,7 +171,7 @@ def main_plot():
             exam_config(BenchConfig(
                 precision=precision,
                 method=method,
-                seq_len=t
+                seq_len=t,
             ))
             for t in ts
         ]

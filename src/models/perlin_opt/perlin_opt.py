@@ -13,12 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch OPT model."""
+from ..perlin_attention import get_default_config
+
 from typing import List, Optional, Tuple, Union
 
 import torch
 import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
+import torch.nn.functional as F
 
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import (
@@ -148,12 +151,157 @@ class OPTAttention(nn.Module):
         self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        
+        # for project
+        self.benchmarking = False
+        self.attention_method = 'none'
+        self.pconfig = get_default_config()
+        
+        ### reformer
+        from reformer_pytorch.reformer_pytorch import LSHAttention
+        
+        self.perlin_reformer_atten = LSHAttention(
+            dropout=dropout,
+            bucket_size=32,
+            n_hashes=8,
+            return_attn=False,
+            causal=True,
+        )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
-
+    
     def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor):
-        pass
+        N_H, T_SRC, _HID_Q = q.shape
+        N_H, T_DST, _HID_V = v.shape
+        HID = self.head_dim
+        assert _HID_V == _HID_V
+        assert HID == _HID_V
+        H = self.num_heads
+        N = N_H // self.num_heads
+        
+        if self.attention_method == 'none':
+            attn_weights = torch.bmm(q, k.transpose(1, 2))
+
+            if attn_weights.size() != (N * H, T_DST, T_SRC):
+                raise ValueError(
+                    f"Attention weights should be of size {(N * H, T_DST, T_SRC)}, but is"
+                    f" {attn_weights.size()}"
+                )
+
+            if attention_mask is not None:
+                if attention_mask.size() != (N, 1, T_DST, T_SRC):
+                    raise ValueError(
+                        f"Attention mask should be of size {(N, 1, T_DST, T_SRC)}, but is {attention_mask.size()}"
+                    )
+                attn_weights = attn_weights.view(N, H, T_DST, T_SRC) + attention_mask
+                attn_weights = torch.max(
+                    attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
+                )
+                attn_weights = attn_weights.view(N * H, T_DST, T_SRC)
+
+            # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
+            if attn_weights.dtype == torch.float16:
+                attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(torch.float16)
+            else:
+                attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+            # if layer_head_mask is not None:
+            #     if layer_head_mask.size() != (self.num_heads,):
+            #         raise ValueError(
+            #             f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
+            #             f" {layer_head_mask.size()}"
+            #         )
+            #     attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
+            #     attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
+
+            if True:
+                # this operation is a bit awkward, but it's required to
+                # make sure that attn_weights keeps its gradient.
+                # In order to do so, attn_weights have to be reshaped
+                # twice and have to be reused in the following
+                attn_weights_reshaped = attn_weights.view(N, H, T_DST, T_SRC)
+                attn_weights = attn_weights_reshaped.view(N * H, T_DST, T_SRC)
+            else:
+                attn_weights_reshaped = None
+
+            attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+            attn_output = torch.bmm(attn_probs, v)
+
+            # if attn_output.size() != (N * self.num_heads, T_DST, self.head_dim):
+            #     raise ValueError(
+            #         f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
+            #         f" {attn_output.size()}"
+            #     )
+
+            attn_output = attn_output.view(N, H, T_DST, HID)
+            attn_output = attn_output.transpose(1, 2)
+
+            # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
+            # partitioned aross GPUs when using tensor-parallelism.
+            attn_output = attn_output.reshape(N, T_DST, H*HID)
+            
+            return attn_output, attn_weights_reshaped
+        elif self.attention_method == 'reformer':
+            assert T_SRC == T_DST, "need to fix later"
+            
+            q = q.view(N, H, T_SRC, HID)
+            k = k.view(N, H, T_DST, HID)
+            v = v.view(N, H, T_DST, HID)
+            
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            
+            binary_mask = attention_mask > -1
+            
+            #pad
+            bucket_size = self.pconfig.k
+            pad_unit_size = bucket_size * 2
+            to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
+            TP = T + to_pad
+            if to_pad != 0:
+                pad_config = (0,0,0,to_pad)
+                q = F.pad(q, pad_config).float()
+                v = F.pad(v, pad_config).float()
+                binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+                assert q.shape == (N, H, T+to_pad, HID)
+            else:
+                q = q.float()
+                v = v.float()
+                binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+            def merge_head(t: torch.Tensor):
+                N, H, T, HID = t.shape
+                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            q = merge_head(q)
+            v = merge_head(v)
+            self.perlin_reformer_atten.bucket_size = bucket_size
+            reformer_context_layer, _,_ = self.perlin_reformer_atten(
+                q, 
+                v, 
+                input_attn_mask = binary_mask
+            )
+            #unpad
+            if to_pad != 0:
+                q = None
+                v = None
+                reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer[:, :, :T, :]
+            else:
+                reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            
+            if not self.benchmarking:
+                attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+            else:
+                attention_probs = None
+            
+            reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = reformer_context_layer.size()[:-2] + (H*HID,)
+            reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
+            
+            return reformer_context_layer, attention_probs
+        else:
+            raise Exception()
 
     def forward(
         self,
@@ -208,68 +356,15 @@ class OPTAttention(nn.Module):
         query_states = self._shape(query_states, tgt_len, bsz).view(*proj_shape)
         key_states = key_states.view(*proj_shape)
         value_states = value_states.view(*proj_shape)
+        assert attention_mask is not None
+        assert layer_head_mask is None
 
-        src_len = key_states.size(1)
-        attn_weights = torch.bmm(query_states, key_states.transpose(1, 2))
-
-        if attn_weights.size() != (bsz * self.num_heads, tgt_len, src_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz * self.num_heads, tgt_len, src_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, tgt_len, src_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, tgt_len, src_len)}, but is {attention_mask.size()}"
-                )
-            attn_weights = attn_weights.view(bsz, self.num_heads, tgt_len, src_len) + attention_mask
-            attn_weights = torch.max(
-                attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
-            )
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
-        # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
-        if attn_weights.dtype == torch.float16:
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(torch.float16)
-        else:
-            attn_weights = nn.functional.softmax(attn_weights, dim=-1)
-
-        if layer_head_mask is not None:
-            if layer_head_mask.size() != (self.num_heads,):
-                raise ValueError(
-                    f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-                    f" {layer_head_mask.size()}"
-                )
-            attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
-        if output_attentions:
-            # this operation is a bit awkward, but it's required to
-            # make sure that attn_weights keeps its gradient.
-            # In order to do so, attn_weights have to be reshaped
-            # twice and have to be reused in the following
-            attn_weights_reshaped = attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            attn_weights = attn_weights_reshaped.view(bsz * self.num_heads, tgt_len, src_len)
-        else:
-            attn_weights_reshaped = None
-
-        attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
-
-        attn_output = torch.bmm(attn_probs, value_states)
-
-        if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
-            raise ValueError(
-                f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
-        attn_output = attn_output.view(bsz, self.num_heads, tgt_len, self.head_dim)
-        attn_output = attn_output.transpose(1, 2)
-
-        # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
-        # partitioned aross GPUs when using tensor-parallelism.
-        attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
+        attn_output, attn_weights_reshaped = self.attention(
+            q=query_states,
+            k=key_states,
+            v=value_states,
+            attention_mask=attention_mask,
+        )
 
         attn_output = self.out_proj(attn_output)
 

@@ -20,6 +20,7 @@ class TrainerConfig:
     wandb_steps: int = 20
     
     # optimization flags
+    # TODO grad checkpointing is not correct...
     gradient_checkpointing: bool = False
     gradient_accumulation_steps: int = 8
     amp_enabled: bool = True
@@ -38,6 +39,8 @@ class TrainerConfig:
     high_lr_names: List[str] = field(default_factory=lambda: ['perlin'])
     using_kd: bool = True
     using_loss: bool = True
+    # NOTE decrease this only for DEBUG!!, this should be 2048 on OPT
+    max_seq_len: int = 512
     
 BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -72,8 +75,7 @@ class Trainer:
             max_length = self.model.config.n_positions
         else:
             max_length = self.model.config.max_position_embeddings
-        self.max_seq_len = max_length
-        self.max_seq_len = 512
+        self.max_seq_len = min(self.config.max_seq_len, max_length)
         
         if self.config.gradient_checkpointing:
             print('patch gradient checkpointing')
@@ -234,7 +236,7 @@ class Trainer:
                     f'trian/loss/{k}': v for k, v in loss_details.items()
                 })
                 
-                if ((self._istep + 1) % self.config.eval_steps) == 0:
+                if ((self.step + 1) % self.config.eval_steps) == 0:
                     score = self.evaluate()
                     wandb_dict['eval/score'] = score
                 
