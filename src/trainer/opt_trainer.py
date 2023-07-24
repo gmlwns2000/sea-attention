@@ -223,11 +223,13 @@ class Trainer:
     def train_epoch(self):
         m = Metric()
         
-        with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
-            for batch in pbar:
+        train_loader_len = len(self.train_loader)
+        with tqdm.tqdm(enumerate(self.train_loader), dynamic_ncols=True) as pbar:
+            for istep, batch in pbar:
                 wandb_dict = {}
                 loss, loss_details = self.train_step(batch)
                 wandb_dict['train/loss'] = loss
+                wandb_dict['train/epoch'] = self.epoch + istep / train_loader_len
                 wandb_dict.update({
                     f'trian/loss/{k}': v for k, v in loss_details.items()
                 })
@@ -323,6 +325,7 @@ class Trainer:
             self.epoch = epoch
             self.train_epoch()
             score = self.evaluate()
+            wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
 
 if __name__ == '__main__':
     t = Trainer()
