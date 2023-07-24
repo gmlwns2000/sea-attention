@@ -38,7 +38,7 @@ def main():
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,
-        k=128,
+        k=32,
     ))
     perlin = BertModel(config).to(device).eval()
     for module in perlin.modules():

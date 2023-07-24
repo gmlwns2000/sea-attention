@@ -15,18 +15,20 @@ from ..models.perlin_bert import BertModel, BertSelfAttention
 from ..models.perlin_attention.config import PerlinAttentionConfig, register_default_config
 from ..utils import seed, get_bench
 from torch import nn
+import json
 
 plt.style.use('seaborn-bright')
 
 @dataclass
 class BenchConfig:
     method: str = 'perlin'
-    t_warmup: int = 1
-    t_sample: int = 3
+    t_warmup: int = 0.5
+    t_sample: int = 1
     precision: torch.dtype = torch.float32
     bsize: int = 1
     seq_len: int = 4096
     k: int = 64
+    nbf: float = 1
 
 def bench(name, fn, config: BenchConfig):
     sample_count = 0
@@ -87,7 +89,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     config.max_position_embeddings = SEQ_LEN
 
     register_default_config(PerlinAttentionConfig(
-        performer_nb_factor=8 if method == 'perlin' else 1,
+        performer_nb_factor=bench_config.nbf if method == 'perlin' else 1,
         lora_enabed=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
@@ -145,23 +147,11 @@ def main_methods():
 def main_plot():
     precision = torch.float32
     
-    baseline_methods = ['none', 'performer', 'reformer']
+    baseline_methods = ['none', 'performer', 'reformer', 'sinkhorn', 'synthesizer', 'scatterbrain']
     ts = [2**x for x in range(8, 14)]
-    ks = [2**x for x in range(5, 9)]
+    ks = [2**x for x in range(3, 9)]
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
-    
-    result_baseline = [
-        [
-            exam_config(BenchConfig(
-                precision=precision,
-                method=method,
-                seq_len=t
-            ))
-            for t in ts
-        ]
-        for method in baseline_methods
-    ]
     
     result_perlin = [
         [
@@ -174,6 +164,18 @@ def main_plot():
             for t in ts
         ]
         for k in ks
+    ]
+    
+    result_baseline = [
+        [
+            exam_config(BenchConfig(
+                precision=precision,
+                method=method,
+                seq_len=t
+            ))
+            for t in ts
+        ]
+        for method in baseline_methods
     ]
     
     latencies_baseline = [
@@ -193,10 +195,20 @@ def main_plot():
         for result in result_perlin
     ]
     
+    root = './plots/main/benchmark_bert'
+    os.makedirs(root, exist_ok=True)
+    
+    with open(os.path.join(root, 'data.json'), 'w') as f:
+        json.dump({
+            'latencies_baseline': latencies_baseline,
+            'latencies_perlin': latencies_perlin,
+            'vram_baseline': vram_baseline,
+            'vram_perlin': vram_perlin,
+            'ts': ts,
+            'ks': ks,
+        }, f)
+    
     def plot(metric_name, baselines, perlins, ts, ks):
-        root = './plots/main/benchmark_bert'
-        os.makedirs(root, exist_ok=True)
-        
         plt.clf()
         
         for iy, ys in enumerate(baselines):
@@ -207,7 +219,8 @@ def main_plot():
         plt.title(f'{metric_name}')
         plt.xlabel(f'tokens')
         plt.ylabel(f'{metric_name}')
-        plt.yscale('log')
+        plt.yscale('log', base=2)
+        plt.xscale('log', base=2)
         plt.grid()
         plt.legend()
         

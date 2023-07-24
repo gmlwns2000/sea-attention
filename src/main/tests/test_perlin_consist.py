@@ -51,7 +51,8 @@ BENCH_PRECISION = torch.float32
 input_ids = torch.randint(0, 10000, (BSIZE, SEQ_LEN)).to(device)
 attention_mask = torch.ones((BSIZE, SEQ_LEN)).to(device)
 for i in range(attention_mask.shape[0]):
-    attention_mask[i, random.randint(16, attention_mask.shape[1]-1):] = 0
+    attention_mask[i, random.randint(16, attention_mask.shape[1]-1):] = 1
+    # attention_mask[i, random.randint(16, attention_mask.shape[1]-1):] = 0
 hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
 attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
 attention_mask_expand = (1-attention_mask_expand)*(-32000)
@@ -73,7 +74,7 @@ with torch.no_grad():
 set_benchmark(perlin, True)
 with torch.no_grad():
     output_b1_0 = layer(hidden_states=hidden_states, attention_mask=attention_mask_expand)[0]
-    partial_attention_mask_b1 = get_bench().get_temp_buffer('partial_attention_mask')
+    partial_attention_mask_b1 = get_bench().get_temp_buffer('partial_attention_mask').to_dense().view(BSIZE, 12, SEQ_LEN, SEQ_LEN)
     attention_matrix_b1 = get_bench().get_temp_buffer('attention_matrix').to_dense().view(BSIZE, 12, SEQ_LEN, SEQ_LEN)
     q_for_score_b1 = get_bench().get_temp_buffer('q_for_score')
     k_for_score_b1 = get_bench().get_temp_buffer('k_for_score')
