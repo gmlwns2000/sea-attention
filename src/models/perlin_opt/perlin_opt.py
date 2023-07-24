@@ -847,7 +847,8 @@ class OPTForCausalLM(OPTPreTrainedModel):
         return self.model.decoder
     
     def calc_loss_special(self):
-        return 42
+        loss = 0
+        return loss
 
     @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(

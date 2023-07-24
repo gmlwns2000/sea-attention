@@ -209,10 +209,12 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }
         }[model][subset]
         
-        BaseOptTrainer.__init__(self,OptTrainerConfig(
+        BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
             model_cls=perlin_opt.OPTForCausalLM,
+            model_config=model_config,
             amp_enabled=not disable_amp,
+            epochs=epochs if epochs is not None else 100,
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_checkpointing=gradient_checkpointing,
         ))
@@ -282,6 +284,8 @@ if __name__ == '__main__':
             args.subset = 'mnli'
         elif args.dataset == 'lra':
             args.subset = 'listops'
+        elif args.dataset == 'wikitext2':
+            args.subset = 'wikitext2'
         else:
             raise Exception()
 

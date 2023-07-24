@@ -20,8 +20,8 @@ class TrainerConfig:
     wandb_steps: int = 20
     
     # optimization flags
-    gradient_checkpointing = False
-    gradient_accumulation_steps = 8
+    gradient_checkpointing: bool = False
+    gradient_accumulation_steps: int = 8
     amp_enabled: bool = True
     
     # experiment settings
@@ -224,8 +224,8 @@ class Trainer:
         m = Metric()
         
         train_loader_len = len(self.train_loader)
-        with tqdm.tqdm(enumerate(self.train_loader), dynamic_ncols=True) as pbar:
-            for istep, batch in pbar:
+        with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
+            for istep, batch in enumerate(pbar):
                 wandb_dict = {}
                 loss, loss_details = self.train_step(batch)
                 wandb_dict['train/loss'] = loss
