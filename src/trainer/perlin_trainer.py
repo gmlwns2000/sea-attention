@@ -4,12 +4,15 @@ import torch
 from torch import nn
 
 from ..models import perlin_attention
-from ..models import perlin_bert as perlin
+from ..models import perlin_bert
+from ..models import perlin_opt
 from ..models.perlin_bert.compat import migrate_state_dict
 from ..utils import seed
 from .glue_trainer import Trainer as BaseGlueTrainer
 from .glue_trainer import task_to_batch_size
 from .lra_trainer import Trainer as BaseLraTrainer
+from .opt_trainer import Trainer as BaseOptTrainer
+from .opt_trainer import TrainerConfig as OptTrainerConfig
 
 bool2int = lambda x: 1 if x else 0
 
@@ -60,7 +63,7 @@ class BaseTrainer:
     
     def apply_model_options(self, model: nn.Module):
         for module in model.modules():
-            if isinstance(module, perlin.BertSelfAttention):
+            if isinstance(module, perlin_bert.BertSelfAttention):
                 module.attention_method = self.attention_method
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
@@ -136,7 +139,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
         BaseGlueTrainer.__init__(
             self,
             subset=subset,
-            model_cls=perlin.BertForSequenceClassification,
+            model_cls=perlin_bert.BertForSequenceClassification,
             amp_enabled=not disable_amp,
             trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
@@ -171,7 +174,7 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
             self,
             exp_name=self.format_exp(f'lra_{subset}'),
             subset=subset,
-            model_cls=perlin.BertForSequenceClassification,
+            model_cls=perlin_bert.BertForSequenceClassification,
             gradient_checkpointing = gradient_checkpointing,
             gradient_accumulation_steps = gradient_accumulation_steps,
             using_kd=True,
@@ -182,6 +185,39 @@ class LraTrainer(BaseLraTrainer, BaseTrainer):
     
     def migrate_state_dict(self, state_dict):
         return migrate_state_dict(state_dict)
+
+class OptTrainer(BaseOptTrainer, BaseTrainer):
+    def __init__(
+        self, 
+        model: str = 'opt',
+        subset: str = 'wikitext2',
+        disable_amp: bool = False,
+        gradient_checkpointing = False,
+        gradient_accumulation_steps = 1,
+        epochs: int = None,
+        **kwargs
+    ):
+        BaseTrainer.__init__(self, **kwargs)
+        
+        model = {
+            'opt': 'opt-125m',
+        }.get(model, model)
+        
+        model_config = {
+            'opt-125m': {
+                'wikitext2': 'Aalaa/opt-125m-wikitext2'
+            }
+        }[model][subset]
+        
+        BaseOptTrainer.__init__(self,OptTrainerConfig(
+            experiment_name=self.format_exp(f'{model}_{subset}'),
+            model_cls=perlin_opt.OPTForCausalLM,
+            amp_enabled=not disable_amp,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            gradient_checkpointing=gradient_checkpointing,
+        ))
+        
+        self.apply_model_options(self.model)
 
 def add_perlin_model_options(parser):
     parser.add_argument('--method', default='perlin', type=str)
@@ -223,6 +259,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--dataset', default='glue', type=str)
+    parser.add_argument('--model', default='bert', type=str)
     parser.add_argument('--subset', default=None, type=str)
     parser.add_argument('--epochs', default=None, type=int)
     parser.add_argument('--load-checkpoint', default=None, type=str)
@@ -247,8 +284,18 @@ if __name__ == '__main__':
             args.subset = 'listops'
         else:
             raise Exception()
+
+    if args.dataset == 'glue':
+        assert args.model in ['bert']
+    elif args.dataset == 'lra':
+        assert args.model in ['bert']
+    elif args.dataset == 'wikitext2':
+        assert args.model in ['opt']
+    else:
+        raise Exception()
     
     kwargs = {
+        'model': args.model,
         'subset':args.subset,
         'epochs': args.epochs,
         'gradient_checkpointing':args.gradient_checkpointing,
@@ -261,6 +308,8 @@ if __name__ == '__main__':
         trainer = GlueTrainer(**kwargs)
     elif args.dataset == 'lra':
         trainer = LraTrainer(**kwargs)
+    elif args.model in ['opt']:
+        trainer = OptTrainer(**kwargs)
     else:
         raise Exception()
     
