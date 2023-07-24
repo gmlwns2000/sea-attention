@@ -22,8 +22,8 @@ plt.style.use('seaborn-bright')
 @dataclass
 class BenchConfig:
     method: str = 'perlin'
-    t_warmup: int = 0.5
-    t_sample: int = 1
+    t_warmup: int = 1
+    t_sample: int = 3
     precision: torch.dtype = torch.float32
     bsize: int = 1
     seq_len: int = 4096

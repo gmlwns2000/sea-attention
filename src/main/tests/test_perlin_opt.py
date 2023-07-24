@@ -14,7 +14,7 @@ model = perlin_opt.OPTForCausalLM.from_pretrained(model_config)
 for module in model.modules():
     if isinstance(module, perlin_opt.OPTAttention):
         module.attention_method = 'none'
-        module.attention_method = 'reformer'
+        # module.attention_method = 'reformer'
 
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_config)
 input_ids = tokenizer(
@@ -94,7 +94,18 @@ def imsave(img: torch.Tensor, filename):
     
     print('saved', path)
 
-for ilayer, atten_layer in enumerate(output.attentions):
-    for ihead, atten_head in enumerate(atten_layer[0]):
-        os.makedirs(os.path.join(root, f'attention/l{ilayer}'), exist_ok=True)
-        imsave(atten_head, f'attention/l{ilayer}/h{ihead}.png')
+render_attention = False
+if render_attention:
+    for ilayer, atten_layer in enumerate(output.attentions):
+        for ihead, atten_head in enumerate(atten_layer[0]):
+            os.makedirs(os.path.join(root, f'attention/l{ilayer}'), exist_ok=True)
+            imsave(atten_head, f'attention/l{ilayer}/h{ihead}.png')
+
+test_generation = True
+if test_generation:
+    prompt = "Hey, are you conscious? Can you talk to me?"
+    inputs = tokenizer(prompt, return_tensors="pt")
+
+    generate_ids = model.generate(inputs.input_ids, max_length=2048)
+    decoded = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+    print(decoded)

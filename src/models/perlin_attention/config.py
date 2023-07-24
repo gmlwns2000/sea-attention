@@ -14,7 +14,7 @@ class PerlinAttentionConfig:
     performer_nb_factor: int = 1
     k: int = 7
     k_flatten: bool = True
-    k_flatten_dim: str = 'batch'
+    k_flatten_dim: str = 'causal_batch'
     random_lookup: bool = False
     random_lookup_count: int = 3
     attention_predictor_method: str = 'mlp'

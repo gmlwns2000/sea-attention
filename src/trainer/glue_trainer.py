@@ -101,6 +101,7 @@ class Trainer:
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
+        wandb_configs = {}
     ) -> None:
         seed()
         
@@ -112,6 +113,7 @@ class Trainer:
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
         self.using_loss = using_loss
+        self.wandb_configs = wandb_configs
         
         self.amp_enabled = amp_enabled
         self.device = 0
@@ -396,6 +398,7 @@ class Trainer:
                 "batch_size": self.batch_size,
                 "subset": self.subset,
                 "epochs": self.epochs,
+                "global_configs": self.wandb_configs,
             }
         )
         # wandb.watch(self.model, log='all')

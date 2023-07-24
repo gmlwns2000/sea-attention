@@ -492,7 +492,7 @@ class PerlinAttention(nn.Module):
                 
                 T_M = estimated_attention_probs.shape[-1]
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
-                top_k = min(max(int(round(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M)
+                top_k = min(max(int(math.ceil(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
                 if not k_flatten:
                     with timer("mask.topk"):
@@ -513,31 +513,34 @@ class PerlinAttention(nn.Module):
                     with timer("mask.scatter"):
                         partial_attention_mask.scatter_(dim=-1, index=indices, value=0)
                 else:
+                    top_k_elems = None
+                    per_item_top_k = None 
                     k_flatten_dim = self.pconfig.k_flatten_dim
-                    assert k_flatten_dim in ['head', 'batch']
+                    assert k_flatten_dim in ['head', 'batch', 'causal_batch']
                     with timer("mask.view"):
+                        masked_estimated_attention_probs = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1))
                         if k_flatten_dim == 'batch':
-                            t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H*T*T_M)
+                            t = masked_estimated_attention_probs.view(N, H*T*T_M)
+                            top_k_elems = top_k*T*H
+                            per_item_top_k = token_length * H * self.pconfig.k * torch.ceil(T_M / token_length)
                         elif k_flatten_dim == 'head':
-                            t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H, T*T_M)
+                            t = masked_estimated_attention_probs.view(N, H, T*T_M)
+                            top_k_elems = top_k*T
+                            per_item_top_k = token_length * self.pconfig.k * torch.ceil(T_M / token_length)
+                        elif k_flatten_dim == 'causal_batch':
+                            t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
+                            top_k_elems = top_k*H
+                            # per_item_top_k = (H * self.pconfig.k)
+                            per_item_top_k = (H * self.pconfig.k * torch.ceil(T_M / token_length)).view(N, 1, 1)
+                            # print(t.shape, self.pconfig.k, T, T_M, token_length[0].item(), top_k, top_k_elems, per_item_top_k[0].item())
                         else: raise Exception()
                     with timer("mask.topk"):
                         _, indices = torch.topk(
                             input=t,
-                            k=top_k*T*H if k_flatten_dim == 'batch' else top_k*T, 
+                            k=top_k_elems, 
                             dim=-1, 
                             sorted=True #sorted true is important
                         )
-                    # with timer("mask.empty"):
-                    #     partial_attention_mask = torch.empty(
-                    #         t.shape, 
-                    #         dtype=q_for_score.dtype, 
-                    #         device=attention_mask.device,
-                    #     )
-                    # with timer("mask.fill"):
-                    #     partial_attention_mask.fill_(FP_MIN)
-                    # with timer("mask.scatter"):
-                    #     partial_attention_mask.scatter_(dim=-1, index=indices, value=0)
                     with timer("mask.empty"):
                         partial_attention_mask = torch.empty(
                             t.shape, 
@@ -551,17 +554,16 @@ class PerlinAttention(nn.Module):
                             dim=-1,
                             index=indices,
                             src=torch.arange(
-                                top_k*T*H if k_flatten_dim == 'batch' else top_k*T, 
+                                top_k_elems, 
                                 dtype=torch.long,
                                 device=attention_mask.device, 
                             )\
-                                .view((1, -1) if k_flatten_dim == 'batch' else (1, 1, -1))\
+                                .view((1, -1) if t.ndim == 2 else (1, 1, -1))\
                                 .expand(indices.shape)
                         )
                         # print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
                         # input()
-                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
@@ -572,6 +574,16 @@ class PerlinAttention(nn.Module):
                         else:
                             t_alive_mask = partial_attention_mask < per_item_top_k
                             partial_attention_mask = t_alive_mask.float()
+                    
+                    if k_flatten_dim == 'causal_batch':
+                        partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).transpose(1, 2)
+                        partial_attention_mask.masked_fill_(
+                            mask=attention_mask.transpose(-1, -2) < -1,
+                            value=FP_MIN
+                        )
+                    elif k_flatten_dim in ['batch', 'head']:
+                        pass
+                    else: raise Exception()
                     partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
             
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)

@@ -566,7 +566,10 @@ class BertSelfAttention(nn.Module):
                 v = v[:, :, :T, :]
                 sinkhorn_context_layer = sinkhorn_context_layer[:, :, :T, :]
             
-            attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            if not self.benchmarking:
+                attention_probs = torch.zeros((N, H, T, T), device=q.device, dtype=q.dtype)
+            else:
+                attention_probs = None
             
             sinkhorn_context_layer = sinkhorn_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = sinkhorn_context_layer.size()[:-2] + (self.all_head_size,)
@@ -599,7 +602,10 @@ class BertSelfAttention(nn.Module):
             )
             
             context_layer = reformer_context_layer + performer_context_layer
-            attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
+            if not self.benchmarking:
+                attention_probs = (reformer_attention_probs + performer_attention_probs) * 0.5
+            else:
+                attention_probs = performer_attention_probs
             
             self.last_loss = 0
         elif self.attention_method == 'none':

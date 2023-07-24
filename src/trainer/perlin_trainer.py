@@ -1,3 +1,4 @@
+from dataclasses import asdict
 import warnings
 
 import torch
@@ -99,6 +100,9 @@ class BaseTrainer:
             f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}'
         return name
 
+    def get_global_config(self):
+        return asdict(perlin_attention.get_default_config())
+
 class GlueTrainer(BaseGlueTrainer, BaseTrainer):
     def __init__(
         self, 
@@ -153,6 +157,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             gradient_checkpointing = gradient_checkpointing,
             gradient_accumulation_steps = gradient_accumulation_steps,
             high_lr_names=['perlin'],
+            wandb_configs=self.get_global_config(),
         )
         
         self.apply_model_options(self.model)

@@ -123,6 +123,7 @@ class OPTLearnedPositionalEmbedding(nn.Embedding):
 
 
 class OPTAttention(nn.Module):
+    _counter = 0
     """Multi-headed attention from 'Attention Is All You Need' paper"""
 
     def __init__(
@@ -134,6 +135,10 @@ class OPTAttention(nn.Module):
         bias: bool = True,
     ):
         super().__init__()
+        
+        self.layer_id = OPTAttention._counter
+        OPTAttention._counter += 1
+        
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.dropout = dropout
@@ -172,13 +177,16 @@ class OPTAttention(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
     
     def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor):
-        N_H, T_SRC, _HID_Q = q.shape
-        N_H, T_DST, _HID_V = v.shape
+        N_H, T_DST, _HID_Q = q.shape
+        N_H, T_SRC, _HID_V = v.shape
         HID = self.head_dim
         assert _HID_V == _HID_V
         assert HID == _HID_V
         H = self.num_heads
         N = N_H // self.num_heads
+        
+        if self.layer_id == 0:
+            print(f'attention(q{q.shape}, kv:{v.shape}, m:{attention_mask.shape})')
         
         if self.attention_method == 'none':
             attn_weights = torch.bmm(q, k.transpose(1, 2))
