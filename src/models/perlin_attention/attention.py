@@ -147,7 +147,8 @@ class PerlinAttention(nn.Module):
             nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
         )
         self.attention_predictor_cnn = KeepRes(
-            nn.Conv2d(12, 48, 3, padding=0, stride=2),
+            # NOTE if we use pixelshuffle outch should be 48
+            nn.Conv2d(12, 32, 3, padding=0, stride=2),
             # nn.BatchNorm2d(48),
             nn.ReLU(),
             # nn.Conv2d(48, 48, 3, padding=1),
@@ -159,13 +160,13 @@ class PerlinAttention(nn.Module):
             # nn.ReLU(),
             # nn.Conv2d(48, 48, 3, padding=1),
             # nn.ReLU(),
-            ResBlock(48),
-            ResBlock(48),
+            ResBlock(32),
+            ResBlock(32),
             # ResBlock(48),
             # nn.PixelShuffle(2),
             # nn.UpsamplingNearest2d(scale_factor=2),
             # UpsampleFP32(2),
-            nn.ConvTranspose2d(48, 12, 3, stride=2, padding=0),
+            nn.ConvTranspose2d(32, 12, 3, stride=2, padding=0),
             nn.ReLU(),
             nn.Conv2d(12, 12, 3, padding=0),
         )
@@ -261,7 +262,8 @@ class PerlinAttention(nn.Module):
                 #     interp_mode='nearest'
                 # ).expand(v_for_atten.shape).contiguous()
                 with timer("vmaks.eye"):
-                    E_N = min(T, HID)
+                    # E_N = min(T, HID)
+                    E_N = HID
                     if self._v_eye is None or self._v_eye.shape[-1] != E_N:
                         v_for_atten_identity = torch.eye(
                             n=E_N,
@@ -290,7 +292,7 @@ class PerlinAttention(nn.Module):
                     v_for_atten_identity = F.grid_sample(
                         input=v_for_atten_identity, 
                         grid=token_index, 
-                        mode='bilinear',
+                        mode='nearest',
                         align_corners=False,
                     )
                 
