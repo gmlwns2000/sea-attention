@@ -28,6 +28,9 @@ visualize_main(**kwargs)
 
 index_layer = 1
 
+v_for_atten = bench.get_temp_buffer('v_for_atten', index_layer)
+performer_context_layer = bench.get_temp_buffer('performer_context_layer', index_layer)
+estimated_attention_score = bench.get_temp_buffer('estimated_attention_score', index_layer)
 estimated_attention_probs = bench.get_temp_buffer('estimated_attention_probs', index_layer)
 estimated_attention_probs_for_output = bench.get_temp_buffer('estimated_attention_probs_for_output', index_layer)
 partial_attention_mask_before_interp = bench.get_temp_buffer('partial_attention_mask_before_interp', index_layer)
@@ -47,6 +50,9 @@ os.makedirs(root, exist_ok=True)
 index_batch = 2
 index_head = 0
 
+imsave(v_for_atten[index_batch,index_head], os.path.join(root, 'v_atten.png'))
+imsave(performer_context_layer[index_batch,index_head], os.path.join(root, 'perf_cont.png'))
+imsave(estimated_attention_score[index_batch,index_head], os.path.join(root, 'est_score.png'))
 imsave(estimated_attention_probs[index_batch,index_head], os.path.join(root, 'est.png'))
 imsave(estimated_attention_probs_for_output[index_batch,index_head], os.path.join(root, 'est_interp.png'))
 imsave(

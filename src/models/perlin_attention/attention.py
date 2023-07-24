@@ -72,14 +72,14 @@ class KeepRes(nn.Module):
         return x
 
 class ResBlock(nn.Module):
-    def __init__(self, ch, padding=1):
+    def __init__(self, ch, padding=0):
         super().__init__()
         
-        self.net = nn.Sequential(
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode='reflect'),
+        self.net = KeepRes(
+            nn.Conv2d(ch, ch, 3, padding=padding),
             # nn.BatchNorm2d(48),
             nn.ReLU(),
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode='reflect'),
+            nn.Conv2d(ch, ch, 3, padding=padding),
             # nn.BatchNorm2d(48),
         )
         self.relu = nn.ReLU()
@@ -271,11 +271,35 @@ class PerlinAttention(nn.Module):
                     E_N = HID
                     
                     if self._v_eye is None or self._v_eye.shape[-1] != E_N:
+                        from torch.distributions import Normal
+                        def gaussian_kernel_1d(sigma: float, num_sigmas: float = 3.) -> torch.Tensor:
+                            radius = math.ceil(num_sigmas * sigma)
+                            support = torch.arange(-radius, radius + 1, dtype=torch.float)
+                            kernel = Normal(loc=0, scale=sigma).log_prob(support).exp_()
+                            # Ensure kernel weights sum to 1, so that image brightness is not altered
+                            return kernel.mul_(1 / kernel.sum())
+                        
+                        def gaussian_filter_2d(img: torch.Tensor, sigma: float) -> torch.Tensor:
+                            kernel_1d = gaussian_kernel_1d(sigma).to(img.device)  # Create 1D Gaussian kernel
+                            
+                            padding = len(kernel_1d) // 2  # Ensure that image size does not change
+                            img = img.unsqueeze(0).unsqueeze_(0)  # Need 4D data for ``conv2d()``
+                            # Convolve along columns and rows
+                            img = F.conv2d(img, weight=kernel_1d.view(1, 1, -1, 1), padding=(padding, 0))
+                            img = F.conv2d(img, weight=kernel_1d.view(1, 1, 1, -1), padding=(0, padding))
+                            return img.squeeze_(0).squeeze_(0)  # Make 2D again
+
                         v_for_atten_identity = torch.eye(
                             n=E_N,
                             dtype=v.dtype,
                             device=v.device,
-                        ).view(1, 1, E_N, E_N)
+                        )
+                        # sig, mu = torch.std_mean(v_for_atten_identity, dim=-1, keepdim=True)
+                        # v_for_atten_identity = (v_for_atten_identity - mu) / sig
+                        v_for_atten_identity = gaussian_filter_2d(v_for_atten_identity, 2)
+                        v_for_atten_identity = F.normalize(v_for_atten_identity, dim=-1)
+                        
+                        v_for_atten_identity = v_for_atten_identity.view(1, 1, E_N, E_N)
                         self._v_eye = v_for_atten_identity
                     else:
                         v_for_atten_identity = self._v_eye
@@ -310,6 +334,8 @@ class PerlinAttention(nn.Module):
                         v_for_atten_identity, 
                         v_for_atten
                     ], dim=-1)
+                    
+                    get_bench().register_temp_buffer('v_for_atten', v_for_atten)
                 
                     v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
                     v.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
@@ -332,6 +358,7 @@ class PerlinAttention(nn.Module):
                         k_for_atten, 
                         v_for_atten
                     )
+                get_bench().register_temp_buffer('performer_context_layer', performer_context_layer)
             
             with timer("performer_value"):
                 # NOTE HJ Cut gradient from loss_sp, because loss_sp has negative effect to loss_model when approximation is sucks.
@@ -426,6 +453,7 @@ class PerlinAttention(nn.Module):
                 
                 estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
             
+            get_bench().register_temp_buffer('estimated_attention_score', estimated_attention_score)
             get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
             
             # in layerwise, train perlin attention predictor

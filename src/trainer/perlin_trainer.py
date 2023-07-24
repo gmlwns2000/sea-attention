@@ -17,11 +17,48 @@ from .opt_trainer import TrainerConfig as OptTrainerConfig
 
 bool2int = lambda x: 1 if x else 0
 
+def add_perlin_model_options(parser):
+    parser.add_argument('--method', default='perlin', type=str)
+    parser.add_argument('--layerwise', action='store_true', default=False)
+    parser.add_argument('--enable-lora', action='store_true', default=False)
+    parser.add_argument('--k', default=7, type=int)
+    parser.add_argument('--k-colwise', action='store_true', default=False)
+    parser.add_argument('--k-flatten-dim', default='batch', type=str)
+    parser.add_argument('--attention-predictor-method', default='mlp', type=str)
+    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    parser.add_argument('--random-lookup', action='store_true', default=False)
+    parser.add_argument('--random-lookup-count', default=3, type=int)
+    parser.add_argument('--token-merging', action='store_true', default=False)
+    parser.add_argument('--token-merging-preserve', default=0.2, type=float)
+    parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    return parser
+
+def parse_perlin_model_options(args):
+    kwargs = {
+        'perlin_k':args.k,
+        'attention_method':args.method,
+        'perlin_k_flatten':not args.k_colwise,
+        'perlin_k_flatten_dim': args.k_flatten_dim,
+        'perlin_layerwise':args.layerwise,
+        # NOTE HJ now lora is disable by default
+        # 'perlin_lora':not args.disable_lora, 
+        'perlin_lora':args.enable_lora,
+        'perlin_attention_predictor_method':args.attention_predictor_method,
+        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
+        'perlin_random_lookup': args.random_lookup,
+        'perlin_random_lookup_count': args.random_lookup_count,
+        'perlin_token_merging': args.token_merging,
+        'perlin_token_merging_preserve': args.token_merging_preserve,
+        'perlin_token_merging_ratio': args.token_merging_ratio,
+    }
+    return kwargs
+
 class BaseTrainer:
     def __init__(
         self,
         perlin_k = 7,
         perlin_k_flatten = True,
+        perlin_k_flatten_dim = 'batch',
         perlin_layerwise = False,
         perlin_lora = True,
         attention_method = 'perlin',
@@ -37,6 +74,7 @@ class BaseTrainer:
         self.attention_method = attention_method
         self.perlin_k = perlin_k
         self.perlin_k_flatten = perlin_k_flatten
+        self.perlin_k_flatten_dim = perlin_k_flatten_dim
         self.perlin_layerwise = perlin_layerwise
         self.perlin_lora = perlin_lora
         self.perlin_attention_predictor_method = perlin_attention_predictor_method
@@ -54,6 +92,7 @@ class BaseTrainer:
             performer_nb_factor = perlin_performer_nb_feature_factor,
             k = perlin_k,
             k_flatten = perlin_k_flatten,
+            k_flatten_dim = perlin_k_flatten_dim,
             random_lookup = perlin_random_lookup,
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
@@ -89,6 +128,7 @@ class BaseTrainer:
 
     def format_exp(self, name: str):
         name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
+        name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten}' if self.perlin_k_flatten_dim != 'batch' else ''
         name_lora = '_full' if not self.perlin_lora else ''
         name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
@@ -97,7 +137,7 @@ class BaseTrainer:
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}'
         return name
 
     def get_global_config(self):
@@ -228,40 +268,6 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         ))
         
         self.apply_model_options(self.model)
-
-def add_perlin_model_options(parser):
-    parser.add_argument('--method', default='perlin', type=str)
-    parser.add_argument('--layerwise', action='store_true', default=False)
-    parser.add_argument('--enable-lora', action='store_true', default=False)
-    parser.add_argument('--k', default=7, type=int)
-    parser.add_argument('--k-colwise', action='store_true', default=False)
-    parser.add_argument('--attention-predictor-method', default='mlp', type=str)
-    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
-    parser.add_argument('--random-lookup', action='store_true', default=False)
-    parser.add_argument('--random-lookup-count', default=3, type=int)
-    parser.add_argument('--token-merging', action='store_true', default=False)
-    parser.add_argument('--token-merging-preserve', default=0.2, type=float)
-    parser.add_argument('--token-merging-ratio', default=0.5, type=float)
-    return parser
-
-def parse_perlin_model_options(args):
-    kwargs = {
-        'perlin_k':args.k,
-        'attention_method':args.method,
-        'perlin_k_flatten':not args.k_colwise,
-        'perlin_layerwise':args.layerwise,
-        # NOTE HJ now lora is disable by default
-        # 'perlin_lora':not args.disable_lora, 
-        'perlin_lora':args.enable_lora,
-        'perlin_attention_predictor_method':args.attention_predictor_method,
-        'perlin_performer_nb_feature_factor':args.performer_nb_feature_factor,
-        'perlin_random_lookup': args.random_lookup,
-        'perlin_random_lookup_count': args.random_lookup_count,
-        'perlin_token_merging': args.token_merging,
-        'perlin_token_merging_preserve': args.token_merging_preserve,
-        'perlin_token_merging_ratio': args.token_merging_ratio,
-    }
-    return kwargs
 
 if __name__ == '__main__':
     import argparse
