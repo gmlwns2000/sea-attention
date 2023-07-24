@@ -7,8 +7,8 @@ from ..models import perlin_attention
 from ..models import perlin_bert as perlin
 from ..models.perlin_bert.compat import migrate_state_dict
 from ..utils import seed
-from .bert_glue_trainer import Trainer as BaseGlueTrainer
-from .bert_glue_trainer import task_to_batch_size
+from .glue_trainer import Trainer as BaseGlueTrainer
+from .glue_trainer import task_to_batch_size
 from .lra_trainer import Trainer as BaseLraTrainer
 
 bool2int = lambda x: 1 if x else 0
