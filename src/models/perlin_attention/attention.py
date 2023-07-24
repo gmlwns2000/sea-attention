@@ -270,17 +270,17 @@ class PerlinAttention(nn.Module):
                     # E_N = min(T, HID)
                     E_N = HID
                     
-                    # if self._v_eye is None or self._v_eye.shape[-1] != E_N:
-                    #     v_for_atten_identity = torch.eye(
-                    #         n=E_N,
-                    #         dtype=v.dtype,
-                    #         device=v.device,
-                    #     ).view(1, 1, E_N, E_N)
-                    #     self._v_eye = v_for_atten_identity
-                    # else:
-                    #     v_for_atten_identity = self._v_eye
+                    if self._v_eye is None or self._v_eye.shape[-1] != E_N:
+                        v_for_atten_identity = torch.eye(
+                            n=E_N,
+                            dtype=v.dtype,
+                            device=v.device,
+                        ).view(1, 1, E_N, E_N)
+                        self._v_eye = v_for_atten_identity
+                    else:
+                        v_for_atten_identity = self._v_eye
                     
-                    v_for_atten_identity = self.v_eye_learned
+                    # v_for_atten_identity = self.v_eye_learned
                     
                     v_for_atten_identity = v_for_atten_identity.expand(v_for_atten.shape[:2] + (E_N, E_N))
                 
@@ -302,7 +302,7 @@ class PerlinAttention(nn.Module):
                         input=v_for_atten_identity, 
                         grid=token_index, 
                         mode='bilinear',
-                        align_corners=False,
+                        align_corners=True,
                     )
                 
                 with timer("vmask.cat_fill"):
