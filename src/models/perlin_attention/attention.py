@@ -62,6 +62,15 @@ class PerlinAttentionOutput:
     dense_attention_probs: torch.Tensor
     key_for_score: torch.Tensor
 
+class Residual(nn.Module):
+    def __init__(self, *args) -> None:
+        super().__init__()
+        self.net = nn.Sequential(*args)
+    
+    def forward(self, x):
+        y = self.net(x)
+        return x + y
+
 class KeepRes(nn.Module):
     def __init__(self, *args):
         super().__init__()
@@ -74,15 +83,15 @@ class KeepRes(nn.Module):
         return x
 
 class ResBlock(nn.Module):
-    def __init__(self, ch, padding=1, lnorm_size=None):
+    def __init__(self, ch, padding=1, lnorm_size=None, padding_mode='zeros'):
         super().__init__()
         
         self.net = KeepRes(
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode='zeros'),
+            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
             # nn.BatchNorm2d(48),
             # nn.LayerNorm(lnorm_size),
             nn.ReLU(),
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode='zeros'),
+            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
             # nn.BatchNorm2d(48),
             # nn.LayerNorm(lnorm_size),
         )
@@ -94,14 +103,15 @@ class ResBlock(nn.Module):
         return x
 
 class UpsampleFP32(nn.Module):
-    def __init__(self, scale):
+    def __init__(self, scale, dtype=torch.float32):
         super().__init__()
         self.scale = scale
+        self.dtype = dtype
     
     def forward(self, x):
         x_type = x.dtype
-        if x.dtype != torch.float32:
-            x = x.to(torch.float32)
+        if x.dtype != self.dtype:
+            x = x.to(self.dtype)
         x = F.interpolate(x, scale_factor=self.scale, mode='nearest')
         if x_type != x.dtype:
             x = x.to(x_type)
@@ -150,19 +160,40 @@ class PerlinAttention(nn.Module):
         self.attention_predictor_dec_row = nn.Sequential(
             nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
         )
+        padding_mode = 'reflect'
+        # self.attention_predictor_cnn = KeepRes(
+        #     # NOTE if we use pixelshuffle outch should be 48
+        #     nn.Conv2d(12, 48, 3, padding=1, stride=2, padding_mode=padding_mode),
+        #     nn.ReLU(),
+        #     Residual(
+        #         ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2, padding_mode=padding_mode),
+        #         Residual(KeepRes(
+        #             nn.Conv2d(48, 96, 3, padding=1, stride=2, padding_mode=padding_mode),
+        #             nn.ReLU(),
+        #             ResBlock(96, padding=1, lnorm_size=self.pconfig.attention_predictor_length//4, padding_mode=padding_mode),
+        #             nn.Conv2d(96, 48*4, 1, padding=0, stride=1, padding_mode=padding_mode),
+        #             nn.PixelShuffle(2),
+        #         )),
+        #         ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2, padding_mode=padding_mode),
+        #     ),
+        #     nn.Conv2d(48, 12*4, 1, padding=0, stride=1, padding_mode=padding_mode),
+        #     nn.PixelShuffle(2),
+        #     # nn.UpsamplingNearest2d(scale_factor=2),
+        #     # UpsampleFP32(2),
+        #     # nn.ConvTranspose2d(48, 12, 3, stride=2, padding=1, padding_mode='zeros', output_padding=1),
+        #     # nn.ReLU(),
+        #     nn.Conv2d(12, 12, 3, padding=1, padding_mode=padding_mode),
+        #     nn.LayerNorm(self.pconfig.attention_predictor_length),
+        # )
         self.attention_predictor_cnn = KeepRes(
-            # NOTE if we use pixelshuffle outch should be 48
-            nn.Conv2d(12, 48, 3, padding=1, stride=2, padding_mode='zeros'),
+            nn.Conv2d(12, 48, 3, padding=1, stride=2),
             nn.ReLU(),
-            ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2),
-            ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2),
-            # nn.PixelShuffle(2),
-            # nn.UpsamplingNearest2d(scale_factor=2),
-            # UpsampleFP32(2),
-            nn.ConvTranspose2d(48, 24, 3, stride=2, padding=1, padding_mode='zeros', output_padding=1),
-            nn.ReLU(),
-            nn.Conv2d(24, 12, 3, padding=1, padding_mode='zeros'),
-            nn.LayerNorm(self.pconfig.attention_predictor_length),
+            ResBlock(48),
+            ResBlock(48),
+            # nn.ConvTranspose2d(48, 12, 3, stride=2, padding=1),
+            # nn.ReLU(),
+            UpsampleFP32(2, torch.float16),
+            nn.Conv2d(48, 12, 3, padding=1),
         )
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 2),
@@ -215,6 +246,16 @@ class PerlinAttention(nn.Module):
         attention_scores_truth: torch.Tensor,
         context_layer_truth: torch.Tensor,
     ):
+        # N, H, T, HID = q.shape
+        # return PerlinAttentionOutput(
+        #     loss=0,
+        #     context_layer=q.transpose(-2, -3).reshape(N, T, H*HID),
+        #     partial_attention_probs=None,
+        #     estimated_attention_probs=None,
+        #     dense_attention_probs=None,
+        #     key_for_score=k_for_score,
+        # )
+        
         if q.dtype in [torch.float16, torch.bfloat16]:
             # NOTE HJ even if we are in bfloat16, we have to use fp16 minimum because of F.interpolate
             FP_MIN = torch.finfo(torch.float16).min / 2
@@ -318,7 +359,8 @@ class PerlinAttention(nn.Module):
             with timer("performer"):
                 if not self.benchmarking:
                     q_type = q_for_atten.dtype
-                    with torch.autocast('cuda', torch.float32):
+                    BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float32
+                    with torch.autocast('cuda', BF_16):
                         performer_context_layer = self.performer(
                             q_for_atten, 
                             k_for_atten, 
@@ -604,46 +646,49 @@ class PerlinAttention(nn.Module):
                 else:
                     def resize_width(img: torch.Tensor, scale: float):
                         N, H, W = img.shape
-                        img = img.coalesce()
-                        idx = img.indices().float()
+                        # img = img.coalesce()
+                        idx = img.indices() #.float()
                         nnz = idx.shape[-1]
                         if scale < 1.0:
                             xs_scaled = idx[2] * scale
                             xs_rounded = torch.clamp(torch.round(xs_scaled), 0, round(W*scale)-1)
-                            xs_okay = torch.abs(xs_rounded - xs_scaled) < (scale * 0.5)
-                            idx[2] = xs_rounded * xs_okay
-                            idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
-                            idx = torch.unique(idx.long(), dim=-1)
+                            xs_okay = torch.abs(xs_rounded - xs_scaled) > (scale * 0.5)
+                            idx[2] = xs_rounded# * xs_okay
+                            # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
+                            idx.masked_fill_(xs_okay, value=-1)
+                            idx = torch.unique(idx, dim=-1) #TODO FIX this to masked select
                             idx = idx[:, 1:]
                             
                             # print(nnz, idx.shape[-1])
                             return torch.sparse_coo_tensor(
-                                indices=idx,
+                                indices=idx.contiguous(),
                                 values=torch.ones((idx.shape[-1],), device=img.device, dtype=img.dtype),
                                 size=(N, H, round(W*scale)),
                             )
                         elif scale > 1.0:
                             scale_ceil = math.ceil(scale)
-                            idx = F.interpolate(idx.view(1, 1, 3, nnz), size=(3, nnz*scale_ceil), mode='nearest').view(3, nnz*scale_ceil)
-                            idx[2] = idx[2] * scale_ceil + torch.arange(nnz*scale_ceil, device=img.device) % scale_ceil
+                            # idx = F.interpolate(idx.view(1, 1, 3, nnz), size=(3, nnz*scale_ceil), mode='nearest').view(3, nnz*scale_ceil) # type: torch.Tensor
+                            idx = idx.view(3, nnz, 1).expand(3, nnz, scale_ceil).reshape(3, nnz*scale_ceil)
+                            # idx[2] = idx[2] * scale_ceil + torch.arange(nnz*scale_ceil, device=img.device) % scale_ceil
                             
                             shrink_scale = scale / scale_ceil
-                            xs_scaled = idx[2] * shrink_scale
+                            xs_scaled = (idx[2] * scale_ceil + torch.arange(scale_ceil, device=img.device).unsqueeze(0).expand(nnz, scale_ceil).reshape(-1)) * shrink_scale
                             xs_rounded = torch.round(xs_scaled)
                             xs_okay = torch.abs(xs_rounded - xs_scaled) < (shrink_scale * 0.5)
                             del xs_scaled
-                            idx[2] = xs_rounded * xs_okay
-                            idx[2] = torch.clamp(idx[2], 0, round(W*scale)-1)
-                            idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
-                            del xs_okay
-                            idx = torch.unique(idx.long(), dim=-1)
-                            idx = idx[:, 1:]
+                            idx[2] = torch.clamp(xs_rounded, 0, round(W*scale)-1)
+                            # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
+                            # idx.masked_fill_(xs_okay, value=-1)
+                            # del xs_okay
+                            # idx = torch.unique(idx, dim=-1)
+                            # idx = idx[:, 1:]
                             # idx = torch.unique(idx.long(), dim=-1)
+                            idx = idx.masked_select(xs_okay).view(3, -1)
                             
                             # print(nnz, idx.shape[-1])
                             return torch.sparse_coo_tensor(
                                 indices=idx,
-                                values=torch.ones((idx.shape[-1],), device=img.device, dtype=img.dtype),
+                                values=torch.ones((1,), device=img.device, dtype=img.dtype).expand(idx.shape[-1]),
                                 size=(N, H, round(W*scale)),
                             )
                         else:
@@ -655,7 +700,7 @@ class PerlinAttention(nn.Module):
                     # partial_attention_mask_original = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
                     
                     # optimized
-                    partial_attention_mask = partial_attention_mask.view(N*H, T, T_M).to_sparse_coo()
+                    partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
                     partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
                     
                     # torch.save({
@@ -673,6 +718,16 @@ class PerlinAttention(nn.Module):
             get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
             get_bench().register_temp_buffer('q_for_score', q_for_score)
             get_bench().register_temp_buffer('k_for_score', k_for_score)
+            
+            # N, H, T, HID = q.shape
+            # return PerlinAttentionOutput(
+            #     loss=0,
+            #     context_layer=q.transpose(-2, -3).reshape(N, T, H*HID),
+            #     partial_attention_probs=None,
+            #     estimated_attention_probs=None,
+            #     dense_attention_probs=None,
+            #     key_for_score=k_for_score,
+            # )
             
             with timer("attention"):
                 if not self.benchmarking:

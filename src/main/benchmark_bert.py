@@ -108,8 +108,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
             module.benchmarking = True
 
     attention_mask = torch.ones((BSIZE, SEQ_LEN), dtype=BENCH_PRECISION).to(device)
-    for i in range(attention_mask.shape[0]):
-        attention_mask[i, random.randint(128, attention_mask.shape[1]-1):] = 0
+    # for i in range(attention_mask.shape[0]):
+    #     attention_mask[i, random.randint(128, attention_mask.shape[1]-1):] = 0
     hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
     attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
     attention_mask_expand = (1-attention_mask_expand)*(-32000)

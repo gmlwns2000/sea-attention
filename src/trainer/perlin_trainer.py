@@ -128,7 +128,7 @@ class BaseTrainer:
 
     def format_exp(self, name: str):
         name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
-        name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten}' if self.perlin_k_flatten_dim != 'batch' else ''
+        name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten_dim}' if self.perlin_k_flatten_dim != 'batch' else ''
         name_lora = '_full' if not self.perlin_lora else ''
         name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
