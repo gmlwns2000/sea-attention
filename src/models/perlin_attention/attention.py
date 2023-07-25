@@ -483,33 +483,44 @@ class PerlinAttention(nn.Module):
                 
                 T_M = estimated_attention_probs.shape[-1]
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
-                top_k = min(max(int(round(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M)
+                top_k = min(max(int(round(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M) # TODO topk is quiet strange..
+                # top_k = min(max(int(round(self.pconfig.k * (T_M / T))), 1), T_M) # NOTE JIN fixed top_k..should be 7 per T not 7 per Ti..
                 k_flatten = self.pconfig.k_flatten
                 if k_flatten:
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
                 # col / row selection before topk
-                perlin_col_select = False # TODO 
-                perlin_row_select = False # TODO 
+                perlin_col_select = True # TODO add to args
                 warnings.warn(f'perlin_col_select {perlin_col_select}')
-                if perlin_col_select: # NOTE selected col count : num_attention_heads
-                    top_k = top_k-1
+                if perlin_col_select and k_flatten:
+                    selected_col_per_head = 1 # TODO add to args
+                    warnings.warn(f"selected_col_per_head {selected_col_per_head}")
+                    top_k = top_k-selected_col_per_head
                     with timer("mask.select_col"):
-                        if k_flatten and k_flatten_dim == "batch":
+                        if k_flatten_dim == "batch":
+                            selected_col_cnt = self.num_attention_heads*selected_col_per_head
+                            warnings.warn(f"selected col cnt {selected_col_cnt}")
                             estimated_attention_probs_all_heads = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
+                            # breakpoint()
                             sum_per_col = estimated_attention_probs_all_heads[:,:,:].sum(dim=1) # [N, H*T_M]
+                            # breakpoint()
                             _, largest_indx = torch.topk(
                                 input=sum_per_col,
-                                k=self.num_attention_heads,
+                                k=selected_col_cnt,
                                 dim=-1
-                            ) # [N, H] 0~H*T_M-1 in each row
-                            large_inx = largest_indx.view(N, 1, H)\
-                                .expand(N, T, H) # [N, T, H]
-                            estimated_attention_probs_all_heads.scatter_(dim=-1, index=large_inx, value=0.0) # (N, T, H*T_M)
+                            ) # [N, selected_col_cnt] 0~H*T_M-1 in each row
+                            # breakpoint()
+                            large_inx = largest_indx.view(N, 1, selected_col_cnt)\
+                                .expand(N, T, selected_col_cnt) # [N, T, selected_col_cnt]
+                            # breakpoint()
+                            estimated_attention_probs_all_heads.scatter_(dim=-1, index=large_inx, value=0.0) # this also changes estimated_attention_probs
+                            # breakpoint()
                             t = estimated_attention_probs_all_heads.view(N, T*H*T_M) # [N, T, H*T_M] -> [N, T*H*T_M]
-                        elif not k_flatten or (k_flatten and k_flatten_dim == 'head'):
-                            # 1 per head
-                            sum_per_col = estimated_attention_probs[:,:,:,:].sum(dim=2) # [N, H, T_M]
+                            # breakpoint()
+                        elif k_flatten_dim == 'head':
+                            # 1 per head # TODO change head code
+                            selected_col_cnt = selected_col_per_head
+                            sum_per_col = estimated_attention_probs[:,:,:,:].sum(dim=2) # [N, H, T, T_M] -> [N, H, T_M]
                             largest_indx = sum_per_col.argmax(dim=-1) # would be [N, H] 0~T_M-1 in each row
                             large_inx = largest_indx.view(N, H, 1, 1)\
                                 .expand_as(estimated_attention_probs) # [N, H, T, T_M]
@@ -524,7 +535,7 @@ class PerlinAttention(nn.Module):
                             if k_flatten and k_flatten_dim == 'head':
                                 t = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).view(N, H, T*T_M) # TODO check for head
                         else:
-                            raise Exception(f'k flatten {k_flatten} k_flatten_dim {k_flatten_dim}')
+                            raise Exception(f'k_flatten_dim {k_flatten_dim}')
                     
                 if not k_flatten:
                     with timer("mask.topk"):
@@ -563,6 +574,7 @@ class PerlinAttention(nn.Module):
                             dim=-1, 
                             sorted=True #sorted true is important
                         )
+                        # breakpoint()
                     # with timer("mask.empty"):
                     #     partial_attention_mask = torch.empty(
                     #         t.shape, 
@@ -579,8 +591,10 @@ class PerlinAttention(nn.Module):
                             dtype=torch.long, 
                             device=attention_mask.device,
                         )
+                        # breakpoint()
                     with timer("mask.fill"):
                         partial_attention_mask.fill_(t.shape[-1])
+                        # breakpoint()
                     with timer("mask.scatter"):
                         partial_attention_mask.scatter_(
                             dim=-1,
@@ -593,25 +607,36 @@ class PerlinAttention(nn.Module):
                                 .view((1, -1) if k_flatten_dim == 'batch' else (1, 1, -1))\
                                 .expand(indices.shape)
                         )
+                        # breakpoint()
                         # print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
                         # input()
-                        per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
+                        if perlin_col_select:
+                            per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * math.ceil(self.pconfig.k-selected_col_per_head*(T/T_M)) * torch.ceil(T_M / token_length) # TODO check value
+                        else:
+                            per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
+                        # breakpoint()
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
                             t_dead_mask = partial_attention_mask >= per_item_top_k
+                            # breakpoint()
                             # partial_attention_mask.fill_(FP_MIN)
                             # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
                             partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
+                            # breakpoint()
                         else:
                             t_alive_mask = partial_attention_mask < per_item_top_k
                             partial_attention_mask = t_alive_mask.float()
                     if perlin_col_select:
                         if k_flatten_dim=='batch': # partial_attention_mask [N, T*H*T_M]
+                            # breakpoint()
                             partial_attention_mask = partial_attention_mask.view(N, T, H*T_M) # NOTE memory order is carefully considered
-                            partial_attention_mask.scatter_(dim=-1, index=large_inx, value=0.0) # [N, T, H] ~> (N, T, H*T_M)
+                            # breakpoint()
+                            partial_attention_mask.scatter_(dim=-1, index=large_inx, value=0.0) # [N, T, selected_col_cnt] ~> (N, T, H*T_M)
+                            # breakpoint()
                             partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).permute(0,2,1,3)
+                            # breakpoint()
                         elif k_flatten_dim=="head":
                             partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
                             partial_attention_mask[col_select_mask] = 0.0
@@ -619,7 +644,9 @@ class PerlinAttention(nn.Module):
                             raise Exception(f'k flatten {k_flatten} k_flatten_dim {k_flatten_dim}')
                     else:
                         partial_attention_mask = partial_attention_mask.view(N, H, T, T_M) # NOTE memory order considered
+                        # breakpoint()
                     assert partial_attention_mask.shape ==(N, H, T, T_M)
+                    # breakpoint()
             
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
             

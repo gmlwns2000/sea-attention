@@ -349,7 +349,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/aft_col(headwise)_checkpoint.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/aft_col_aft_merge2_checkpoint.pth'
         return path
     
     def save(self):
@@ -399,6 +399,8 @@ class Trainer:
             }
         )
         # wandb.watch(self.model, log='all')
+        path = self.checkpoint_path()
+        print(f"PATH : {path}")
         
         for epoch in range(self.epochs):
             self.epoch = epoch

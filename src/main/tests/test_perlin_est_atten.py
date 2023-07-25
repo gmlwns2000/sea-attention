@@ -26,7 +26,7 @@ kwargs.update({
 
 visualize_main(**kwargs)
 
-index_layer = 1
+index_layer = 0
 
 estimated_attention_probs = bench.get_temp_buffer('estimated_attention_probs', index_layer)
 estimated_attention_probs_for_output = bench.get_temp_buffer('estimated_attention_probs_for_output', index_layer)
@@ -44,7 +44,7 @@ def imsave(img: torch.Tensor, path):
 root = './saves/tests/test_perlin_est_atten/'
 os.makedirs(root, exist_ok=True)
 
-index_batch = 2
+index_batch = 3
 index_head = 0
 
 imsave(estimated_attention_probs[index_batch,index_head], os.path.join(root, 'est.png'))
