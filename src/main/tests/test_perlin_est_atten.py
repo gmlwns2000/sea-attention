@@ -36,6 +36,9 @@ estimated_attention_probs_for_output = bench.get_temp_buffer('estimated_attentio
 partial_attention_mask_before_interp = bench.get_temp_buffer('partial_attention_mask_before_interp', index_layer)
 partial_attention_mask = bench.get_temp_buffer('partial_attention_mask', index_layer)
 attention_mask = bench.get_temp_buffer('attention_mask', index_layer)
+attention_probs_truth = bench.get_temp_buffer('attention_probs_truth', index_layer)
+attention_probs_truth_m = bench.get_temp_buffer('attention_probs_truth_m', index_layer)
+t_attention_predictor = bench.get_temp_buffer('t_attention_predictor', index_layer)
 
 def imsave(img: torch.Tensor, path):
     plt.clf()
@@ -60,3 +63,6 @@ imsave(
     (estimated_attention_probs_for_output[index_batch,index_head] * (attention_mask[index_batch,0] > -1)).sum(dim=-1, keepdim=True), os.path.join(root, 'est_interp_norm.png'))
 imsave(partial_attention_mask_before_interp[index_batch,index_head], os.path.join(root, 'part.png'))
 imsave(partial_attention_mask[index_batch,index_head], os.path.join(root, 'part_interp.png'))
+imsave(attention_probs_truth[index_batch,index_head], os.path.join(root, 'attention_probs_truth.png'))
+imsave(attention_probs_truth_m[index_batch,index_head], os.path.join(root, 'attention_probs_truth_m.png'))
+imsave(t_attention_predictor[index_batch,index_head], os.path.join(root, 't_attention_predictor.png'))

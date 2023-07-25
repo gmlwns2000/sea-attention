@@ -16,6 +16,7 @@ from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+import torch.nn.functional as F
 
 import wandb
 
@@ -227,10 +228,14 @@ class Trainer:
         loss_kd = 0
         if self.using_kd:
             for ilayer in range(len(output_base.hidden_states)):
-                loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
+                loss_kd += F.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
-            loss_kd = loss_kd + torch.nn.functional.mse_loss(output_base.logits, output.logits) * 0.1
+            loss_kd = loss_kd + F.kl_div(
+                F.log_softmax(output_base.logits, dim=-1), 
+                F.softmax(output.logits, dim=-1),
+                reduction='batchmean',
+            ) * 0.1
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
