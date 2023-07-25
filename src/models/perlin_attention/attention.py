@@ -148,7 +148,7 @@ class PerlinAttention(nn.Module):
         )
         self.attention_predictor_cnn = KeepRes(
             # NOTE if we use pixelshuffle outch should be 48
-            nn.Conv2d(12, 32, 3, padding=0, stride=2),
+            nn.Conv2d(12, 48, 3, padding=0, stride=2),
             # nn.BatchNorm2d(48),
             nn.ReLU(),
             # nn.Conv2d(48, 48, 3, padding=1),
@@ -160,13 +160,13 @@ class PerlinAttention(nn.Module):
             # nn.ReLU(),
             # nn.Conv2d(48, 48, 3, padding=1),
             # nn.ReLU(),
-            ResBlock(32),
-            ResBlock(32),
+            ResBlock(48),
+            ResBlock(48),
             # ResBlock(48),
             # nn.PixelShuffle(2),
             # nn.UpsamplingNearest2d(scale_factor=2),
             # UpsampleFP32(2),
-            nn.ConvTranspose2d(32, 12, 3, stride=2, padding=0),
+            nn.ConvTranspose2d(48, 12, 3, stride=2, padding=0),
             nn.ReLU(),
             nn.Conv2d(12, 12, 3, padding=0),
         )
@@ -220,6 +220,11 @@ class PerlinAttention(nn.Module):
         # self._v_eye = torch.eye(
         #     self.pconfig.v_eye_length, dtype=torch.float32
         # ).view(1, 1, self.pconfig.v_eye_length, self.pconfig.v_eye_length)
+        
+        self.v_eye_learned = nn.Parameter(
+            data=torch.rand((1, 1, self.attention_head_size, self.attention_head_size)),
+            requires_grad=True
+        )
     
     def forward(
         self,
@@ -264,6 +269,7 @@ class PerlinAttention(nn.Module):
                 with timer("vmaks.eye"):
                     # E_N = min(T, HID)
                     E_N = HID
+                    
                     if self._v_eye is None or self._v_eye.shape[-1] != E_N:
                         v_for_atten_identity = torch.eye(
                             n=E_N,
@@ -273,6 +279,9 @@ class PerlinAttention(nn.Module):
                         self._v_eye = v_for_atten_identity
                     else:
                         v_for_atten_identity = self._v_eye
+                    
+                    # v_for_atten_identity = self.v_eye_learned
+                    
                     v_for_atten_identity = v_for_atten_identity.expand(v_for_atten.shape[:2] + (E_N, E_N))
                 
                 with timer("vmask.grid"):
@@ -292,8 +301,8 @@ class PerlinAttention(nn.Module):
                     v_for_atten_identity = F.grid_sample(
                         input=v_for_atten_identity, 
                         grid=token_index, 
-                        mode='nearest',
-                        align_corners=False,
+                        mode='bilinear',
+                        align_corners=True,
                     )
                 
                 with timer("vmask.cat_fill"):
@@ -886,6 +895,8 @@ class PerlinAttention(nn.Module):
                             partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
             
             if self.pconfig.random_lookup:
+                raise Exception()
+                # TODO please consider updated estimated attention probs
                 # lookup randomly that not looked up by partial context
                 num_lookups = self.pconfig.random_lookup_count
                 lookups = None
