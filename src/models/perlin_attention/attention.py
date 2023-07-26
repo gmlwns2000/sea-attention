@@ -258,6 +258,15 @@ class PerlinAttention(nn.Module):
         
         get_bench().register_temp_buffer('attention_mask', attention_mask)
         
+        get_bench().register_temp_buffer('q', q)
+        get_bench().register_temp_buffer('k', k)
+        get_bench().register_temp_buffer('v', v)
+        get_bench().register_temp_buffer('q_for_atten', q_for_atten)
+        get_bench().register_temp_buffer('k_for_atten', k_for_atten)
+        get_bench().register_temp_buffer('v_for_atten', v_for_atten)
+        get_bench().register_temp_buffer('q_for_score', q_for_score)
+        get_bench().register_temp_buffer('k_for_score', k_for_score)
+        
         with timer("perlin"):
             N, H, T, HID = q.shape
             with timer("vmask"):
@@ -282,7 +291,15 @@ class PerlinAttention(nn.Module):
                     
                     # v_for_atten_identity = self.v_eye_learned
                     
+                    v_for_atten_identity1 = interpolate( # NOTE just for visualization
+                        x=self._v_eye,
+                        size=v_for_atten.shape[-2:],
+                        interp_mode='nearest'
+                    ).expand(v_for_atten.shape).contiguous()
+                    get_bench().register_temp_buffer('v_for_atten_identity_interpolate', v_for_atten_identity1)
+                    
                     v_for_atten_identity = v_for_atten_identity.expand(v_for_atten.shape[:2] + (E_N, E_N))
+                    get_bench().register_temp_buffer('v_for_atten_identity_bef_grid', v_for_atten_identity)
                 
                 with timer("vmask.grid"):
                     token_index_y = ((zero_one_attention_mask_cumsum - 1.0) / ((zero_one_attention_mask_sum - 1.0).view(N, 1, 1, 1) + 1e-8) * 2 - 1)\
@@ -304,13 +321,15 @@ class PerlinAttention(nn.Module):
                         mode='bilinear',
                         align_corners=True,
                     )
-                
+                    get_bench().register_temp_buffer('v_for_atten_identity_aft_grid', v_for_atten_identity)
+                    
                 with timer("vmask.cat_fill"):
                     v_for_atten = torch.cat([
                         v_for_atten_identity, 
                         v_for_atten
                     ], dim=-1)
-                
+
+                    # NOTE JIN duplicated calculation
                     v_for_atten.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
                     v.masked_fill_(attention_mask.transpose(-1, -2) < -1, 0)
             
@@ -332,7 +351,9 @@ class PerlinAttention(nn.Module):
                         k_for_atten, 
                         v_for_atten
                     )
-            
+                get_bench().register_temp_buffer('performer_context_layer', performer_context_layer)
+                get_bench().register_temp_buffer('performer_context_layer>0', performer_context_layer>0)
+                
             with timer("performer_value"):
                 # NOTE HJ Cut gradient from loss_sp, because loss_sp has negative effect to loss_model when approximation is sucks.
                 performer_value = torch.cat([
@@ -499,7 +520,7 @@ class PerlinAttention(nn.Module):
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
                 # col / row selection before topk
-                perlin_col_select = True # TODO add to args
+                perlin_col_select = False # TODO add to args
                 warnings.warn(f'perlin_col_select {perlin_col_select}')
                 if perlin_col_select and k_flatten:
                     selected_col_per_head = 1 # TODO add to args
@@ -622,6 +643,7 @@ class PerlinAttention(nn.Module):
                         # input()
                         if perlin_col_select:
                             per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * math.ceil(self.pconfig.k-selected_col_per_head*(T/T_M)) * torch.ceil(T_M / token_length) # TODO check value
+                            # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * int(self.pconfig.k-round(selected_col_per_head*(T/T_M))) * torch.ceil(T_M / token_length) # TODO check value
                         else:
                             per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
                         # breakpoint()
@@ -745,8 +767,6 @@ class PerlinAttention(nn.Module):
                 raise_if_nan(partial_attention_mask)
             
             get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
-            get_bench().register_temp_buffer('q_for_score', q_for_score)
-            get_bench().register_temp_buffer('k_for_score', k_for_score)
             
             with timer("attention"):
                 if not self.benchmarking:
@@ -774,7 +794,7 @@ class PerlinAttention(nn.Module):
                         torch.softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
                         torch.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
                     )
-                    get_bench().register_temp_buffer('partial_attention_scores', attention_scores_dense)
+                    
                     raise_if_nan(loss)
                     
                     # NOTE HJ `attention_probs_dense` is for visualization, therefore it will not computed on benchmarking mode
@@ -782,6 +802,7 @@ class PerlinAttention(nn.Module):
                         attention_scores_dense_masked = attention_scores_dense + attention_mask
                     attention_probs_dense = torch.softmax(attention_scores_dense_masked, dim=-1)
                     
+                    get_bench().register_temp_buffer('attention_probs_dense', attention_probs_dense)
                     # NOTE HJ you should not add attention_mask and attention_score, because partial_attention_mask already has it.
                     # print(
                     #     torch.unique((partial_attention_mask).view(-1)), 
