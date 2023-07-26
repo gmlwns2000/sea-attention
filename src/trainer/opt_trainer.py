@@ -62,8 +62,13 @@ class Trainer:
         
         student = self.config.model_cls(teacher.config)
         try:
-            result = student.load_state_dict(teacher.state_dict(), strict=False)
-            print(result)
+            missing_keys, unexpected_keys = student.load_state_dict(teacher.state_dict(), strict=False)
+            missing_keys = [k for k in missing_keys if not any([s in k for s in self.config.load_ignore_keys])]
+            unexpected_keys = [k for k in unexpected_keys if not any([s in k for s in self.config.load_ignore_keys])]
+            if len(missing_keys) > 0: 
+                print('during init model, missing keys are:', missing_keys)
+            if len(unexpected_keys) > 0: 
+                print('during init model, unexpected keys are:', unexpected_keys)
         except Exception as ex:
             print(ex)
         

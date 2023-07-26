@@ -34,6 +34,11 @@ class PerlinAttentionConfig:
     
     def to_json(self):
         return asdict(self)
+    
+    def check_validity(self):
+        if self.causal:
+            if self.k_flatten:
+                assert self.k_flatten_dim in ['causal_batch']
 
     def __repr__(self) -> str:
         return f"PerlinAttentionConfig({json.dumps(self.to_json())})"

@@ -1217,7 +1217,7 @@ class BertPreTrainedModel(PreTrainedModel):
         weights = 0
         for m in self.modules():
             if isinstance(m, BertSelfAttention):
-                if m is not None:
+                if m.last_loss is not None:
                     loss += m.last_loss
                     weights += 1
                     m.last_loss = None

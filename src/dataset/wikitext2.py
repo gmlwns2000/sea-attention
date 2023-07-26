@@ -1,6 +1,7 @@
 from torch.utils.data import Dataset, DataLoader
 import math
 import torch
+import os
 from datasets import load_dataset
 
 class Wikitext2Dataset(Dataset):
@@ -11,6 +12,7 @@ class Wikitext2Dataset(Dataset):
             subset = 'validation'
         
         data = load_dataset("wikitext", "wikitext-2-raw-v1", split=subset)
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
         self.encodings = tokenizer("\n\n".join(data["text"]), return_tensors="pt")
         self.seq_len = self.encodings.input_ids.size(1)
         self.stride = stride

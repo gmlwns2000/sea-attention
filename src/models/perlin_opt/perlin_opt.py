@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch OPT model."""
+import warnings
 from ..perlin_attention import get_default_config
 
 from typing import List, Optional, Tuple, Union
@@ -161,7 +162,6 @@ class OPTAttention(nn.Module):
         self.checkout_intermediates = False
         self.benchmarking = False
         self.attention_method = 'none'
-        self.pconfig = get_default_config()
         
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
@@ -172,6 +172,23 @@ class OPTAttention(nn.Module):
             n_hashes=8,
             return_attn=False,
             causal=True,
+        )
+        
+        ### perlin
+        from ..perlin_attention import PerlinSelfAttention, get_default_config
+        from transformers.models.bert.configuration_bert import BertConfig
+        
+        pconfig = get_default_config()
+        pconfig.causal = True
+        if pconfig.k_flatten_dim == 'batch':
+            warnings.warn("Perlin default config's k_flatten_dim is batch. However, you try to initialize causal attention, therefore silently replace to causal_batch")
+            pconfig.k_flatten_dim = 'causal_batch'
+        pconfig.check_validity()
+        self.pconfig = pconfig
+        
+        self.perlin_self_attention = PerlinSelfAttention(
+            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads),
+            perlin_config=self.pconfig,
         )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -192,8 +209,8 @@ class OPTAttention(nn.Module):
         H = self.num_heads
         N = N_H // self.num_heads
         
-        if self.layer_id == 0:
-            print(f'attention(q{q.shape}, kv:{v.shape}, m:{attention_mask.shape})')
+        # if self.layer_id == 0:
+        #     print(f'attention(q={q.shape}, kv={v.shape}, m={attention_mask.shape})')
         
         if self.attention_method == 'none':
             attn_weights = torch.bmm(q, k.transpose(1, 2))
@@ -266,7 +283,7 @@ class OPTAttention(nn.Module):
             v = v.view(N, H, T_DST, HID)
             
             N, H, T, HID = q.shape
-            v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+            # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
             binary_mask = attention_mask > -1
             
@@ -315,6 +332,8 @@ class OPTAttention(nn.Module):
             reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
             
             return reformer_context_layer, attention_probs
+        elif self.attention_method == 'perlin':
+            self.perlin_self_attention()
         else:
             raise Exception()
 
@@ -961,7 +980,18 @@ class OPTForCausalLM(OPTPreTrainedModel):
     
     def calc_loss_special(self):
         loss = 0
-        return loss
+        weights = 0
+        for m in self.modules():
+            if isinstance(m, OPTAttention):
+                m = m.perlin_self_attention
+                if m.last_loss is not None:
+                    loss += m.last_loss
+                    weights += 1
+                    m.last_loss = None
+        if weights > 0 :
+            return loss / weights
+        else:
+            return 0
 
     @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(
