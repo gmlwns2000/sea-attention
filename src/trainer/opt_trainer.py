@@ -39,8 +39,8 @@ class TrainerConfig:
     high_lr_names: List[str] = field(default_factory=lambda: ['perlin'])
     using_kd: bool = True
     using_loss: bool = True
-    # NOTE decrease this only for DEBUG!!, this should be 2048 on OPT
-    max_seq_len: int = 512
+    # NOTE decrease this only for DEBUG!!, this should be larger than 2048 on OPT
+    max_seq_len: int = 32000
     
 BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
