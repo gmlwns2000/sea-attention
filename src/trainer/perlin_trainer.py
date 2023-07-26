@@ -1,5 +1,6 @@
 from dataclasses import asdict
 import warnings
+default = lambda x, y: x if x is not None else y
 
 import torch
 from torch import nn
@@ -285,7 +286,7 @@ if __name__ == '__main__':
     parser.add_argument('--load-only-additionals', action='store_true')
     
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
-    parser.add_argument('--gradient-accumulation-steps', default=1, type=int)
+    parser.add_argument('--gradient-accumulation-steps', default=None, type=int)
     parser.add_argument('--disable-amp', action='store_true', default=False)
     
     add_perlin_model_options(parser)
@@ -327,10 +328,13 @@ if __name__ == '__main__':
     kwargs.update(parse_perlin_model_options(args))
     
     if args.dataset == 'glue':
+        kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 1)
         trainer = GlueTrainer(**kwargs)
     elif args.dataset == 'lra':
+        kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 1)
         trainer = LraTrainer(**kwargs)
     elif args.model in ['opt']:
+        kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
         assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         trainer = OptTrainer(**kwargs)
     else:
