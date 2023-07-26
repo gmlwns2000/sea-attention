@@ -198,8 +198,8 @@ class Trainer:
             loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
             assert len(output_teacher.hidden_states) > 0
             loss_kd = loss_kd + F.kl_div(
-                F.log_softmax(output_student.logits, dim=-1), 
-                F.softmax(output_teacher.logits, dim=-1),
+                F.log_softmax(output_student.logits.view(-1, output_student.logits.shape[-1]), dim=-1), 
+                F.softmax(output_teacher.logits.view(-1, output_student.logits.shape[-1]), dim=-1),
                 reduction='batchmean',
             ) * 0.1
         
