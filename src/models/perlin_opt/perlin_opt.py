@@ -158,6 +158,7 @@ class OPTAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         
         # for project
+        self.checkout_intermediates = False
         self.benchmarking = False
         self.attention_method = 'none'
         self.pconfig = get_default_config()
@@ -177,6 +178,12 @@ class OPTAttention(nn.Module):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
     
     def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor):
+        if self.checkout_intermediates:
+            self.last_q = q
+            self.last_k = k
+            self.last_v = v
+            self.last_attention_mask = attention_mask
+        
         N_H, T_DST, _HID_Q = q.shape
         N_H, T_SRC, _HID_V = v.shape
         HID = self.head_dim

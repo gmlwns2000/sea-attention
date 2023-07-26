@@ -25,6 +25,13 @@ from ..common.performer import ProjectionUpdater
 from ..hf_bert import BertConfig
 from .config import PerlinAttentionConfig, get_default_config
 from ...utils import raise_if_nan
+from .modules import (
+    ResBlock,
+    Residual,
+    KeepRes,
+    Conv2dCausalable,
+    UpsampleFP32,
+)
 # NOTE HJ comment below to debug NaN
 raise_if_nan = lambda x: x
 
@@ -61,61 +68,6 @@ class PerlinAttentionOutput:
     estimated_attention_probs: torch.Tensor
     dense_attention_probs: torch.Tensor
     key_for_score: torch.Tensor
-
-class Residual(nn.Module):
-    def __init__(self, *args) -> None:
-        super().__init__()
-        self.net = nn.Sequential(*args)
-    
-    def forward(self, x):
-        y = self.net(x)
-        return x + y
-
-class KeepRes(nn.Module):
-    def __init__(self, *args):
-        super().__init__()
-        self.net = nn.Sequential(*args)
-    
-    def forward(self, x):
-        x_shape = x.shape
-        x = self.net(x)
-        x = interpolate(x, x_shape[-2:])
-        return x
-
-class ResBlock(nn.Module):
-    def __init__(self, ch, padding=1, lnorm_size=None, padding_mode='zeros'):
-        super().__init__()
-        
-        self.net = KeepRes(
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
-            # nn.BatchNorm2d(48),
-            # nn.LayerNorm(lnorm_size),
-            nn.ReLU(),
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
-            # nn.BatchNorm2d(48),
-            # nn.LayerNorm(lnorm_size),
-        )
-        self.relu = nn.ReLU()
-    
-    def forward(self, x):
-        x_out = self.net(x)
-        x = self.relu(x_out + x)
-        return x
-
-class UpsampleFP32(nn.Module):
-    def __init__(self, scale, dtype=torch.float32):
-        super().__init__()
-        self.scale = scale
-        self.dtype = dtype
-    
-    def forward(self, x):
-        x_type = x.dtype
-        if x.dtype != self.dtype:
-            x = x.to(self.dtype)
-        x = F.interpolate(x, scale_factor=self.scale, mode='nearest')
-        if x_type != x.dtype:
-            x = x.to(x_type)
-        return x
 
 class PerlinAttention(nn.Module):
     def __init__(
