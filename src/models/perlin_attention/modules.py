@@ -6,9 +6,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn, optim
 
-# NOTE HJ for temperaty development
-T_MASK = None
-
 def interpolate(x: torch.Tensor, size, interp_mode: str = None):
     if x.shape[-2:] == size: return x
     
@@ -48,15 +45,15 @@ class KeepRes(nn.Module):
         return x
 
 class ResBlock(nn.Module):
-    def __init__(self, ch, padding=1, lnorm_size=None, padding_mode='zeros'):
+    def __init__(self, ch, padding=1, lnorm_size=None, padding_mode='zeros', causal=False):
         super().__init__()
         
         self.net = KeepRes(
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
+            CausalConv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode, causal=causal),
             # nn.BatchNorm2d(48),
             # nn.LayerNorm(lnorm_size),
             nn.ReLU(),
-            nn.Conv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode),
+            CausalConv2d(ch, ch, 3, padding=padding, padding_mode=padding_mode, causal=causal),
             # nn.BatchNorm2d(48),
             # nn.LayerNorm(lnorm_size),
         )
@@ -82,7 +79,7 @@ class UpsampleFP32(nn.Module):
             x = x.to(x_type)
         return x
     
-class Conv2dCausalable(nn.Module):
+class CausalConv2d(nn.Module):
     def __init__(self, 
         in_channels: int,
         out_channels: int,
@@ -94,6 +91,7 @@ class Conv2dCausalable(nn.Module):
     ):
         super().__init__()
         
+        self.causal = causal
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
@@ -101,6 +99,7 @@ class Conv2dCausalable(nn.Module):
         self.padding = (padding, padding)
         self.padding_mode = padding_mode
         
+        # to follow pytorch initializer
         conv2d = nn.Conv2d(in_channels, out_channels, kernel_size)
         w = conv2d.weight.data
         b = conv2d.bias.data
@@ -110,6 +109,16 @@ class Conv2dCausalable(nn.Module):
             self.weight = nn.Parameter(w)
         else:
             weight = torch.zeros((out_channels, in_channels, kernel_size * 2 - 1, kernel_size))
+            weight[:,:,:kernel_size,:] = w
+            self.weight = nn.Parameter(weight)
+            
+            weight_mask = torch.zeros((out_channels, in_channels, kernel_size * 2 - 1, kernel_size))
+            weight_mask[:,:,:kernel_size,:] = 1.0
+            self.register_buffer('weight_mask', None)
+            self.weight_mask = weight_mask
+            
+            assert padding == (kernel_size // 2), "always same padding allowed"
+            self.padding = (kernel_size-1, padding)
     
     def _conv_forward(self, input: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor]):
         if self.padding_mode != 'zeros':
@@ -139,6 +148,6 @@ class Conv2dCausalable(nn.Module):
     def forward(self, x: torch.Tensor):
         return self._conv_forward(
             input=x,
-            weight=self.weight * self.weight_mask,
+            weight=self.weight * self.weight_mask if self.causal else self.weight,
             bias=self.bias,
         )

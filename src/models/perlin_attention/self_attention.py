@@ -54,6 +54,8 @@ class PerlinSelfAttention(nn.Module):
         )
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim == 4: return x
+        
         assert x.ndim == 3
         new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
         x = x.view(new_x_shape)

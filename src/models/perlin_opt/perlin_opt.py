@@ -14,7 +14,8 @@
 # limitations under the License.
 """ PyTorch OPT model."""
 import warnings
-from ..perlin_attention import get_default_config
+from ..perlin_attention import get_default_config, PerlinAttentionOutput
+from .. import hf_opt
 
 from typing import List, Optional, Tuple, Union
 
@@ -186,10 +187,13 @@ class OPTAttention(nn.Module):
         pconfig.check_validity()
         self.pconfig = pconfig
         
+        self.teacher_attention_scores = None
+        self.teacher_context_layer = None
         self.perlin_self_attention = PerlinSelfAttention(
             BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads),
             perlin_config=self.pconfig,
         )
+        self.last_loss = None
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -333,7 +337,31 @@ class OPTAttention(nn.Module):
             
             return reformer_context_layer, attention_probs
         elif self.attention_method == 'perlin':
-            self.perlin_self_attention()
+            assert T_SRC == T_DST, "need to fix later"
+            
+            q = q.view(N, H, T_SRC, HID)
+            k = k.view(N, H, T_DST, HID)
+            v = v.view(N, H, T_DST, HID)
+            
+            N, H, T, HID = q.shape
+            
+            # print(attention_mask.shape, self.teacher_attention_scores.shape, self.teacher_context_layer.shape)
+            
+            output = self.perlin_self_attention(
+                query = self.q_proj,
+                key = self.k_proj,
+                value = self.v_proj,
+                hidden_states = None,
+                query_layer = q,
+                key_layer = k,
+                value_layer = v,
+                attention_mask = attention_mask,
+                attention_scores_truth = self.teacher_attention_scores,
+                context_layer_truth = self.teacher_context_layer.view(N, H, T, HID).transpose(1, 2).reshape(N, T, H*HID),
+            ) #type: PerlinAttentionOutput
+            self.last_loss = output.loss
+            
+            return output.context_layer, output.partial_attention_probs
         else:
             raise Exception()
 
@@ -983,7 +1011,6 @@ class OPTForCausalLM(OPTPreTrainedModel):
         weights = 0
         for m in self.modules():
             if isinstance(m, OPTAttention):
-                m = m.perlin_self_attention
                 if m.last_loss is not None:
                     loss += m.last_loss
                     weights += 1
@@ -1006,7 +1033,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        teacher: "OPTForCausalLM" = None,
+        teacher: "hf_opt.OPTForCausalLM" = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -1081,6 +1108,20 @@ class OPTForCausalLM(OPTPreTrainedModel):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious. I'm just a little bit of a weirdo."
         ```"""
+        
+        if teacher is not None:
+            teachers = []
+            for layer in teacher.model.decoder.layers:
+                layer = layer # type: hf_opt.OPTDecoderLayer
+                teachers.append((
+                    layer.self_attn.last_attention_scores,
+                    layer.self_attn.last_context_layer,
+                ))
+            for ilayer, layer in enumerate(self.model.decoder.layers):
+                layer = layer # type: OPTDecoderLayer
+                teacher_attention_scores, teacher_context_layer = teachers[ilayer]
+                layer.self_attn.teacher_attention_scores = teacher_attention_scores
+                layer.self_attn.teacher_context_layer = teacher_context_layer
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (

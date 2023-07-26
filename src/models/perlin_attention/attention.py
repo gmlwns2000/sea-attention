@@ -29,8 +29,9 @@ from .modules import (
     ResBlock,
     Residual,
     KeepRes,
-    Conv2dCausalable,
+    CausalConv2d,
     UpsampleFP32,
+    interpolate
 )
 # NOTE HJ comment below to debug NaN
 raise_if_nan = lambda x: x
@@ -41,24 +42,6 @@ metric = Metric()
 
 # NOTE HJ for temperaty development
 T_MASK = None
-
-def interpolate(x: torch.Tensor, size, interp_mode: str = None):
-    if x.shape[-2:] == size: return x
-    
-    interp_mode = ('bilinear' if size[-1] >= x.shape[-1] else 'area') if interp_mode is None else interp_mode
-    
-    if torch.get_autocast_gpu_dtype() == torch.bfloat16: # F interpolate is not supported on bf16
-        original_dtype = x.dtype
-        with torch.autocast('cuda', torch.float32):
-            if x.dtype != torch.float32:
-                x = x.to(torch.float32)
-            x = F.interpolate(x, size, mode=interp_mode)
-        if x.dtype != original_dtype:
-            x = x.to(original_dtype)
-    else:
-        x = F.interpolate(x, size, mode=interp_mode)
-    
-    return x
 
 @dataclass
 class PerlinAttentionOutput:
@@ -96,10 +79,10 @@ class PerlinAttention(nn.Module):
         self.performer = FastAttention(
             dim_heads = self.attention_head_size,
             nb_features = self.performer_nb_features,
-            causal=False, # NOTE HJ if we handle causal attention, this should be changed.
+            causal=self.pconfig.causal,
         )
         self.performer_proj_updater = ProjectionUpdater(
-            self.performer, 
+            self.performer,
             1000,
         )
         performer_value_hidden_size = self.attention_head_size*3
@@ -138,14 +121,12 @@ class PerlinAttention(nn.Module):
         #     nn.LayerNorm(self.pconfig.attention_predictor_length),
         # )
         self.attention_predictor_cnn = KeepRes(
-            nn.Conv2d(12, 48, 3, padding=1, stride=2),
+            CausalConv2d(12, 48, 3, padding=1, stride=2, causal=self.pconfig.causal),
             nn.ReLU(),
-            ResBlock(48),
-            ResBlock(48),
-            # nn.ConvTranspose2d(48, 12, 3, stride=2, padding=1),
-            # nn.ReLU(),
+            ResBlock(48, causal=self.pconfig.causal),
+            ResBlock(48, causal=self.pconfig.causal),
             UpsampleFP32(2, torch.float16),
-            nn.Conv2d(48, 12, 3, padding=1),
+            CausalConv2d(48, 12, 3, padding=1, causal=self.pconfig.causal),
         )
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 2),
@@ -198,6 +179,13 @@ class PerlinAttention(nn.Module):
         attention_scores_truth: torch.Tensor,
         context_layer_truth: torch.Tensor,
     ):
+        if self.pconfig.causal:
+            N, H, T1, T2 = attention_mask.shape
+            assert T1 == T2
+            assert H == 1
+            causal_attention_mask = attention_mask
+            attention_mask = attention_mask[:, :, :, :1].transpose(-1, -2)
+        
         # N, H, T, HID = q.shape
         # return PerlinAttentionOutput(
         #     loss=0,
@@ -592,6 +580,8 @@ class PerlinAttention(nn.Module):
                         # print(torch.unique(partial_attention_mask).shape)
                         # TODO Fix this function to return COO tensor
                         partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0)
+                        if self.pconfig.causal:
+                            partial_attention_mask.masked_fill_(causal_attention_mask < -1, FP_MIN)
                         # print(torch.unique(partial_attention_mask).shape)
                         # print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
                         # input()

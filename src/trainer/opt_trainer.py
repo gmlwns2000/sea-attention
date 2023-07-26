@@ -11,6 +11,7 @@ from torch import nn, optim
 import os
 from ..dataset.wikitext2 import get_dataloader
 import gc
+import torch.nn.functional as F
 
 @dataclass
 class TrainerConfig:
@@ -193,10 +194,14 @@ class Trainer:
         loss_kd = 0
         if self.config.using_kd:
             for ilayer in range(len(output_teacher.hidden_states)):
-                loss_kd += torch.nn.functional.mse_loss(output_teacher.hidden_states[ilayer], output_student.hidden_states[ilayer])
+                loss_kd += F.mse_loss(output_teacher.hidden_states[ilayer], output_student.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
             assert len(output_teacher.hidden_states) > 0
-            loss_kd = loss_kd + torch.nn.functional.mse_loss(output_teacher.logits, output_student.logits) * 0.1
+            loss_kd = loss_kd + F.kl_div(
+                F.log_softmax(output_student.logits, dim=-1), 
+                F.softmax(output_teacher.logits, dim=-1),
+                reduction='batchmean',
+            ) * 0.1
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
