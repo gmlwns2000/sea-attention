@@ -331,6 +331,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         trainer = LraTrainer(**kwargs)
     elif args.model in ['opt']:
+        assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         trainer = OptTrainer(**kwargs)
     else:
         raise Exception()
