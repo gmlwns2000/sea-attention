@@ -10,6 +10,7 @@ import numpy as np
 from PIL import Image
 from typing import List, Tuple, Optional
 from matplotlib import cm
+import tqdm
 import torch.nn.functional as F
 
 ZOOM = 1
@@ -31,7 +32,12 @@ def gather_fixed_batch(dataloader: DataLoader, batch_size: int):
 
 def convert_to_colormap(arr: np.ndarray):
     T, T = arr.shape
-    im = Image.fromarray((cm.gist_earth((arr-np.min(arr)) / (np.max(arr) - np.min(arr)))*255).astype(np.uint8))
+    arr_min, arr_max = np.min(arr), np.max(arr)
+    normalized = (arr - arr_min) / (arr_max - arr_min + 1e-12)
+    colormapped = cm.gist_earth(normalized)
+    gamma = 0.2
+    colormapped = (colormapped / np.max(colormapped)) ** gamma
+    im = Image.fromarray((colormapped*255).astype(np.uint8))
     arr = np.asarray(im)[:, :, :3]
     arr = cv2.resize(arr, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_NEAREST)
     border = np.ones((arr.shape[0]+2, arr.shape[1]+2, arr.shape[2]), dtype=np.uint8)
@@ -60,7 +66,7 @@ def process_layer(teacher: torch.Tensor, est: torch.Tensor, dense: torch.Tensor,
 
 def process_batch_index(attentions: List[torch.Tensor], i: int, T: int):
     imgs = []
-    for ilayer, attn in enumerate(attentions):
+    for ilayer, attn in enumerate(tqdm.tqdm(attentions, dynamic_ncols=True, desc='render.layer')):
         img = process_layer(
             teacher=attn['teacher_attn'][i][:, :T, :T],
             est=attn['estimated_attn'][i][:, :T, :T],

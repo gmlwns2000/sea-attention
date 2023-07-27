@@ -28,7 +28,7 @@ def main(
     )
     trainer.load(path=checkpoint_path)
     
-    batch = gather_fixed_batch(trainer.valid_loader, 1)
+    batch = gather_fixed_batch(trainer.valid_loader, 10)
     batch = batch_to(batch, trainer.device)
     del batch['trg_len']
     
@@ -61,7 +61,6 @@ def main(
                     'dense_attn': dense_attn,
                     'partial_attn': partial_attn,
                 })
-                break
         
         if len(attentions) == 0:
             attentions = mini_attentions
@@ -71,14 +70,20 @@ def main(
                     k: torch.cat([v, mini_attentions[i][k]]) for k, v in attentions[i].items()
                 }
     
+    num_layers = len(teacher.model.decoder.layers)
     os.makedirs(f"./plots/visualize_opt", exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = batch['input_ids'].shape[-1]
         # token_length = batch['input_ids'].shape[-1]
         img = process_batch_index(attentions, i, token_length)
-        path = f"./plots/visualize_opt/{dataset}_{i}.png"
-        cv2.imwrite(path, img)
-        print('processed', path)
+        layer_dir = f"./plots/visualize_opt/{dataset}_{i}"
+        os.makedirs(layer_dir, exist_ok=True)
+        assert (img.shape[0] % num_layers) == 0, f"{img.shape}"
+        for j in range(num_layers):
+            img_layer = img[j*(img.shape[0] // num_layers):(j+1)*(img.shape[0] // num_layers)]
+            path = os.path.join(layer_dir, f'l{j}.png')
+            cv2.imwrite(path, img_layer)
+            print('processed', path)
     
     if evaluate:
         print('PPL:', trainer.evaluate())
