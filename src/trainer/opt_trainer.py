@@ -42,6 +42,7 @@ class TrainerConfig:
     using_loss: bool = True
     # NOTE decrease this only for DEBUG!!, this should be larger than 2048 on OPT
     max_seq_len: int = 32000
+    additional_config: dict = field(default_factory=lambda: {})
     
 BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -306,10 +307,7 @@ class Trainer:
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
-            'config': {
-                'model_config': self.config.model_config,
-                'epochs': self.config.epochs,
-            }
+            'config': asdict(self.config),
         }, path)
         print('saved', path)
     
@@ -338,6 +336,7 @@ class Trainer:
             self.train_epoch()
             score = self.evaluate()
             wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
+            self.save()
 
 if __name__ == '__main__':
     t = Trainer()
