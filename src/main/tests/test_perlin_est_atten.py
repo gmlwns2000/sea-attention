@@ -1,6 +1,6 @@
 from ...utils import get_bench
-from ..visualize_glue import main as visualize_main
-from ..visualize_glue import add_perlin_model_options, parse_perlin_model_options
+from ..visualize.glue import main as visualize_main
+from ..visualize.glue import add_perlin_model_options, parse_perlin_model_options
 import argparse, os, torch
 import matplotlib.pyplot as plt
 

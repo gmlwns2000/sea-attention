@@ -112,7 +112,10 @@ class PerlinAttention(nn.Module):
             self.performer,
             1000,
         )
-        performer_value_hidden_size = self.attention_head_size*3
+        if not self.pconfig.causal:
+            performer_value_hidden_size = self.attention_head_size*3
+        else:
+            performer_value_hidden_size = self.attention_head_size*2
         self.attention_predictor_enc = nn.Sequential(
             # nn.Dropout(0.1),
             nn.Linear(performer_value_hidden_size, self.attention_head_size*2),
@@ -316,10 +319,18 @@ class PerlinAttention(nn.Module):
                     )
                 
                 with timer("vmask.cat_fill"):
-                    v_for_atten = torch.cat([
-                        v_for_atten_identity, 
-                        v_for_atten
-                    ], dim=-1)
+                    if not self.pconfig.causal:
+                        v_for_atten = torch.cat([
+                            v_for_atten_identity, 
+                            v_for_atten
+                        ], dim=-1)
+                    else:
+                        #TODO add identity on causal
+                        # v_for_atten = torch.cat([
+                        #     v_for_atten,
+                        #     v_for_atten
+                        # ], dim=-1)
+                        pass
                     
                     get_bench().register_temp_buffer('v_for_atten', v_for_atten)
                 
@@ -394,6 +405,7 @@ class PerlinAttention(nn.Module):
             
             get_bench().register_temp_buffer('estimated_attention_score', estimated_attention_score)
             get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
+            # print(estimated_attention_probs[0,0,0,:])
             
             # in layerwise, train perlin attention predictor
             def resize_from_m_to_t(x, masked_fill_value, target_width=None):
@@ -404,21 +416,42 @@ class PerlinAttention(nn.Module):
                     T2 = T1
                 with timer("resize"):
                     with timer("resize.grid"):
-                        token_index_x = zero_one_attention_mask.view(N, 1, T2)
-                        if masked_fill_value is not None:
-                            token_index_x = torch.roll(token_index_x, shifts=(1,), dims=(-1)).cumsum(-1) + ((1.0 - zero_one_attention_mask) * 2).view(N, 1, T2)
-                            token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) + 2).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
+                        if not self.pconfig.causal:
+                            token_index_x = zero_one_attention_mask.view(N, 1, T2)
+                            if masked_fill_value is not None:
+                                # token_index_x = torch.roll(token_index_x, shifts=(1,), dims=(-1)).cumsum(-1) + ((1.0 - zero_one_attention_mask) * 2).view(N, 1, T2)
+                                # token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) + 2).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
+                                mask = token_index_x
+                                mask_cs = mask.cumsum(-1)
+                                token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * (mask_cs[:, :, -1].unsqueeze(-1)/T_M)
+                                token_index_x = torch.clamp(((((mask_cs - 1) + (1 - mask) * 5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
+                                token_index_x = token_index_x.expand(N, T1, T2)
+                                # print(token_index_x[0,0,:], mask_cs[0,0,-1])
+                            else:
+                                token_index_x = token_index_x.cumsum(-1)
+                                token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) - 1).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
                         else:
-                            token_index_x = token_index_x.cumsum(-1)
-                            token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) - 1).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
+                            assert masked_fill_value is not None
+                            mask = (causal_attention_mask > -1).float()
+                            _N, _H, _TQ, _TK = mask.shape
+                            mask_cs = mask.cumsum(-1)
+                            # print('mask', mask[0,0,-1,:])
+                            # print('mcs', mask_cs[0,0,-1,:])
+                            token_length = (mask_cs[:, :, :, -1].unsqueeze(-1) - 1) + 3 * (_TK/T_M)
+                            token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000  * (_TK/T_M))) / (token_length + 1e-8)) * 2 - 1, -1, 1)
+                            assert _H == 1
+                            token_index_x = token_index_x[:,0,:,:]
+                            # print('tix', token_index_x[0,-1,:])
                         token_index_y = (
                             torch.arange(T1, dtype=torch.long, device=token_index_x.device)\
                                 .view(1, T1, 1) / T1 * 2 - 1)\
                                 .expand(N, T1, T2) #type: torch.Tensor
                         token_index = torch.cat([
-                            token_index_x.unsqueeze(-1), 
+                            token_index_x.unsqueeze(-1),
                             token_index_y.unsqueeze(-1)
                         ], dim=-1)
+                    
+                    # print('ti', token_index[0,-1,:,:])
                     
                     with timer("resize.sample"):
                         grid_input = F.pad(F.pad(x, pad=(0, 2), value=0), pad=(0, 1), value=masked_fill_value) if masked_fill_value is not None else x
@@ -426,6 +459,7 @@ class PerlinAttention(nn.Module):
                             grid_input = grid_input.to(x.dtype)
                         if token_index.dtype != x.dtype:
                             token_index = token_index.to(x.dtype)
+                        # print(grid_input.shape, grid_input[0,0,0,-5:])
                         
                         return grid_sample_bf16(
                             input=grid_input,
@@ -436,6 +470,8 @@ class PerlinAttention(nn.Module):
                         )
             
             def resize_from_t_to_m(x, T_M):
+                if self.pconfig.causal: raise Exception()
+                
                 N, H, T1, T2 = x.shape
                 with timer("resize"):
                     with timer("resize.grid"):
@@ -466,6 +502,8 @@ class PerlinAttention(nn.Module):
                 T_M = estimated_attention_score.shape[-1]
                 # for loss calculation
                 estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)
+                # estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs.fill_(1), masked_fill_value=0)
+                # estimated_attention_probs_resized = resize_from_m_to_t(torch.arange(estimated_attention_probs.shape[-1], device=q.device, dtype=q.dtype).view(1, 1, 1, estimated_attention_probs.shape[-1]).expand(estimated_attention_probs.shape) / (estimated_attention_probs.shape[-1]-1), masked_fill_value=0)
                 estimated_attention_score_resized = resize_from_m_to_t(estimated_attention_score, masked_fill_value=FP_MIN)
                 
                 with torch.autocast('cuda', torch.float32):
@@ -489,17 +527,28 @@ class PerlinAttention(nn.Module):
                     #     softmax_bf16(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)
                     # )
                     
-                    loss_kl_t = kl_div_attention(
-                        F.log_softmax(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                        F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                        attention_mask,
-                    ) * 0.1
-                    raise_if_nan(loss_kl_t)
-                    loss_mse_t = F.mse_loss(
-                        softmax_bf16(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
-                        softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
-                    )
+                    if not self.pconfig.causal:
+                        loss_kl_t = kl_div_attention(
+                            F.log_softmax(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                            F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                            attention_mask,
+                        ) * 0.1
+                        loss_mse_t = F.mse_loss(
+                            softmax_bf16(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                            softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
+                        )
+                    else:
+                        loss_kl_t = F.kl_div(
+                            F.log_softmax(estimated_attention_score_resized.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, estimated_attention_probs_resized.shape[-1]),
+                            F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, estimated_attention_probs_resized.shape[-1]),
+                            reduction='batchmean',
+                        ) * 0.1
+                        loss_mse_t = F.mse_loss(
+                            softmax_bf16(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                            softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
+                        )
                     
+                    raise_if_nan(loss_kl_t)
                     raise_if_nan(loss_mse_t)
                     loss += loss_kl_t + loss_mse_t# + (loss_kl_m + loss_mse_m) * 0.5
                     raise_if_nan(loss)
@@ -624,13 +673,15 @@ class PerlinAttention(nn.Module):
                     with timer("interp.resize"):
                         # print(torch.unique(partial_attention_mask).shape)
                         # TODO Fix this function to return COO tensor
-                        partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0)
+                        partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN)
                         if self.pconfig.causal:
                             partial_attention_mask.masked_fill_(causal_attention_mask < -1, FP_MIN)
                         # print(torch.unique(partial_attention_mask).shape)
                         # print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
                         # input()
                 else:
+                    if self.pconfig.causal: raise Exception()
+                    
                     def resize_width(img: torch.Tensor, scale: float):
                         N, H, W = img.shape
                         # img = img.coalesce()
@@ -689,11 +740,6 @@ class PerlinAttention(nn.Module):
                     # optimized
                     partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
                     partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
-                    
-                    # torch.save({
-                    #     'a':partial_attention_mask_original,
-                    #     'b':partial_attention_mask
-                    # }, "help.pth")
                 
                 # with timer("interp.fill"):
                 #     partial_attention_mask.masked_fill_(
@@ -732,22 +778,36 @@ class PerlinAttention(nn.Module):
                     # print(metric.update(avg_k_per_batch, name='avgk'))
                     
                     attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
-                    attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
-                    loss += kl_div_attention(
-                        F.log_softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                        F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                        attention_mask,
-                    ) * 0.1
-                    loss += F.mse_loss(
-                        softmax_bf16(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
-                        softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                    )
-                    get_bench().register_temp_buffer('partial_attention_scores', attention_scores_dense)
+                    if not self.pconfig.causal:
+                        attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
+                        loss += kl_div_attention(
+                            F.log_softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                            F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                            attention_mask,
+                        ) * 0.1
+                        loss += F.mse_loss(
+                            softmax_bf16(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                            softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                        )
+                    else:
+                        attention_scores_dense = attention_scores_dense
+                        loss += F.kl_div(
+                            F.log_softmax(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                            F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                            reduction='batchmean',
+                        ) * 0.1
+                        loss += F.mse_loss(
+                            softmax_bf16(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1), 
+                            softmax_bf16(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1),
+                        )
+                    get_bench().register_temp_buffer('attention_scores_dense', attention_scores_dense)
                     raise_if_nan(loss)
                     
                     # NOTE HJ `attention_probs_dense` is for visualization, therefore it will not computed on benchmarking mode
-                    if attention_mask is not None:
+                    if not self.pconfig.causal:
                         attention_scores_dense_masked = attention_scores_dense + attention_mask
+                    else:
+                        attention_scores_dense_masked = attention_scores_dense + causal_attention_mask
                     attention_probs_dense = softmax_bf16(attention_scores_dense_masked, dim=-1)
                     
                     # NOTE HJ you should not add attention_mask and attention_score, because partial_attention_mask already has it.
@@ -762,6 +822,7 @@ class PerlinAttention(nn.Module):
                     raise_if_nan(partial_attention_scores)
                     partial_attention_probs = softmax_bf16(partial_attention_scores, -1)
                     partial_attention_probs = partial_attention_probs * (partial_attention_mask > -1)
+                    get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
                     get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
                     raise_if_nan(partial_attention_probs)
                     
@@ -774,25 +835,10 @@ class PerlinAttention(nn.Module):
                     raise_if_nan(v)
                     partial_context_layer = torch.matmul(partial_attention_probs, v)
                     get_bench().register_temp_buffer('partial_context_layer_1', partial_context_layer)
-                    
-                    average_context_layer = (
-                        v *\
-                        (attention_mask.transpose(-1, -2) > -1).to(v.dtype) *\
-                        resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2)
-                    ).sum(-2, keepdim=True).to(v.dtype)
-                    average_scale = torch.sigmoid(estimated_scales[..., 1:2])
-                    partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
-                    get_bench().register_temp_buffer('estimated_scales', estimated_scales)
-                    get_bench().register_temp_buffer('average_scale', average_scale)
-                    get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
-                    get_bench().register_temp_buffer('average_context_layer', average_context_layer)
-                    get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
-                    
-                    # average_context_layer = (v * (attention_mask.transpose(-1, -2) > -1)).sum(-2, keepdim=True) /\
-                    #     (attention_mask > -1).float().sum(-1, keepdim=True)
-                    # average_scale = torch.sigmoid(estimated_scales[..., 1:2])
-                    # partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
                 else:
+                    # TODO implement optimized causal kernel
+                    if self.pconfig.causal: raise Exception()
+                    
                     attention_probs_dense = partial_attention_probs = attention_scores_dense = None
                     partial_context_layer = q_for_score
                     
@@ -801,27 +847,6 @@ class PerlinAttention(nn.Module):
                     # NOTE: print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask.to_dense() > 0).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()
                     # print(metric.update(avg_k_per_batch, name='avgk'))
-                    
-                    # using xFormers
-                    # with timer("attention.binary_mask"):
-                    #     sparse_attention_mask = partial_attention_mask < -1
-                    # N, H, T, HEAD_H = q_for_score.shape
-                    # with timer("attention.sparsify"):
-                    #     global T_MASK
-                    #     if T_MASK is None:
-                    #         T_MASK = SparseCS(
-                    #             sparse_attention_mask.view(N*H, T, T)[:1, :, :],
-                    #             device=q_for_score.device
-                    #         )
-                    #     sparse_mask = T_MASK
-                    # with timer("attention.attention"):
-                    #     partial_context_layer = scaled_dot_product_attention(
-                    #         q=q_for_score.reshape(N*H, T, HEAD_H),
-                    #         k=k_for_score.reshape(N*H, T, HEAD_H),
-                    #         v=v.reshape(N*H, T, HEAD_H),
-                    #         att_mask=sparse_mask
-                    #     )
-                    # partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
                     
                     # using Numba
                     N, H, T, HEAD_H = q_for_score.shape
@@ -859,14 +884,25 @@ class PerlinAttention(nn.Module):
                             partial_context_layer = torch.bmm(partial_attention_probs, v.reshape(N*H, T, HEAD_H))
                             partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
                         
-                        with timer("attention.avg_pool"):
-                            average_context_layer = (
-                                v *\
-                                (attention_mask.transpose(-1, -2) > -1) *\
-                                resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2)
-                            ).sum(-2, keepdim=True).to(v.dtype)
-                            average_scale = torch.sigmoid(estimated_scales[..., 1:2])
-                            partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
+                with timer("attention.avg_pool"):
+                    if not self.pconfig.causal:
+                        average_context_layer = (
+                            v *\
+                            (attention_mask.transpose(-1, -2) > -1).to(v.dtype) *\
+                            resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2)
+                        ).sum(-2, keepdim=True).to(v.dtype)
+                    else:
+                        # TODO imporve this when causal
+                        avg_v = v * (attention_mask.transpose(-1, -2) > -1)
+                        average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1)
+                        average_context_layer = average_context_layer.to(v.dtype)
+                    average_scale = torch.sigmoid(estimated_scales[..., 1:2])
+                    partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
+                    get_bench().register_temp_buffer('estimated_scales', estimated_scales)
+                    get_bench().register_temp_buffer('average_scale', average_scale)
+                    get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
+                    get_bench().register_temp_buffer('average_context_layer', average_context_layer)
+                    get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
             
             if self.pconfig.random_lookup:
                 raise Exception()
@@ -911,6 +947,7 @@ class PerlinAttention(nn.Module):
                         partial_context_layer = partial_context_layer +\
                             self.norm_performer(performer_context_layer)
                 else:
+                    raise Exception()
                     partial_context_layer = \
                         self.norm_partial(partial_context_layer) +\
                         self.norm_random(random_context_layer) +\
