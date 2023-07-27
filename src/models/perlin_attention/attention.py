@@ -555,7 +555,7 @@ class PerlinAttention(nn.Module):
                                 .expand(N, T, selected_col_cnt) # [N, T, selected_col_cnt]
                             # breakpoint()
                             if mask_in_probs:
-                                col_sel_estimated_attention_probs.scatter_(dim=-1, index=large_inx, value=1) # this also changes estimated_attention_probs
+                                col_sel_estimated_attention_probs.scatter_(dim=-1, index=large_inx, value=0) # this also changes estimated_attention_probs
                             else:
                                 col_sel_estimated_attention_score = estimated_attention_score.permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE attn mask not applied
                                 col_sel_estimated_attention_score.scatter_(dim=-1, index=large_inx, value=FP_MIN)
