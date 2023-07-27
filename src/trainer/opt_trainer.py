@@ -13,6 +13,8 @@ from ..dataset.wikitext2 import get_dataloader
 import gc
 import torch.nn.functional as F
 
+default = lambda x, y: x if x is not None else y
+
 @dataclass
 class TrainerConfig:
     # trainer metadata
@@ -44,7 +46,8 @@ class TrainerConfig:
     max_seq_len: int = 32000
     additional_config: dict = field(default_factory=lambda: {})
     
-BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+# BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+BF_16 = torch.float16
 
 class Trainer:
     def __init__(self, config: TrainerConfig = None) -> None:
@@ -82,7 +85,7 @@ class Trainer:
             max_length = self.model.config.n_positions
         else:
             max_length = self.model.config.max_position_embeddings
-        self.max_seq_len = min(self.config.max_seq_len, max_length)
+        self.max_seq_len = min(default(self.config.max_seq_len, 32000), max_length)
         
         if self.config.gradient_checkpointing:
             print('patch gradient checkpointing')
@@ -306,6 +309,7 @@ class Trainer:
             'epoch': self.epoch,
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
+            'scaler': self.scaler.state_dict(),
             'optimizer': self.optimizer.state_dict(),
             'config': asdict(self.config),
         }, path)
@@ -315,13 +319,13 @@ class Trainer:
         if path is None: path = self.checkpoint_path()
         state = torch.load(path, map_location='cpu')
         self.model.load_state_dict(state['model'])
-        self.scaler.load_state_dict(state['scaler'])
+        if 'scaler' in state: self.scaler.load_state_dict(state['scaler'])
         self.optimizer.load_state_dict(state['optimizer'])
         step = state['step']
         epoch = state['epoch']
-        epochs = state['epochs']
+        epochs = state['config']['epochs']
         del state
-        print(f'loaded {path}({step}@[{epoch}/{epochs}])')
+        print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
     
     def main(self):
         from ..utils.secrets import WANDB_KEY, USER_NAME

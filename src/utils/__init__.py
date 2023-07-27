@@ -380,9 +380,10 @@ class Benchmark:
             data[key] = s / (c+1e-10)
         return data
 
-    def register_temp_buffer(self, name, v):
+    def register_temp_buffer(self, name, v, lazy=None):
         if not self.activate_temp_buffers: return
         buffer = self.buffers.get(name, [])
+        if (v is None) and (lazy is not None): v = lazy()
         buffer.append(v)
         self.buffers[name] = buffer
     

@@ -16,6 +16,7 @@
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
 from .. import hf_opt
+from ...utils import get_bench
 
 from typing import List, Optional, Tuple, Union
 
@@ -194,6 +195,7 @@ class OPTAttention(nn.Module):
             perlin_config=self.pconfig,
         )
         self.last_loss = None
+        self.last_perlin_output = None
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -360,6 +362,8 @@ class OPTAttention(nn.Module):
                 context_layer_truth = self.teacher_context_layer.view(N, H, T, HID).transpose(1, 2).reshape(N, T, H*HID),
             ) #type: PerlinAttentionOutput
             self.last_loss = output.loss
+            if not self.benchmarking:
+                self.last_perlin_output = output
             
             return output.context_layer, output.partial_attention_probs
         else:

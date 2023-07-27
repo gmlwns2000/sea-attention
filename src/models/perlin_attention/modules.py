@@ -72,7 +72,7 @@ class UpsampleFP32(nn.Module):
     
     def forward(self, x):
         x_type = x.dtype
-        if x.dtype != self.dtype:
+        if x.dtype != self.dtype and ((torch.get_autocast_gpu_dtype() == torch.bfloat16) or (x.dtype == torch.bfloat16)):
             x = x.to(self.dtype)
         x = F.interpolate(x, scale_factor=self.scale, mode='nearest')
         if x_type != x.dtype:

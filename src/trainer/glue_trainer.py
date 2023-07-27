@@ -82,7 +82,7 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+BF16 = torch.float16 if torch.cuda.is_bf16_supported() else torch.float16
 from ..utils import Metric
 
 class Trainer:
