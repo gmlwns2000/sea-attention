@@ -33,6 +33,7 @@ from .modules import (
     UpsampleFP32,
     interpolate
 )
+from math import ceil, floor
 # NOTE HJ comment below to debug NaN
 raise_if_nan = lambda x: x
 
@@ -563,7 +564,7 @@ class PerlinAttention(nn.Module):
                 
                 T_M = estimated_attention_probs.shape[-1]
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
-                top_k = min(max(int(math.ceil(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M)
+                top_k = min(max(int(round(self.pconfig.k * (T_M / min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
                 if not k_flatten:
                     with timer("mask.topk"):
@@ -593,16 +594,16 @@ class PerlinAttention(nn.Module):
                         if k_flatten_dim == 'batch':
                             t = masked_estimated_attention_probs.view(N, H*T*T_M)
                             top_k_elems = top_k*T*H
-                            per_item_top_k = token_length * H * self.pconfig.k * torch.ceil(T_M / token_length)
+                            per_item_top_k = token_length * H * self.pconfig.k * torch.round(T_M / token_length)
                         elif k_flatten_dim == 'head':
                             t = masked_estimated_attention_probs.view(N, H, T*T_M)
                             top_k_elems = top_k*T
-                            per_item_top_k = token_length * self.pconfig.k * torch.ceil(T_M / token_length)
+                            per_item_top_k = token_length * self.pconfig.k * torch.round(T_M / token_length)
                         elif k_flatten_dim == 'causal_batch':
                             t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
                             top_k_elems = top_k*H
                             # per_item_top_k = (H * self.pconfig.k)
-                            per_item_top_k = (H * self.pconfig.k * torch.ceil(T_M / token_length)).view(N, 1, 1)
+                            per_item_top_k = (H * self.pconfig.k * torch.round(T_M / token_length)).view(N, 1, 1)
                             # print(t.shape, self.pconfig.k, T, T_M, token_length[0].item(), top_k, top_k_elems, per_item_top_k[0].item())
                         else: raise Exception()
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
