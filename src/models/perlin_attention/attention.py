@@ -519,12 +519,11 @@ class PerlinAttention(nn.Module):
                 if k_flatten:
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
-                # col / row selection before topk
                 perlin_col_select = self.pconfig.colsel
-                col_select_method = self.pconfig.colsel_method
-                mask_in_probs = self.pconfig.colsel_mask_in_probs # "scores"
-                warnings.warn(f'perlin_col_select {perlin_col_select}')
                 if perlin_col_select and k_flatten:
+                    col_select_method = self.pconfig.colsel_method
+                    mask_in_probs = self.pconfig.colsel_mask_in_probs # "scores"
+                    warnings.warn(f'perlin_col_select {perlin_col_select}')
                     selected_col_per_head = 1 # TODO add to args
                     warnings.warn(f"selected_col_per_head {selected_col_per_head}")
                     top_k = top_k-selected_col_per_head # NOTE not that important, this doesn't control final topk value
@@ -659,11 +658,12 @@ class PerlinAttention(nn.Module):
                     with timer("mask.masked_fill"):
                         # input()
                         if perlin_col_select:
-                            per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * math.ceil(self.pconfig.k-selected_col_per_head*(T/T_M)) * torch.ceil(T_M / token_length) # TODO check value
+                            per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * (self.pconfig.k-torch.floor(selected_col_per_head*(token_length/T_M))) * torch.ceil(T_M / token_length) # TODO check value
+                            # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * math.ceil(self.pconfig.k-math.floor(selected_col_per_head*(T/T_M))) * torch.ceil(T_M / token_length) # TODO check value
                             # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * int(self.pconfig.k-round(selected_col_per_head*(T/T_M))) * torch.ceil(T_M / token_length) # TODO check value
                         else:
                             per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
-                            # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.floor(T / token_length)
+                            # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.floor(T / token_length) TODO test this value
                         # breakpoint()
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
@@ -695,7 +695,7 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask = partial_attention_mask.view(N, H, T, T_M) # NOTE memory order considered
                         # breakpoint()
                     assert partial_attention_mask.shape ==(N, H, T, T_M)
-                    # breakpoint()
+                    
             
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
             

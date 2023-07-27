@@ -377,6 +377,12 @@ class Trainer:
             self.model.load_state_dict(model_state_dict, strict=False)
             self.base_model.load_state_dict(state['base_model'])
             # self.optimizer.load_state_dict(state['optimizer'])
+            # for state in self.optimizer.state.values():
+            #     for k, v in state.items():
+            #         if isinstance(v, torch.Tensor):
+            #             state[k] = v.cuda()
+            self.scaler.load_state_dict(state['scaler'])
+            # self.step = state['step']
             del state
         except Exception as ex:
             print('error while load', ex)
