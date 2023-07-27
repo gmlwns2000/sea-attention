@@ -28,6 +28,9 @@ class BaseTrainer:
         perlin_token_merging = False,
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
+        perlin_colsel = False,
+        perlin_colsel_method = "sum_values",
+        perlin_colsel_mask_in_probs = False,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -44,6 +47,10 @@ class BaseTrainer:
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
+
+        self.perlin_colsel = perlin_colsel
+        self.perlin_colsel_method = perlin_colsel_method
+        self.perlin_colsel_mask_in_probs = perlin_colsel_mask_in_probs
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
@@ -55,6 +62,10 @@ class BaseTrainer:
             attention_predictor_method = perlin_attention_predictor_method,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
+            # NOTE JIN added colsel
+            colsel = perlin_colsel,
+            colsel_method = perlin_colsel_method,
+            colsel_mask_in_probs = perlin_colsel_mask_in_probs
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -65,7 +76,7 @@ class BaseTrainer:
                 module.perlin_token_merging = self.perlin_token_merging
                 module.perlin_token_merging_ratio = self.perlin_token_merging_ratio
                 module.perlin_token_merging_preserve_ratio = self.perlin_token_merging_preserve
-        
+
         if self.perlin_layerwise:
             for name, param in model.named_parameters():
                 if 'perlin' in name:
@@ -93,10 +104,11 @@ class BaseTrainer:
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
+        name_colsel = f"_colsel_({self.perlin_colsel_method})_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_colsel}'
         return name
 
 class GlueTrainer(BaseGlueTrainer, BaseTrainer):
@@ -202,6 +214,10 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    parser.add_argument('--colsel', action='store_true', default=False)
+    parser.add_argument('--colsel-method', default="sum_values", type=str)
+    parser.add_argument('--colsel-mask-in-probs', action='store_true', default=False)
+
     return parser
 
 def parse_perlin_model_options(args):
@@ -220,6 +236,9 @@ def parse_perlin_model_options(args):
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
+        'perlin_colsel': args.colsel,
+        "perlin_colsel_method": args.colsel_method,
+        "perlin_colsel_mask_in_probs": args.colsel_mask_in_probs
     }
     return kwargs
 

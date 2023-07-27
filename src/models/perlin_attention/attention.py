@@ -520,19 +520,30 @@ class PerlinAttention(nn.Module):
                     k_flatten_dim = self.pconfig.k_flatten_dim
                     assert k_flatten_dim in ['head', 'batch']
                 # col / row selection before topk
-                perlin_col_select = False # TODO add to args
+                perlin_col_select = self.pconfig.colsel
+                col_select_method = self.pconfig.colsel_method
+                mask_in_probs = self.pconfig.colsel_mask_in_probs # "scores"
                 warnings.warn(f'perlin_col_select {perlin_col_select}')
                 if perlin_col_select and k_flatten:
                     selected_col_per_head = 1 # TODO add to args
                     warnings.warn(f"selected_col_per_head {selected_col_per_head}")
-                    top_k = top_k-selected_col_per_head
+                    top_k = top_k-selected_col_per_head # NOTE not that important, this doesn't control final topk value
                     with timer("mask.select_col"):
                         if k_flatten_dim == "batch":
-                            selected_col_cnt = self.num_attention_heads*selected_col_per_head
+                            selected_col_cnt = self.num_attention_heads*selected_col_per_head # TODO int(*(T_M/T))
                             warnings.warn(f"selected col cnt {selected_col_cnt}")
-                            estimated_attention_probs_all_heads = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
+                            warnings.warn(f"col_select_method {col_select_method}")
+                            warnings.warn(f"mask_in_probs {mask_in_probs}")
+                            col_sel_estimated_attention_probs1 = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
+                            col_sel_estimated_attention_probs = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
+                            get_bench().register_temp_buffer('col_sel_estimated_attention_probs_bef_select', col_sel_estimated_attention_probs1) # col_sel_estimated_attention_probs1
                             # breakpoint()
-                            sum_per_col = estimated_attention_probs_all_heads[:,:,:].sum(dim=1) # [N, H*T_M]
+                            if col_select_method == "sum_values":
+                                sum_per_col = col_sel_estimated_attention_probs.sum(dim=-2) # [N, H*T_M]
+                            elif col_select_method == "sum_mask":
+                                col_select_mask = col_sel_estimated_attention_probs >= (1/T_M) # [N, T, H*T_M]
+                                sum_per_col = col_select_mask.sum(dim=-2) # [N, H*T_M]
+                            # get_bench().register_temp_buffer('sum_per_col', sum_per_col)
                             # breakpoint()
                             _, largest_indx = torch.topk(
                                 input=sum_per_col,
@@ -543,10 +554,18 @@ class PerlinAttention(nn.Module):
                             large_inx = largest_indx.view(N, 1, selected_col_cnt)\
                                 .expand(N, T, selected_col_cnt) # [N, T, selected_col_cnt]
                             # breakpoint()
-                            estimated_attention_probs_all_heads.scatter_(dim=-1, index=large_inx, value=0.0) # this also changes estimated_attention_probs
-                            # breakpoint()
-                            t = estimated_attention_probs_all_heads.view(N, T*H*T_M) # [N, T, H*T_M] -> [N, T*H*T_M]
-                            # breakpoint()
+                            if mask_in_probs:
+                                col_sel_estimated_attention_probs.scatter_(dim=-1, index=large_inx, value=1) # this also changes estimated_attention_probs
+                            else:
+                                col_sel_estimated_attention_score = estimated_attention_score.permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE attn mask not applied
+                                col_sel_estimated_attention_score.scatter_(dim=-1, index=large_inx, value=FP_MIN)
+                                col_sel_estimated_attention_score = col_sel_estimated_attention_score.view(N, T, H, T_M).permute(0, 2, 1, 3)
+                                col_sel_estimated_attention_probs = torch.softmax(col_sel_estimated_attention_score, -1)
+                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1) # N H T T_M
+                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous()
+
+                            get_bench().register_temp_buffer('col_sel_estimated_attention_probs', col_sel_estimated_attention_probs)
+                            t = col_sel_estimated_attention_probs.view(N, T*H*T_M) # [N, T, H*T_M] -> [N, T*H*T_M]
                         elif k_flatten_dim == 'head':
                             # 1 per head # TODO change head code
                             selected_col_cnt = selected_col_per_head
@@ -585,8 +604,6 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask.fill_(FP_MIN)
                     with timer("mask.scatter"):
                         partial_attention_mask.scatter_(dim=-1, index=indices, value=0)
-                    if perlin_col_select:
-                        partial_attention_mask[col_select_mask] = 0.0
                 else:
                     warnings.warn(f"k_flatten_dim {k_flatten_dim}")
                     if not perlin_col_select:
@@ -646,6 +663,7 @@ class PerlinAttention(nn.Module):
                             # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * int(self.pconfig.k-round(selected_col_per_head*(T/T_M))) * torch.ceil(T_M / token_length) # TODO check value
                         else:
                             per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
+                            # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.floor(T / token_length)
                         # breakpoint()
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized

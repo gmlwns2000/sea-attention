@@ -30,6 +30,10 @@ class PerlinAttentionConfig:
     out_add_performer_context: bool = False
     v_eye_length: int = 128
     out_norm: bool = False
+    # NOTE JIN added colsel
+    colsel: bool = False
+    colsel_method: str = "sum_values"
+    colsel_mask_in_probs: bool = False
     
     def to_json(self):
         return asdict(self)
