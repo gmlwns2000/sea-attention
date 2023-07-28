@@ -446,7 +446,8 @@ class PerlinAttention(nn.Module):
                 # )
                 
                 estimated_attention_probs = torch.softmax(estimated_attention_score, -1)
-            
+                
+            # JINA_VIZ_COLSEL 2
             get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
             
             # in layerwise, train perlin attention predictor
@@ -488,7 +489,9 @@ class PerlinAttention(nn.Module):
                 # for loss calculation
                 estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)
                 estimated_attention_score_resized = resize_from_m_to_t(estimated_attention_score, masked_fill_value=FP_MIN)
-                
+                # JINA_VIZ_COLSEL 2
+                breakpoint()
+
                 with torch.autocast('cuda', torch.float32):
                     raise_if_nan(estimated_attention_score_resized)
                     raise_if_nan(attention_scores_truth)
@@ -510,6 +513,7 @@ class PerlinAttention(nn.Module):
             
             with timer("mask"):
                 estimated_attention_probs = estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)
+                # JINA_VIZ_COLSEL 2
                 
                 T_M = estimated_attention_probs.shape[-1]
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
@@ -535,6 +539,10 @@ class PerlinAttention(nn.Module):
                             warnings.warn(f"mask_in_probs {mask_in_probs}")
                             col_sel_estimated_attention_probs1 = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
                             col_sel_estimated_attention_probs = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # NOTE 'batch': memory order differs depending on select col T/F
+                            
+                            breakpoint()
+                            # JINA_VIZ_COLSEL 1 
+                            
                             get_bench().register_temp_buffer('col_sel_estimated_attention_probs_bef_select', col_sel_estimated_attention_probs1) # col_sel_estimated_attention_probs1
                             # breakpoint()
                             if col_select_method == "sum_values":
@@ -561,10 +569,12 @@ class PerlinAttention(nn.Module):
                                 col_sel_estimated_attention_score = col_sel_estimated_attention_score.view(N, T, H, T_M).permute(0, 2, 1, 3)
                                 col_sel_estimated_attention_probs = torch.softmax(col_sel_estimated_attention_score, -1)
                                 col_sel_estimated_attention_probs = col_sel_estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1) # N H T T_M
-                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous()
-
+                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous() # N T H T_M
+                            
+                            breakpoint()
                             get_bench().register_temp_buffer('col_sel_estimated_attention_probs', col_sel_estimated_attention_probs)
                             t = col_sel_estimated_attention_probs.view(N, T*H*T_M) # [N, T, H*T_M] -> [N, T*H*T_M]
+
                         elif k_flatten_dim == 'head':
                             # 1 per head # TODO change head code
                             selected_col_cnt = selected_col_per_head
@@ -677,6 +687,7 @@ class PerlinAttention(nn.Module):
                         else:
                             t_alive_mask = partial_attention_mask < per_item_top_k
                             partial_attention_mask = t_alive_mask.float()
+                        # JINA_VIZ_COLSEL 1 partial_attention_mask
                     if perlin_col_select:
                         if k_flatten_dim=='batch': # partial_attention_mask [N, T*H*T_M]
                             # breakpoint()
@@ -695,8 +706,8 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask = partial_attention_mask.view(N, H, T, T_M) # NOTE memory order considered
                         # breakpoint()
                     assert partial_attention_mask.shape ==(N, H, T, T_M)
-                    
-            
+                    # JINA_VIZ_COLSEL 1 partial_attention_mask (before interprete)
+
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
             
             with timer("interp"):
@@ -783,7 +794,8 @@ class PerlinAttention(nn.Module):
                 #         value=FP_MIN,
                 #     )
                 raise_if_nan(partial_attention_mask)
-            
+                # JINA_VIZ_COLSEL 1 partial_attention_mask (after interprete)
+
             get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
             
             with timer("attention"):

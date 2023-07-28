@@ -388,6 +388,9 @@ class Benchmark:
     
     def get_temp_buffer(self, name, index=-1):
         return self.buffers[name][index]
+    
+    def get_all_temp_buffer(self, name):
+        return self.buffers[name]
 
 BENCHMARK = Benchmark()
 
