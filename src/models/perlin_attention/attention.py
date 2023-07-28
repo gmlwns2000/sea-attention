@@ -522,7 +522,7 @@ class PerlinAttention(nn.Module):
                 perlin_col_select = self.pconfig.colsel
                 if perlin_col_select and k_flatten:
                     col_select_method = self.pconfig.colsel_method
-                    mask_in_probs = self.pconfig.colsel_mask_in_probs # "scores"
+                    mask_in_probs = self.pconfig.colsel_mask_in_probs
                     warnings.warn(f'perlin_col_select {perlin_col_select}')
                     selected_col_per_head = 1 # TODO add to args
                     warnings.warn(f"selected_col_per_head {selected_col_per_head}")
