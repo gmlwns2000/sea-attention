@@ -808,11 +808,11 @@ class PerlinAttention(nn.Module):
                             raise Exception(f'k flatten {k_flatten} k_flatten_dim {k_flatten_dim}')
                     else:
                         if k_flatten_dim == 'causal_batch':
-                        partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).transpose(1, 2)
-                        partial_attention_mask.masked_fill_(
-                            mask=attention_mask.transpose(-1, -2) < -1,
-                            value=FP_MIN
-                        )
+                            partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).transpose(1, 2)
+                            partial_attention_mask.masked_fill_(
+                                mask=attention_mask.transpose(-1, -2) < -1,
+                                value=FP_MIN
+                            )
                         elif k_flatten_dim in ['batch', 'head']:
                             pass
                         else: raise Exception()
