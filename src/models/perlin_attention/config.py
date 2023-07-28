@@ -14,7 +14,7 @@ class PerlinAttentionConfig:
     performer_nb_factor: int = 1
     k: int = 7
     k_flatten: bool = True
-    k_flatten_dim: str = 'batch'
+    k_flatten_dim: str = 'causal_batch'
     random_lookup: bool = False
     random_lookup_count: int = 3
     attention_predictor_method: str = 'mlp'
@@ -34,9 +34,15 @@ class PerlinAttentionConfig:
     colsel: bool = False
     colsel_method: str = "sum_values"
     colsel_mask_in_probs: bool = False
+    causal: bool = False
     
     def to_json(self):
         return asdict(self)
+    
+    def check_validity(self):
+        if self.causal:
+            if self.k_flatten:
+                assert self.k_flatten_dim in ['causal_batch']
 
     def __repr__(self) -> str:
         return f"PerlinAttentionConfig({json.dumps(self.to_json())})"
