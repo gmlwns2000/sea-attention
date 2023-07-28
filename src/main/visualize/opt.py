@@ -28,7 +28,10 @@ def main(
     )
     trainer.load(path=checkpoint_path)
     
-    batch = gather_fixed_batch(trainer.valid_loader, 10)
+    if evaluate:
+        print('PPL:', trainer.evaluate())
+    
+    batch = gather_fixed_batch(trainer.valid_loader, 5)
     batch = batch_to(batch, trainer.device)
     del batch['trg_len']
     
@@ -84,9 +87,6 @@ def main(
             path = os.path.join(layer_dir, f'l{j}.png')
             cv2.imwrite(path, img_layer)
             print('processed', path)
-    
-    if evaluate:
-        print('PPL:', trainer.evaluate())
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

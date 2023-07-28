@@ -195,6 +195,11 @@ class PerlinAttention(nn.Module):
             data=torch.rand((1, 1, self.attention_head_size, self.attention_head_size)),
             requires_grad=True
         )
+        
+        self.v_eye_learned_causal = nn.Parameter(
+            data=torch.randn((1, 1, 2048, self.attention_head_size)),
+            requires_grad=True
+        )
     
     def forward(
         self,
@@ -327,11 +332,12 @@ class PerlinAttention(nn.Module):
                         ], dim=-1)
                     else:
                         #TODO add identity on causal
-                        # v_for_atten = torch.cat([
-                        #     v_for_atten,
-                        #     v_for_atten
-                        # ], dim=-1)
-                        pass
+                        v_for_atten_pos_emb = self.v_eye_learned_causal[:,:,:T2,:]
+                        v_for_atten = torch.cat([
+                            v_for_atten_pos_emb.expand(v_for_atten.shape),
+                            v_for_atten
+                        ], dim=-1)
+                        # pass
                     
                     get_bench().register_temp_buffer('v_for_atten', v_for_atten)
                 
@@ -591,21 +597,41 @@ class PerlinAttention(nn.Module):
                     assert k_flatten_dim in ['head', 'batch', 'causal_batch']
                     with timer("mask.view"):
                         masked_estimated_attention_probs = (estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1))
+                        
+                        if not self.pconfig.causal:
+                            token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
+                        else:
+                            token_length = (causal_attention_mask > -1).long().sum(-1).view(1, 1, T, 1)
+                        
                         if k_flatten_dim == 'batch':
+                            assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H*T*T_M)
-                            top_k_elems = top_k*T*H
+                            # top_k_elems = top_k*T*H
                             per_item_top_k = token_length * H * torch.floor(self.pconfig.k * T_M / token_length)
                         elif k_flatten_dim == 'head':
+                            assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H, T*T_M)
-                            top_k_elems = top_k*T
+                            # top_k_elems = top_k*T
                             per_item_top_k = token_length * torch.floor(self.pconfig.k * T_M / token_length)
                         elif k_flatten_dim == 'causal_batch':
                             t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
-                            top_k_elems = top_k*H
+                            # top_k_elems = top_k*H
                             # per_item_top_k = (H * self.pconfig.k)
-                            per_item_top_k = (H * torch.floor(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
+                            if not self.pconfig.causal:
+                                per_item_top_k = (H * torch.floor(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
+                            else:
+                                # original 34.7 PPL
+                                # token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
+                                # per_item_top_k = (H * torch.floor(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
+                                
+                                # causal 32.4 PPL
+                                per_item_top_k = torch.clamp((H * torch.floor(self.pconfig.k * T_M / token_length.squeeze(0))).view(1, T, 1), 1, H*T_M)
+                                
+                                # print(per_item_top_k)
                             # print(t.shape, self.pconfig.k, T, T_M, token_length[0].item(), top_k, top_k_elems, per_item_top_k[0].item())
                         else: raise Exception()
+                        
+                        top_k_elems = int(math.ceil(torch.max(per_item_top_k).item()))
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
                     with timer("mask.topk"):
                         _, indices = torch.topk(
@@ -636,6 +662,7 @@ class PerlinAttention(nn.Module):
                         )
                         # print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
+                        
                         # input()
                         # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
