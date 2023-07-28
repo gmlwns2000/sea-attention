@@ -116,7 +116,7 @@ class PerlinAttention(nn.Module):
         if not self.pconfig.causal:
             performer_value_hidden_size = self.attention_head_size*3
         else:
-            performer_value_hidden_size = self.attention_head_size*2
+            performer_value_hidden_size = self.attention_head_size*3
         self.attention_predictor_enc = nn.Sequential(
             # nn.Dropout(0.1),
             nn.Linear(performer_value_hidden_size, self.attention_head_size*2),
