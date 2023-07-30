@@ -35,6 +35,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--colsel', action='store_true', default=False)
     parser.add_argument('--colsel-method', default="sum_mask", type=str)
     parser.add_argument('--colsel-mask-in-scores', action='store_true', default=False)
+    parser.add_argument('--colsel-save', action='store_true', default=False)
     return parser
 
 def parse_perlin_model_options(args):
@@ -56,7 +57,8 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_colsel': args.colsel,
         "perlin_colsel_method": args.colsel_method,
-        "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores
+        "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores,
+        "perlin_colsel_save" : args.colsel_save
     }
     return kwargs
 
@@ -79,6 +81,7 @@ class BaseTrainer:
         perlin_colsel = False,
         perlin_colsel_method = "sum_values",
         perlin_colsel_mask_in_probs = True,
+        perlin_colsel_save = False,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -100,6 +103,7 @@ class BaseTrainer:
         self.perlin_colsel = perlin_colsel
         self.perlin_colsel_method = perlin_colsel_method
         self.perlin_colsel_mask_in_probs = perlin_colsel_mask_in_probs
+        self.perlin_colsel_save = perlin_colsel_save
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
@@ -115,7 +119,8 @@ class BaseTrainer:
             # NOTE JIN added colsel
             colsel = perlin_colsel,
             colsel_method = perlin_colsel_method,
-            colsel_mask_in_probs = perlin_colsel_mask_in_probs
+            colsel_mask_in_probs = perlin_colsel_mask_in_probs,
+            colsel_save = self.perlin_colsel_save
         )
         perlin_attention.register_default_config(self.perlin_config)
     

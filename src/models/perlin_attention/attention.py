@@ -6,6 +6,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 from .masked_mm import sparse_attn
+import h5py
 
 import torch
 import torch.nn.functional as F
@@ -1420,75 +1421,81 @@ class PerlinAttention(nn.Module):
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
             if perlin_col_select:
+                save_colsel = self.pconfig.colsel_save
+                warnings.warn(f"save_colsel {save_colsel}")
+            if perlin_col_select and save_colsel:
                 root = './debug/colsel/'
                 os.makedirs(root, exist_ok=True)
-                path = root + f'{col_select_method}.pt'
+                path = root + f'{col_select_method}.hdf5'
                 print(f"attention: save {path}")
-                
-                torch.save({
-                    'attention_mask.shape' : attention_mask.shape,
-                    'attention_mask': attention_mask,
 
-                    'estimated_attention_score.shape' : estimated_attention_score.shape,
-                    'estimated_attention_score': estimated_attention_score,
+                with h5py.File(path, 'w') as f:
+                    d = {
+                        'attention_mask.shape' : attention_mask.shape,
+                        'attention_mask': attention_mask,
 
-                    'estimated_attention_probs.shape' : estimated_attention_probs.shape,
-                    'estimated_attention_probs': estimated_attention_probs,
+                        'estimated_attention_score.shape' : estimated_attention_score.shape,
+                        'estimated_attention_score': estimated_attention_score,
 
-                    'masked_estimated_attention_probs.shape' : masked_estimated_attention_probs.shape,
-                    'masked_estimated_attention_probs': masked_estimated_attention_probs,
+                        'estimated_attention_probs.shape' : estimated_attention_probs.shape,
+                        'estimated_attention_probs': estimated_attention_probs,
 
-                    'estimated_attention_score_resized.shape' : estimated_attention_score_resized.shape,
-                    'estimated_attention_score_resized': estimated_attention_score_resized,
+                        'masked_estimated_attention_probs.shape' : masked_estimated_attention_probs.shape,
+                        'masked_estimated_attention_probs': masked_estimated_attention_probs,
 
-                    'estimated_attention_probs_resized.shape' : estimated_attention_probs_resized.shape,
-                    'estimated_attention_probs_resized': estimated_attention_probs_resized,
+                        'estimated_attention_score_resized.shape' : estimated_attention_score_resized.shape,
+                        'estimated_attention_score_resized': estimated_attention_score_resized,
 
-                    'attention_probs_truth.shape' : (F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
-                    'attention_probs_truth' : (F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1)),
+                        'estimated_attention_probs_resized.shape' : estimated_attention_probs_resized.shape,
+                        'estimated_attention_probs_resized': estimated_attention_probs_resized,
 
-                    'attention_probs_truth_m.shape' : (F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
-                    'attention_probs_truth_m' : (F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)),
+                        'attention_probs_truth.shape' : (F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
+                        'attention_probs_truth' : (F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1)),
 
-                    'col_select_mask.shape' : col_select_mask.shape if col_select_method == "sum_mask" else '',
-                    'col_select_mask' : col_select_mask if col_select_method == "sum_mask" else '',
+                        'attention_probs_truth_m.shape' : (F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
+                        'attention_probs_truth_m' : (F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)),
 
-                    'sum_per_col.shape' : sum_per_col.shape,
-                    'sum_per_col' : sum_per_col,
+                        'col_select_mask.shape' : col_select_mask.shape if col_select_method == "sum_mask" else '',
+                        'col_select_mask' : col_select_mask if col_select_method == "sum_mask" else '',
 
-                    'largest_indx.shape' : largest_indx.shape,
-                    'largest_indx' : largest_indx,
+                        'sum_per_col.shape' : sum_per_col.shape,
+                        'sum_per_col' : sum_per_col,
 
-                    'large_inx_mask.shape' : large_inx_mask.shape,
-                    'large_inx_mask' : large_inx_mask,
+                        'largest_indx.shape' : largest_indx.shape,
+                        'largest_indx' : largest_indx,
 
-                    'col_sel_estimated_attention_probs_bef_select.shape' : col_sel_estimated_attention_probs1.shape,
-                    'col_sel_estimated_attention_probs_bef_select' : col_sel_estimated_attention_probs1,
+                        'large_inx_mask.shape' : large_inx_mask.shape,
+                        'large_inx_mask' : large_inx_mask,
 
-                    'col_sel_estimated_attention_probs_selcol_filled.shape' : col_sel_estimated_attention_probs.shape,
-                    'col_sel_estimated_attention_probs_selcol_filled' : col_sel_estimated_attention_probs,
+                        'col_sel_estimated_attention_probs_bef_select.shape' : col_sel_estimated_attention_probs1.shape,
+                        'col_sel_estimated_attention_probs_bef_select' : col_sel_estimated_attention_probs1,
 
-                    't_dead_mask.shape' : t_dead_mask.shape,
-                    't_dead_mask' : t_dead_mask,
+                        'col_sel_estimated_attention_probs_selcol_filled.shape' : col_sel_estimated_attention_probs.shape,
+                        'col_sel_estimated_attention_probs_selcol_filled' : col_sel_estimated_attention_probs,
 
-                    'partial_attention_mask_before_interp.shape' : partial_attention_mask1.shape,
-                    'partial_attention_mask_before_interp' : partial_attention_mask1,
+                        't_dead_mask.shape' : t_dead_mask.shape,
+                        't_dead_mask' : t_dead_mask,
 
-                    'partial_attention_mask_after_interp.shape' : partial_attention_mask.shape,
-                    'partial_attention_mask_after_interp' : partial_attention_mask,
+                        'partial_attention_mask_before_interp.shape' : partial_attention_mask1.shape,
+                        'partial_attention_mask_before_interp' : partial_attention_mask1,
 
-                    'attention_probs_dense.shape' : attention_probs_dense.shape,
-                    'attention_probs_dense' : attention_probs_dense,
+                        'partial_attention_mask_after_interp.shape' : partial_attention_mask.shape,
+                        'partial_attention_mask_after_interp' : partial_attention_mask,
 
-                    'partial_attention_probs.shape' : partial_attention_probs.shape,
-                    'partial_attention_probs' : partial_attention_probs,
+                        'attention_probs_dense.shape' : attention_probs_dense.shape,
+                        'attention_probs_dense' : attention_probs_dense,
 
-                    'partial_context_layer.shape' : partial_context_layer.shape,
-                    'partial_context_layer' : partial_context_layer,
+                        'partial_attention_probs.shape' : partial_attention_probs.shape,
+                        'partial_attention_probs' : partial_attention_probs,
 
-                    'estimated_attention_probs_for_output.shape' : estimated_attention_probs_for_output.shape,
-                    'estimated_attention_probs_for_output' : estimated_attention_probs_for_output
-                }, path)
+                        'partial_context_layer.shape' : partial_context_layer.shape,
+                        'partial_context_layer' : partial_context_layer,
+
+                        'estimated_attention_probs_for_output.shape' : estimated_attention_probs_for_output.shape,
+                        'estimated_attention_probs_for_output' : estimated_attention_probs_for_output
+                    }
+                    for k, v in d.items():
+                        f.create_dataset(k, data=v)
 
 
             if use_cache:
