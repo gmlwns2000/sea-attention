@@ -31,6 +31,7 @@ class PerlinAttentionConfig:
     v_eye_length: int = 128
     out_norm: bool = False
     causal: bool = False
+    use_cache: bool = False
     
     def to_json(self):
         return asdict(self)

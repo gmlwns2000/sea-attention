@@ -9,6 +9,7 @@ import tqdm
 
 from ..utils import batch_to
 from ..models import perlin_opt
+from ..models import perlin_attention
 from ..trainer.perlin_trainer import OptTrainer, add_perlin_model_options, parse_perlin_model_options
 from transformers import OPTForCausalLM
 
@@ -30,15 +31,23 @@ def main(
         print('checkpoint not exists', checkpoint_path)
     
     model = trainer.model.eval() # type: perlin_opt.OPTForCausalLM
-    # model_truth = OPTForCausalLM.from_pretrained("Aalaa/opt-125m-wikitext2").to(trainer.device).eval()
-    # model = model_truth
-    # print(list(model.named_parameters())[0], list(model_truth.named_parameters())[0])
     tokenizer = trainer.tokenizer
+    
+    def generate(prompt):
+        inputs = tokenizer(prompt, return_tensors="pt")
+        generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'])
+        generated_text = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
+        return inputs, generate_ids, generated_text
+    
+    perlin_attention.get_default_config().use_cache = True
+    sample_text = "Robert <unk> is an English film , television and theatre actor ."
+    _, _, generated_text = generate(sample_text)
+    print('sample:', sample_text)
+    print('generated:', generated_text)
     
     while True:
         print('>>> ', end='', flush=True)
         prompt = input().strip()
-        inputs = tokenizer(prompt, return_tensors="pt")
         
         gc.collect()
         torch.cuda.empty_cache()
@@ -47,12 +56,10 @@ def main(
         start_mem = torch.cuda.max_memory_allocated()
         
         t = time.time()
-        generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'])
+        inputs, generate_ids, generated_text = generate(prompt)
+        end_mem = torch.cuda.max_memory_allocated()
         elapsed = time.time() - t
         
-        end_mem = torch.cuda.max_memory_allocated()
-        
-        generated_text = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         print(generate_ids)
         print(f"```{generated_text.strip()}```")
         print(f'elapsed: {elapsed*1000:.2f} ms, {(generate_ids.shape[-1] - inputs.input_ids.shape[-1]) / elapsed:.2f} wps, {(end_mem - start_mem) / 1024 / 1024:.2f} MB')

@@ -200,7 +200,7 @@ class OPTAttention(nn.Module):
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
     
-    def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor):
+    def attention(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor, last_state: object):
         if self.checkout_intermediates:
             self.last_q = q
             self.last_k = k
@@ -366,15 +366,9 @@ class OPTAttention(nn.Module):
             
             return context_layer, attention_probs
         elif self.attention_method == 'perlin':
-            assert T_SRC == T_DST, "need to fix later"
-            
-            q = q.view(N, H, T_SRC, HID)
-            k = k.view(N, H, T_DST, HID)
-            v = v.view(N, H, T_DST, HID)
-            
-            N, H, T, HID = q.shape
-            
-            # print(attention_mask.shape, self.teacher_attention_scores.shape, self.teacher_context_layer.shape)
+            q = q.view(N, H, T_DST, HID)
+            k = k.view(N, H, T_SRC, HID)
+            v = v.view(N, H, T_SRC, HID)
             
             output = self.perlin_self_attention(
                 query = self.q_proj,
@@ -386,13 +380,20 @@ class OPTAttention(nn.Module):
                 value_layer = v,
                 attention_mask = attention_mask,
                 attention_scores_truth = self.teacher_attention_scores,
-                context_layer_truth = self.teacher_context_layer.view(N, H, T, HID).transpose(1, 2).reshape(N, T, H*HID),
+                context_layer_truth = \
+                    self.teacher_context_layer\
+                        .view(N, H, T_DST, HID)\
+                        .transpose(1, 2)\
+                        .reshape(N, T_DST, H*HID) \
+                    if self.teacher_context_layer is not None \
+                    else None,
+                last_state = last_state,
             ) #type: PerlinAttentionOutput
             self.last_loss = output.loss
             if not self.benchmarking:
                 self.last_perlin_output = output
             
-            return output.context_layer, output.partial_attention_probs
+            return output.context_layer, output.partial_attention_probs, output.state
         else:
             raise Exception()
 
@@ -404,6 +405,7 @@ class OPTAttention(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
+        use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -415,6 +417,7 @@ class OPTAttention(nn.Module):
 
         # get query proj
         query_states = self.q_proj(hidden_states) * self.scaling
+        past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
             # reuse k,v, cross_attentions
@@ -430,6 +433,7 @@ class OPTAttention(nn.Module):
             value_states = self._shape(self.v_proj(hidden_states), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
+            past_state = past_key_value[2]
         else:
             # self_attention
             key_states = self._shape(self.k_proj(hidden_states), -1, bsz)
@@ -452,12 +456,23 @@ class OPTAttention(nn.Module):
         assert attention_mask is not None
         assert layer_head_mask is None
 
-        attn_output, attn_weights_reshaped = self.attention(
+        outputs = self.attention(
             q=query_states,
             k=key_states,
             v=value_states,
             attention_mask=attention_mask,
+            last_state=past_state,
         )
+        
+        if len(outputs) == 2:
+            attn_output, attn_weights_reshaped = outputs
+            attn_state = None
+        elif len(outputs) == 3:
+            attn_output, attn_weights_reshaped, attn_state = outputs
+        else: raise Exception()
+        
+        if attn_state is not None:
+            past_key_value = (*past_key_value, attn_state)
 
         attn_output = self.out_proj(attn_output)
 
@@ -524,6 +539,7 @@ class OPTDecoderLayer(nn.Module):
             attention_mask=attention_mask,
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
+            use_cache=use_cache,
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states

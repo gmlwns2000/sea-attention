@@ -35,6 +35,8 @@ class TrainerConfig:
     model_config: str = 'Aalaa/opt-125m-wikitext2'
     # model_config: str = 'lnair/opt-350m-wikitext2'
     lr: float = 1e-5
+    lr_high_scale: float = 10.0
+    lr_low_scale: float = 1.0
     wd: float = 1e-2
     epochs: int = 100
     batch_size: int = 1
@@ -121,6 +123,8 @@ class Trainer:
         weight_decay:float=1e-3,
         no_decay_keywords=[]
     ):
+        lr_high = lr * self.config.lr_high_scale
+        lr_low = lr * self.config.lr_low_scale
         param_optimizer = list([(n, p) for n, p in model.named_parameters() if p.requires_grad])
         no_decay = [
             'bias', 
@@ -141,10 +145,10 @@ class Trainer:
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
         params = [
-            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr},
-            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
-            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
-            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
+            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr_low},
+            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr_low},
+            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr_high},
+            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr_high},
         ]
 
         kwargs = {
