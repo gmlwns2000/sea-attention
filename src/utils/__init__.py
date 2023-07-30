@@ -9,6 +9,26 @@ import random
 
 # from .profiler import Profiler
 
+def indent_string(s):
+    return ("  " + s).replace('\n', '\n  ')
+
+def strify(d):
+    newline = '\n'
+    if isinstance(d, torch.Tensor):
+        return f"Tensor({d.shape})"
+    elif isinstance(d, (float, int)):
+        return f'Num({d})'
+    elif isinstance(d, (str)):
+        return f'Str({d})'
+    elif isinstance(d, (list, tuple)):
+        return f'[\n{indent_string(f", {newline}".join([strify(i) for i in d]))}\n]({len(d)})'
+    elif isinstance(d, dict):
+        return f'{{\n{indent_string(f", {newline}".join([k + ": " + strify(i) for k, i in d.items()]))}\n}}({len(d)})'
+    elif hasattr(d, "strify"):
+        return d.strify()
+    else:
+        return f'{type(d)}'
+
 def seed(seed=42):
     torch.manual_seed(seed)
     torch.backends.cudnn.deterministic = True

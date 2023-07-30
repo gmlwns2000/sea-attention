@@ -1,4 +1,5 @@
 import os
+import traceback
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
@@ -182,19 +183,22 @@ class Trainer:
         high_lr = self.high_lr_names
         if no_decay_keywords is not None and len(no_decay_keywords) > 0:
             no_decay += no_decay_keywords
-        set_normal = set([p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
-        set_normal_no_wd = set([p for n, p in param_optimizer if any(nd in n for nd in no_decay)])
-        set_high = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
-        set_high_no_wd = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
+        set_normal = set([(n, p) for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
+        set_normal_no_wd = set([(n, p) for n, p in param_optimizer if any(nd in n for nd in no_decay)])
+        set_high = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
+        set_high_no_wd = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
+        
+        psort = lambda lst: list([item[1] for item in sorted(list(lst), key=lambda it: it[0])])
+        
         params = [
-            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr},
-            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
-            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
-            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
+            {'params': psort(set_normal), 'weight_decay': weight_decay, 'lr': lr},
+            {'params': psort(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
+            {'params': psort(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
+            {'params': psort(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
         ]
-
+        
         kwargs = {
             'lr':lr,
             'weight_decay':weight_decay,
@@ -295,7 +299,6 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 
-                
                 if ((istep+1) % self.eval_steps) == 0:
                     score = self.evaluate()
                     self.save()
@@ -383,7 +386,11 @@ class Trainer:
             model_state_dict = self.migrate_state_dict(model_state_dict)
             self.model.load_state_dict(model_state_dict)
             self.base_model.load_state_dict(state['base_model'])
-            # self.optimizer.load_state_dict(state['optimizer'])
+            try:
+                self.optimizer.load_state_dict(state['optimizer'])
+            except Exception as ex:
+                traceback.print_exc()
+                warnings.warn(f"optimizer load is failed due to {ex}, however we will just ignore it")
             del state
         except Exception as ex:
             print('error while load', ex)

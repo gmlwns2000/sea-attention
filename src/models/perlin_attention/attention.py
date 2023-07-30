@@ -1,3 +1,4 @@
+import copy
 import math
 import warnings
 from dataclasses import dataclass
@@ -24,7 +25,7 @@ from ..common.lora import (
 from ..common.performer import ProjectionUpdater
 from ..hf_bert import BertConfig
 from .config import PerlinAttentionConfig, get_default_config
-from ...utils import raise_if_nan
+from ...utils import raise_if_nan, strify
 from .modules import (
     ResBlock,
     Residual,
@@ -76,8 +77,10 @@ class StatefulCausalPerformer:
         self.parent = parent
         self.performer = performer
         
+        self.seq_index = 0
         self.last_k_cumsum = 0
         self.last_context_cumsum = 0
+        self.outs = []
     
     def _causal_linear_attention_noncuda_stateful(
         self, q, k, v, chunk_size = 128, eps = 1e-6
@@ -101,14 +104,32 @@ class StatefulCausalPerformer:
         return torch.cat(outs, dim = -2)
 
     def causal_linear_attention_noncuda_stateful(
-        self, q, k, v, chunk_size = 1, eps=1e-6,
+        self, q_chunk, k_all, v_all, chunk_size = 1, eps=1e-6,
     ):
         assert chunk_size == 1
-        N, H, T_NEW, HID = q.shape
-        N, H, T_ALL, HID = k.shape
+        N, H, T_NEW, HID = q_chunk.shape
+        N, H, T_ALL, HID = k_all.shape
         
         for iq in range(T_NEW):
-            pass
+            q = q_chunk[...,iq:iq+1,:]
+            k = k_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
+            v = v_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
+            
+            k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2)
+
+            D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
+            context = torch.einsum('...nd,...ne->...nde', k, v)
+            context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3)
+            out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum, q, D_inv)
+
+            self.last_k_cumsum = k_cumsum[:, :, -1:]
+            self.last_context_cumsum = context_cumsum[:, :, -1:]
+            self.outs.append(out)
+        
+        self.seq_index += T_NEW
+        assert self.seq_index == T_ALL, f"{self.seq_index}({len(self.outs)}) == {T_ALL}"
+        
+        return torch.cat(self.outs, dim=-2)
     
     def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         # q:    N, H, T_NEW, HID
@@ -117,7 +138,7 @@ class StatefulCausalPerformer:
         # out:  N, H, T_ALL, HID
         
         N, H, T_NEW, HID = q.shape
-        assert k.shape == v.shape
+        assert k.shape[:-1] == v.shape[:-1], f"{k.shape} == {v.shape}"
         N, H, T_ALL, HID = k.shape
         
         original_causal_fn = self.performer.causal_linear_fn
@@ -125,9 +146,12 @@ class StatefulCausalPerformer:
         context_layer = self.performer(q,k,v)
         self.performer.causal_linear_fn = original_causal_fn
         
-        assert context_layer.shape == (N, H, T_ALL, HID)
+        assert context_layer.shape[:-1] == (N, H, T_ALL)
         
         return context_layer
+    
+    def strify(self):
+        return f"StatePerformer({self.seq_index}, {len(self.outs)})"
 
 class StatefulCausalCNN:
     def __init__(self, parent: "PerlinAttentionState"):
@@ -153,15 +177,16 @@ class StatefulCausalCNN:
         
         x_start = max(self.xs_len-self.window_size, 0)
         x_start = x_start - (x_start % self.window_align)
-        x_window = self.xs[...,x_start:self.xs_len]
+        x_window = self.xs[...,x_start:self.xs_len,:]
         
         y = cnn(x_window)
-        self.ys[...,max(0, self.xs_len-x.shape[-2]):self.xs_len,:] = y
+        assert y.shape == x_window.shape, f"{y.shape} == {x_window.shape}"
+        print('cnn', self.xs.shape, self.ys.shape, x.shape, y.shape, x_window.shape)
+        self.ys[...,max(0, self.xs_len-x.shape[-2]):self.xs_len,:] = y[...,-x.shape[-2]:,:]
         return self.ys[...,:self.xs_len,:]
 
 class PerlinAttentionState:
     def __init__(self, parent: "PerlinAttention"):
-        self.parent = parent
         self.num_heads = parent.num_attention_heads
         self.head_dim = parent.attention_head_size
         self.embd_dim = parent.all_head_size
@@ -185,9 +210,10 @@ class PerlinAttentionState:
         x: torch.Tensor,
     ):
         if state is None:
-            return func(x)
+            return None, func(x)
         else:
-            return state.forward_causal_cnn_op(name, func, x)
+            state = copy.deepcopy(state)
+            return state, state.forward_causal_cnn_op(name, func, x)
     
     def forward_causal_cnn_op(
         self,
@@ -206,9 +232,10 @@ class PerlinAttentionState:
         x: torch.Tensor,
     ):
         if state is None:
-            return func(x)
+            return None, func(x)
         else:
-            return state.forward_row_op(name=name, func=func, x=x)
+            state = copy.deepcopy(state)
+            return state, state.forward_row_op(name=name, func=func, x=x)
     
     def forward_row_op(
         self,
@@ -240,13 +267,14 @@ class PerlinAttentionState:
         v: torch.Tensor,
     ):
         if state is not None:
-            return state.forward_performer(
+            state = copy.deepcopy(state)
+            return state, state.forward_performer(
                 name=name,
                 performer=performer,
                 q=q, k=k, v=v
             )
         else:
-            return performer(q, k, v)
+            return None, performer(q, k, v)
     
     def forward_performer(
         self,
@@ -256,8 +284,6 @@ class PerlinAttentionState:
         k: torch.Tensor,
         v: torch.Tensor,
     ):
-        assert self.parent.pconfig.causal
-        
         state = self.get_state(
             name, 
             lambda: StatefulCausalPerformer(self, performer)
@@ -268,6 +294,9 @@ class PerlinAttentionState:
             k=k,
             v=v,
         )
+    
+    def strify(self):
+        return f"State({strify(self.states)})"
 
 @dataclass
 class PerlinAttentionOutput:
@@ -445,7 +474,7 @@ class PerlinAttention(nn.Module):
         
         if use_cache and last_state is None:
             last_state = PerlinAttentionState(self)
-        else:
+        if not use_cache:
             last_state = None
         
         raise_if_nan(q)
@@ -555,7 +584,7 @@ class PerlinAttention(nn.Module):
                     else:
                         PRECISION_PERF = torch.float32
                     with torch.autocast('cuda', PRECISION_PERF):
-                        performer_context_layer = PerlinAttentionState.stateful_performer(
+                        last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
                             last_state,
                             "performer->performer_context_layer",
                             self.performer,
@@ -592,19 +621,19 @@ class PerlinAttention(nn.Module):
                     # raise_if_nan(estimated_attention_score)
                     # estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
                     # raise_if_nan(estimated_attention_score)
-                    t_attention_predictor = PerlinAttentionState.stateful_row_op(
+                    last_state, t_attention_predictor = PerlinAttentionState.stateful_row_op(
                         last_state,
                         "attention_predictor_enc->t_attention_predictor",
                         self.attention_predictor_enc,
                         performer_value,
                     )
-                    estimated_attention_score = PerlinAttentionState.stateful_row_op(
+                    last_state, estimated_attention_score = PerlinAttentionState.stateful_row_op(
                         last_state,
                         "attention_predictor_dec_row->estimated_attention_score",
                         self.attention_predictor_dec_row,
                         t_attention_predictor
                     )
-                    estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
+                    last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
                         last_state,
                         "attention_predictor_cnn->estimated_attention_score",
                         self.attention_predictor_cnn,
@@ -632,7 +661,7 @@ class PerlinAttention(nn.Module):
             with timer("mask_softmax"):
                 T_M = estimated_attention_score.shape[-1]
                 # estimated_attention_probs = softmax_bf16(estimated_attention_score, -1)
-                estimated_attention_probs = PerlinAttentionState.stateful_row_op(
+                last_state, estimated_attention_probs = PerlinAttentionState.stateful_row_op(
                     last_state,
                     "softmax_bf16(estimated_attention_score)->estimated_attention_probs",
                     lambda x: softmax_bf16(x, -1),
@@ -726,8 +755,9 @@ class PerlinAttention(nn.Module):
                         )
             
             loss = 0
+            estimated_attention_probs_resized = estimated_attention_score_resized = None
             if not self.benchmarking and not use_cache:
-                T_M = estimated_attention_score.shape[-1]
+                N, H, T, T_M = estimated_attention_score.shape
                 # for loss calculation
                 estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)
                 estimated_attention_score_resized = resize_from_m_to_t(estimated_attention_score, masked_fill_value=FP_MIN)
@@ -786,9 +816,10 @@ class PerlinAttention(nn.Module):
             with timer("mask"):
                 # TODO: perform this with states
                 
+                # print('affa', estimated_attention_probs.shape, attention_mask.shape, q.shape, k.shape, v.shape)
                 estimated_attention_probs = estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1)
                 
-                T_M = estimated_attention_probs.shape[-1]
+                N, H, T, T_M = estimated_attention_probs.shape
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
                 top_k = min(max(int(round(self.pconfig.k * (T_M / torch.min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
@@ -982,28 +1013,29 @@ class PerlinAttention(nn.Module):
                     # print(metric.update(avg_k_per_batch, name='avgk'))
                     
                     attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
-                    if not self.pconfig.causal:
-                        attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
-                        loss += kl_div_attention(
-                            F.log_softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                            F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                            attention_mask,
-                        ) * 0.1
-                        loss += F.mse_loss(
-                            softmax_bf16(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
-                            softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
-                        )
-                    else:
-                        attention_scores_dense = attention_scores_dense
-                        loss += F.kl_div(
-                            F.log_softmax(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
-                            F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
-                            reduction='batchmean',
-                        ) * 0.1
-                        loss += F.mse_loss(
-                            softmax_bf16(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1), 
-                            softmax_bf16(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1),
-                        )
+                    if attention_scores_truth is not None:
+                        if not self.pconfig.causal:
+                            attention_scores_dense = attention_scores_dense / math.sqrt(self.attention_head_size)
+                            loss += kl_div_attention(
+                                F.log_softmax(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                                F.softmax(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                                attention_mask,
+                            ) * 0.1
+                            loss += F.mse_loss(
+                                softmax_bf16(attention_scores_dense.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
+                                softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1),
+                            )
+                        else:
+                            attention_scores_dense = attention_scores_dense
+                            loss += F.kl_div(
+                                F.log_softmax(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                                F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                                reduction='batchmean',
+                            ) * 0.1
+                            loss += F.mse_loss(
+                                softmax_bf16(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1), 
+                                softmax_bf16(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1),
+                            )
                     get_bench().register_temp_buffer('attention_scores_dense', attention_scores_dense)
                     raise_if_nan(loss)
                     

@@ -43,6 +43,7 @@ from transformers.utils import (
 )
 from transformers.models.opt.configuration_opt import OPTConfig
 
+from ...utils import strify
 
 logger = logging.get_logger(__name__)
 
@@ -819,6 +820,9 @@ class OPTDecoder(OPTPreTrainedModel):
             return_dict (`bool`, *optional*):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
+        
+        print(strify(past_key_values))
+        
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -942,6 +946,9 @@ class OPTDecoder(OPTPreTrainedModel):
             all_hidden_states += (hidden_states,)
 
         next_cache = next_decoder_cache if use_cache else None
+        # if next_cache is not None:
+        #     print(strify(next_cache))
+        
         if not return_dict:
             return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
         return BaseModelOutputWithPast(

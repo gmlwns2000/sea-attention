@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, asdict
+import traceback
 
 import tqdm
 from ..utils import seed, batch_to, Metric
@@ -144,11 +145,14 @@ class Trainer:
         set_high_no_wd = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
+        
+        psort = lambda lst: list([item[1] for item in sorted(list(lst), key=lambda it: it[0])])
+        
         params = [
-            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr_low},
-            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr_low},
-            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr_high},
-            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr_high},
+            {'params': psort(set_normal), 'weight_decay': weight_decay, 'lr': lr_low},
+            {'params': psort(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr_low},
+            {'params': psort(set_high), 'weight_decay': weight_decay, 'lr': lr_high},
+            {'params': psort(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr_high},
         ]
 
         kwargs = {
@@ -331,6 +335,7 @@ class Trainer:
         try:
             self.optimizer.load_state_dict(state['optimizer'])
         except Exception as ex:
+            traceback.print_exc()
             print('error during load optimizer', ex)
         step = state['step']
         epoch = state['epoch']
