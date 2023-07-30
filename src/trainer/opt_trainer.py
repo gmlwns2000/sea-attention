@@ -321,9 +321,13 @@ class Trainer:
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
         state = torch.load(path, map_location='cpu')
-        self.model.load_state_dict(state['model'])
+        result = self.model.load_state_dict(state['model'], strict=False)
+        print(result)
         if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
-        self.optimizer.load_state_dict(state['optimizer'])
+        try:
+            self.optimizer.load_state_dict(state['optimizer'])
+        except Exception as ex:
+            print('error during load optimizer', ex)
         step = state['step']
         epoch = state['epoch']
         epochs = state['config']['epochs']

@@ -282,13 +282,13 @@ class OPTAttention(nn.Module):
             
             return attn_output, attn_weights_reshaped
         elif self.attention_method == 'reformer':
-            assert T_SRC == T_DST, "need to fix later"
+            # assert T_SRC == T_DST, "need to fix later"
             
-            q = q.view(N, H, T_SRC, HID)
-            k = k.view(N, H, T_DST, HID)
-            v = v.view(N, H, T_DST, HID)
+            q = q.view(N, H, T_DST, HID)
+            k = k.view(N, H, T_SRC, HID)
+            v = v.view(N, H, T_SRC, HID)
             
-            N, H, T, HID = q.shape
+            N, H, T_DST, HID = q.shape
             # v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
             
             binary_mask = attention_mask > -1
@@ -296,18 +296,19 @@ class OPTAttention(nn.Module):
             #pad
             bucket_size = self.pconfig.k
             pad_unit_size = bucket_size * 2
-            to_pad = 0 if (T % pad_unit_size) == 0 else (pad_unit_size - (T % pad_unit_size))
-            TP = T + to_pad
-            if to_pad != 0:
-                pad_config = (0,0,0,to_pad)
-                q = F.pad(q, pad_config).float()
-                v = F.pad(v, pad_config).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
-                assert q.shape == (N, H, T+to_pad, HID)
+            to_pad_src = 0 if (T_SRC % pad_unit_size) == 0 else (pad_unit_size - (T_SRC % pad_unit_size))
+            TP_SRC = T_SRC + to_pad_src
+            to_pad_dst = 0 if (T_DST % pad_unit_size) == 0 else (pad_unit_size - (T_DST % pad_unit_size))
+            TP_DST = T_DST + to_pad_dst
+            if to_pad_src != 0 or to_pad_dst != 0:
+                q = F.pad(q, (0,0,0,to_pad_dst)).float()
+                v = F.pad(v, (0,0,0,to_pad_src)).float()
+                binary_mask = F.pad(binary_mask.expand(N, 1, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().view(N, TP_DST, TP_SRC)
+                assert q.shape == (N, H, T_DST + to_pad_dst, HID)
             else:
                 q = q.float()
                 v = v.float()
-                binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+                binary_mask = binary_mask.expand(N, 1, T_DST, T_SRC).bool().view(N, T_DST, T_SRC)
             def merge_head(t: torch.Tensor):
                 N, H, T, HID = t.shape
                 return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
@@ -320,16 +321,16 @@ class OPTAttention(nn.Module):
                 input_attn_mask = binary_mask
             )
             #unpad
-            if to_pad != 0:
+            if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
                 v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
-                reformer_context_layer = reformer_context_layer[:, :, :T, :]
+                reformer_context_layer = reformer_context_layer.view(N, TP_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer[:, :, :T_DST, :]
             else:
-                reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.view(N, T_DST, H, HID).permute(0, 2, 1, 3)
             
             if not self.benchmarking:
-                attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+                attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
             else:
                 attention_probs = None
             
@@ -339,11 +340,11 @@ class OPTAttention(nn.Module):
             
             return reformer_context_layer, attention_probs
         elif self.attention_method == 'performer':
-            assert T_SRC == T_DST
+            # assert T_SRC == T_DST
             
-            q = q.view(N, H, T_SRC, HID)
-            k = k.view(N, H, T_DST, HID)
-            v = v.view(N, H, T_DST, HID)
+            q = q.view(N, H, T_DST, HID)
+            k = k.view(N, H, T_SRC, HID)
+            v = v.view(N, H, T_SRC, HID)
             
             N, H, T, HID = q.shape
             v = v * (attention_mask[:,:,:,:1] > -1)
@@ -353,7 +354,7 @@ class OPTAttention(nn.Module):
                 performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
             
             if not self.benchmarking:
-                attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+                attention_probs = torch.zeros((N, H, T_DST, T_SRC), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
             else:
                 attention_probs = None
             
