@@ -33,8 +33,8 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--colsel', action='store_true', default=False)
-    parser.add_argument('--colsel-method', default="sum_values", type=str)
-    parser.add_argument('--colsel-mask-in-probs', action='store_true', default=False)
+    parser.add_argument('--colsel-method', default="sum_mask", type=str)
+    parser.add_argument('--colsel-mask-in-scores', action='store_true', default=False)
     return parser
 
 def parse_perlin_model_options(args):
@@ -56,7 +56,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_colsel': args.colsel,
         "perlin_colsel_method": args.colsel_method,
-        "perlin_colsel_mask_in_probs": args.colsel_mask_in_probs
+        "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores
     }
     return kwargs
 
@@ -78,7 +78,7 @@ class BaseTrainer:
         perlin_token_merging_ratio = 0.5,
         perlin_colsel = False,
         perlin_colsel_method = "sum_values",
-        perlin_colsel_mask_in_probs = False,
+        perlin_colsel_mask_in_probs = True,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -217,7 +217,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
-            eval_steps=2000,
+            eval_steps=2,
             lr = lr,
             epochs = epochs,
             gradient_checkpointing = gradient_checkpointing,
