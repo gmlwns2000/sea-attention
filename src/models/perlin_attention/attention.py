@@ -1,4 +1,6 @@
+import json
 import math
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -436,7 +438,7 @@ class PerlinAttention(nn.Module):
             #print('estimated_attention_probs', estimated_attention_probs)
             get_bench().register_temp_buffer('estimated_attention_score', estimated_attention_score)
             get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
-            # print(estimated_attention_probs[0,0,0,:])
+            # #print(estimated_attention_probs[0,0,0,:])
             
             # in layerwise, train perlin attention predictor
             def resize_from_m_to_t(x, masked_fill_value, target_width=None):
@@ -457,7 +459,7 @@ class PerlinAttention(nn.Module):
                                 token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * (mask_cs[:, :, -1].unsqueeze(-1)/T_M)
                                 token_index_x = torch.clamp(((((mask_cs - 1) + (1 - mask) * 5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
                                 token_index_x = token_index_x.expand(N, T1, T2)
-                                # print(token_index_x[0,0,:], mask_cs[0,0,-1])
+                                # #print(token_index_x[0,0,:], mask_cs[0,0,-1])
                             else:
                                 token_index_x = token_index_x.cumsum(-1)
                                 token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) - 1).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
@@ -466,13 +468,13 @@ class PerlinAttention(nn.Module):
                             mask = (causal_attention_mask > -1).float()
                             _N, _H, _TQ, _TK = mask.shape
                             mask_cs = mask.cumsum(-1)
-                            # print('mask', mask[0,0,-1,:])
-                            # print('mcs', mask_cs[0,0,-1,:])
+                            # #print('mask', mask[0,0,-1,:])
+                            # #print('mcs', mask_cs[0,0,-1,:])
                             token_length = (mask_cs[:, :, :, -1].unsqueeze(-1) - 1) + 3 * (_TK/T_M)
                             token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000  * (_TK/T_M))) / (token_length + 1e-8)) * 2 - 1, -1, 1)
                             assert _H == 1
                             token_index_x = token_index_x[:,0,:,:]
-                            # print('tix', token_index_x[0,-1,:])
+                            # #print('tix', token_index_x[0,-1,:])
                         token_index_y = (
                             torch.arange(T1, dtype=torch.long, device=token_index_x.device)\
                                 .view(1, T1, 1) / T1 * 2 - 1)\
@@ -482,7 +484,7 @@ class PerlinAttention(nn.Module):
                             token_index_y.unsqueeze(-1)
                         ], dim=-1)
                     
-                    # print('ti', token_index[0,-1,:,:])
+                    # #print('ti', token_index[0,-1,:,:])
                     
                     with timer("resize.sample"):
                         grid_input = F.pad(F.pad(x, pad=(0, 2), value=0), pad=(0, 1), value=masked_fill_value) if masked_fill_value is not None else x
@@ -490,7 +492,7 @@ class PerlinAttention(nn.Module):
                             grid_input = grid_input.to(x.dtype)
                         if token_index.dtype != x.dtype:
                             token_index = token_index.to(x.dtype)
-                        # print(grid_input.shape, grid_input[0,0,0,-5:])
+                        # #print(grid_input.shape, grid_input[0,0,0,-5:])
                         
                         return grid_sample_bf16(
                             input=grid_input,
@@ -638,7 +640,7 @@ class PerlinAttention(nn.Module):
                             elif col_select_method == "sum_mask":
                                 col_select_mask = col_sel_estimated_attention_probs >= (1/T_M) # [N, T, H*T_M]
                                 sum_per_col = col_select_mask.sum(dim=-2) # [N, H*T_M]
-                                get_bench().register_temp_buffer('col_select_mask', col_select_mask) # col_sel_estimated_attention_probs1
+                                get_bench().register_temp_buffer('col_select_mask', col_select_mask)
 
                             #print('sum_per_col', sum_per_col)
                             #print('sum_per_col.shape', sum_per_col.shape)
@@ -670,7 +672,7 @@ class PerlinAttention(nn.Module):
                                 col_sel_estimated_attention_score = col_sel_estimated_attention_score.view(N, T, H, T_M).permute(0, 2, 1, 3)
                                 col_sel_estimated_attention_probs = torch.softmax(col_sel_estimated_attention_score, -1)
                                 col_sel_estimated_attention_probs = col_sel_estimated_attention_probs * (attention_mask.transpose(-1, -2) > -1) # N H T T_M
-                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous() # N T H T_M
+                                col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M) # N T H T_M
                             
                             # breakpoint()
                             #print('col_sel_estimated_attention_probs_selcol_filled', col_sel_estimated_attention_probs)
@@ -770,8 +772,8 @@ class PerlinAttention(nn.Module):
                                 # causal 32.4 PPL
                                 per_item_top_k = torch.clamp((H * torch.floor(self.pconfig.k * T_M / token_length.squeeze(0))).view(1, T, 1), 1, H*T_M)
                                 
-                                # print(per_item_top_k)
-                            # print(t.shape, self.pconfig.k, T, T_M, token_length[0].item(), top_k, top_k_elems, per_item_top_k[0].item())
+                                # #print(per_item_top_k)
+                            # #print(t.shape, self.pconfig.k, T, T_M, token_length[0].item(), top_k, top_k_elems, per_item_top_k[0].item())
                         else: raise Exception()
                         assert torch.all(per_item_top_k>=0)
                         top_k_elems = int(math.ceil(torch.max(per_item_top_k).item()))
@@ -818,7 +820,7 @@ class PerlinAttention(nn.Module):
                         #     per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.ceil(T_M / token_length)
                         #     # per_item_top_k = token_length * (H if k_flatten_dim == 'batch' else 1) * self.pconfig.k * torch.floor(T / token_length) TODO test this value
                         
-                        # print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
+                        # #print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
                             t_dead_mask = partial_attention_mask >= per_item_top_k
@@ -871,7 +873,8 @@ class PerlinAttention(nn.Module):
             #print('partial_attention_mask_before_interp', partial_attention_mask)
             #print('partial_attention_mask_before_interp.shape', partial_attention_mask.shape)
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
-            
+            partial_attention_mask1 = partial_attention_mask.clone() # TODO remove
+
             with timer("interp"):
                 # NOTE: partial attention mask should be filled with 0 and -inf only.
                 raise_if_nan(partial_attention_mask)
@@ -889,8 +892,8 @@ class PerlinAttention(nn.Module):
                         # breakpoint()
                         if self.pconfig.causal:
                             partial_attention_mask.masked_fill_(causal_attention_mask < -1, FP_MIN)
-                        # print(torch.unique(partial_attention_mask).shape)
-                        # print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
+                        # #print(torch.unique(partial_attention_mask).shape)
+                        # #print(partial_attention_mask[0,0,0,-10:], attention_mask[0,0,0,-10:])
                         # input()
                 else:
                     if self.pconfig.causal: raise Exception()
@@ -1067,7 +1070,7 @@ class PerlinAttention(nn.Module):
                     
                     # NOTE: #print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask.to_dense() > 0).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()
-                    # print(metric.update(avg_k_per_batch, name='avgk'))
+                    # #print(metric.update(avg_k_per_batch, name='avgk'))
                     
                     # using Numba
                     N, H, T, HEAD_H = q_for_score.shape
@@ -1206,6 +1209,70 @@ class PerlinAttention(nn.Module):
             get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
+            root = './plots/attention/'
+            os.makedirs(root, exist_ok=True)
+            
+            with open(os.path.join(root, 'colsel_debug.json'), 'w') as f:
+                json.dump({
+                    'attention_mask.shape' : attention_mask.shape,
+                    'attention_mask': attention_mask,
+
+                    'estimated_attention_score.shape' : estimated_attention_score.shape,
+                    'estimated_attention_score': estimated_attention_score,
+
+                    'estimated_attention_probs.shape' : estimated_attention_probs.shape,
+                    'estimated_attention_probs': estimated_attention_probs,
+
+                    'masked_estimated_attention_probs.shape' : masked_estimated_attention_probs.shape,
+                    'masked_estimated_attention_probs': masked_estimated_attention_probs,
+
+                    'estimated_attention_score_resized.shape' : estimated_attention_score_resized.shape,
+                    'estimated_attention_score_resized': estimated_attention_score_resized,
+
+                    'estimated_attention_probs_resized.shape' : estimated_attention_probs_resized.shape,
+                    'estimated_attention_probs_resized': estimated_attention_probs_resized,
+
+                    'attention_probs_truth.shape' : (lambda: F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
+                    'attention_probs_truth' : lambda: F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1),
+
+                    'attention_probs_truth_m.shape' : (lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1)).shape,
+                    'attention_probs_truth_m' : lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1),
+
+                    'col_select_mask.shape' : col_select_mask.shape if perlin_col_select and col_select_method == "sum_mask" else '',
+                    'col_select_mask' : col_select_mask if perlin_col_select and col_select_method == "sum_mask" else '',
+
+                    'large_inx_mask.shape' : large_inx_mask.shape,
+                    'large_inx_mask' : large_inx_mask,
+
+                    'col_sel_estimated_attention_probs_bef_select.shape' : col_sel_estimated_attention_probs1.shape,
+                    'col_sel_estimated_attention_probs_bef_select' : col_sel_estimated_attention_probs1,
+
+                    'col_sel_estimated_attention_probs_selcol_filled.shape' : col_sel_estimated_attention_probs.shape,
+                    'col_sel_estimated_attention_probs_selcol_filled' : col_sel_estimated_attention_probs,
+
+                    't_dead_mask.shape' : t_dead_mask.shape,
+                    't_dead_mask' : t_dead_mask,
+
+                    'partial_attention_mask_before_interp.shape' : partial_attention_mask1.shape,
+                    'partial_attention_mask_before_interp' : partial_attention_mask1,
+
+                    'partial_attention_mask_after_interp.shape' : partial_attention_mask.shape,
+                    'partial_attention_mask_after_interp' : partial_attention_mask,
+
+                    'attention_probs_dense.shape' : attention_probs_dense.shape,
+                    'attention_probs_dense' : attention_probs_dense,
+
+                    'partial_attention_probs.shape' : partial_attention_probs.shape,
+                    'partial_attention_probs' : partial_attention_probs,
+
+                    'partial_context_layer.shape' : partial_context_layer.shape,
+                    'partial_context_layer' : partial_context_layer,
+
+                    'estimated_attention_probs_for_output.shape' : estimated_attention_probs_for_output.shape,
+                    'estimated_attention_probs_for_output' : estimated_attention_probs_for_output
+                }, f)
+
+
             return PerlinAttentionOutput(
                 loss=loss,
                 context_layer=partial_context_layer,

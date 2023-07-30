@@ -3,6 +3,13 @@ from ..visualize.glue import main as visualize_main
 from ..visualize.glue import add_perlin_model_options, parse_perlin_model_options
 import argparse, os, torch
 import matplotlib.pyplot as plt
+from ..visualize.common import convert_to_colormap
+import cv2
+
+# if __name__ == '__main__':
+#     torch.multiprocessing.freeze_support()
+#     torch.multiprocessing.set_start_method('spawn') #, force=True
+    
 
 bench = get_bench()
 bench.activate_temp_buffers = True
@@ -68,12 +75,18 @@ estimated_attention_probs_for_output = bench.get_temp_buffer('estimated_attentio
 
 N, T = attention_mask.shape[0], attention_mask.shape[-1]
 
-def imsave(img: torch.Tensor, path):
-    plt.clf()
-    plt.imshow(img.cpu().numpy())
-    plt.colorbar()
-    plt.savefig(path, dpi=300)
-    print(f'saved {path}')
+# def imsave(img: torch.Tensor, path):
+#     plt.clf()
+#     plt.imshow(img.cpu().numpy())
+#     plt.colorbar()
+#     plt.savefig(path, dpi=300)
+#     print(f'saved {path}')
+
+def imsave(t: torch.Tensor, path):
+    img = convert_to_colormap(t.cpu().numpy())
+    # path = f"./plots/poc/test_resizing/{name}.png"
+    cv2.imwrite(path, img)
+    print('processed', path)
 
 root = './saves/tests/test_perlin_col_sel_batch/'
 os.makedirs(root, exist_ok=True)
@@ -96,6 +109,7 @@ if kwargs['perlin_colsel_method'] == 'sum_mask':
 
 imsave(large_inx_mask[index_batch], os.path.join(root, 'large_inx_mask.png'))
 imsave(col_sel_estimated_attention_probs_bef_select[index_batch], os.path.join(root, 'colsel_est_probs_bef_select.png'))
+
 imsave(col_sel_estimated_attention_probs_selcol_filled[index_batch], os.path.join(root, 'colsel_est_probs_bef_select.png'))
 
 imsave(t_dead_mask[index_batch], os.path.join(root, 't_dead_mask.png'))
@@ -107,7 +121,6 @@ imsave(partial_attention_probs[index_batch,index_head], os.path.join(root, 'part
 imsave(partial_context_layer[index_batch], os.path.join(root, 'part_context_layer.png'))
 
 imsave(estimated_attention_probs_for_output[index_batch,index_head], os.path.join(root, 'est_output.png'))
-
 
 # imsave(
 #     (estimated_attention_probs_for_output[index_batch,index_head] * (attention_mask[index_batch,0] > -1)) /\
