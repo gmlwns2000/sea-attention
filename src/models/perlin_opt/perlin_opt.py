@@ -210,7 +210,7 @@ class OPTAttention(nn.Module):
         N_H, T_DST, _HID_Q = q.shape
         N_H, T_SRC, _HID_V = v.shape
         HID = self.head_dim
-        assert _HID_V == _HID_V
+        assert _HID_V == _HID_Q
         assert HID == _HID_V
         H = self.num_heads
         N = N_H // self.num_heads
@@ -338,6 +338,32 @@ class OPTAttention(nn.Module):
             reformer_context_layer = reformer_context_layer.view(new_context_layer_shape)
             
             return reformer_context_layer, attention_probs
+        elif self.attention_method == 'performer':
+            assert T_SRC == T_DST
+            
+            q = q.view(N, H, T_SRC, HID)
+            k = k.view(N, H, T_DST, HID)
+            v = v.view(N, H, T_DST, HID)
+            
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:,:1] > -1)
+            
+            # self.perlin_performer_proj_updater.redraw_projections(q.device)
+            with torch.autocast('cuda', torch.float32):
+                performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
+            
+            if not self.benchmarking:
+                attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+            else:
+                attention_probs = None
+            
+            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.embed_dim,)
+            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            
+            context_layer = performer_context_layer
+            
+            return context_layer, attention_probs
         elif self.attention_method == 'perlin':
             assert T_SRC == T_DST, "need to fix later"
             

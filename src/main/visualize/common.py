@@ -64,15 +64,35 @@ def process_layer(teacher: torch.Tensor, est: torch.Tensor, dense: torch.Tensor,
     
     return stacks
 
+import torch.multiprocessing as mp
+
+def job_main(args):
+    i, T, ilayer, attn = args
+    img = process_layer(
+        teacher=attn['teacher_attn'][i][:, :T, :T],
+        est=attn['estimated_attn'][i][:, :T, :T],
+        dense=attn['dense_attn'][i][:, :T, :T],
+        partial=attn['partial_attn'][i][:, :T, :T],
+        idx=ilayer,
+    )
+    return img
+
 def process_batch_index(attentions: List[torch.Tensor], i: int, T: int):
     imgs = []
-    for ilayer, attn in enumerate(tqdm.tqdm(attentions, dynamic_ncols=True, desc='render.layer')):
-        img = process_layer(
-            teacher=attn['teacher_attn'][i][:, :T, :T],
-            est=attn['estimated_attn'][i][:, :T, :T],
-            dense=attn['dense_attn'][i][:, :T, :T],
-            partial=attn['partial_attn'][i][:, :T, :T],
-            idx=ilayer,
-        )
-        imgs.append(img)
+    # for ilayer, attn in enumerate(tqdm.tqdm(attentions, dynamic_ncols=True, desc='render.layer')):
+    #     img = process_layer(
+    #         teacher=attn['teacher_attn'][i][:, :T, :T],
+    #         est=attn['estimated_attn'][i][:, :T, :T],
+    #         dense=attn['dense_attn'][i][:, :T, :T],
+    #         partial=attn['partial_attn'][i][:, :T, :T],
+    #         idx=ilayer,
+    #     )
+    #     imgs.append(img)
+    
+    with mp.Pool(12) as pool:
+        N = len(attentions)
+        iterator = pool.imap(job_main, zip([i,]*N, [T,]*N, range(N), attentions))
+        for img in tqdm.tqdm(iterator, dynamic_ncols=True, desc='render.layer', total=N):
+            imgs.append(img)
+    
     return np.concatenate(imgs, axis=0)

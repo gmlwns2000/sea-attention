@@ -268,7 +268,7 @@ class Trainer:
                 if (self.step % self.config.wandb_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
                     wandb.log(wandb_dict, step=self.step)
     
-    def evaluate(self):
+    def evaluate(self, on_step=None, quite=False):
         gc.collect()
         torch.cuda.empty_cache()
 
@@ -276,7 +276,7 @@ class Trainer:
         self.base_model.eval()
         
         nlls = []
-        for batch in tqdm.tqdm(self.valid_loader, dynamic_ncols=True, desc='evaluate_llm'):
+        for batch in tqdm.tqdm(self.valid_loader, dynamic_ncols=True, desc='evaluate'):
             batch = batch_to(batch, self.device)
             trg_len = batch['trg_len']
             del batch['trg_len']
@@ -291,9 +291,12 @@ class Trainer:
                 output_student = self.model(**batch)
                 neg_log_likelihood = output_student.loss * trg_len.item()
             nlls.append(neg_log_likelihood)
+
+            # for debugging
+            if on_step is not None: on_step()
         
         ppl = torch.exp(torch.stack(nlls).sum() / self.valid_loader.dataset.seq_len).item()
-        print(f'[{self.epoch}/{self.config.epochs}] PPL:', ppl)
+        if not quite: print(f'[{self.epoch}/{self.config.epochs}] PPL:', ppl)
         return ppl
     
     def checkpoint_path(self):
@@ -319,7 +322,7 @@ class Trainer:
         if path is None: path = self.checkpoint_path()
         state = torch.load(path, map_location='cpu')
         self.model.load_state_dict(state['model'])
-        if 'scaler' in state: self.scaler.load_state_dict(state['scaler'])
+        if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
         self.optimizer.load_state_dict(state['optimizer'])
         step = state['step']
         epoch = state['epoch']
