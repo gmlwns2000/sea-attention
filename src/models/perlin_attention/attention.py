@@ -76,6 +76,7 @@ class PerlinAttentionOutput:
     loss: torch.Tensor
     context_layer: torch.Tensor
     partial_attention_probs: torch.Tensor
+    partial_attention_mask: torch.Tensor
     estimated_attention_probs: torch.Tensor
     dense_attention_probs: torch.Tensor
     key_for_score: torch.Tensor
@@ -885,7 +886,6 @@ class PerlinAttention(nn.Module):
                                 sparse_attention_mask = partial_attention_mask.float().view(N*H, T, T).to_sparse_coo()
                             else:
                                 sparse_attention_mask = partial_attention_mask
-                            del partial_attention_mask
                         with timer("attention.sparse"), mem("attention.sparse"):
                             # print(torch.min(q_for_score))
                             # print(torch.min(k_for_score))
@@ -1012,6 +1012,7 @@ class PerlinAttention(nn.Module):
                 loss=loss,
                 context_layer=partial_context_layer,
                 partial_attention_probs=partial_attention_probs,
+                partial_attention_mask=partial_attention_mask,
                 estimated_attention_probs=estimated_attention_probs_for_output,
                 dense_attention_probs=attention_probs_dense,
                 key_for_score=k_for_score,

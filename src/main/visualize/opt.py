@@ -23,13 +23,31 @@ def main(
     trainer = OptTrainer(
         model='opt',
         subset=dataset,
-        disable_amp=True,
         **kwargs,
     )
     trainer.load(path=checkpoint_path)
     
     if evaluate:
-        print('PPL:', trainer.evaluate())
+        class OnEvaluateStep:
+            def __init__(self):
+                self.k_sum = self.k_count = 0
+            
+            def __call__(self):
+                student = trainer.model # type: perlin_opt.OPTForCausalLM
+                for layer in student.model.decoder.layers:
+                    layer = layer #type: perlin_opt.OPTDecoderLayer
+                    output = layer.self_attn.last_perlin_output
+                    partial_mask = (output.partial_attention_mask > -1).float()
+                    N, H, T, T = partial_mask.shape
+                    avg_k = partial_mask.sum()
+                    self.k_sum += avg_k.item()
+                    self.k_count += N*H*T
+            
+            def calc(self): return self.k_sum / self.k_count
+        
+        callback = OnEvaluateStep()
+        
+        print(f'PPL: {trainer.evaluate(on_step=callback, quite=True)}, k: {callback.calc():.2f}')
     
     batch = gather_fixed_batch(trainer.valid_loader, 5)
     batch = batch_to(batch, trainer.device)
