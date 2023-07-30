@@ -640,7 +640,8 @@ class PerlinAttention(nn.Module):
                                 sum_per_col = col_select_mask.sum(dim=-2) # [N, H*T_M]
                                 get_bench().register_temp_buffer('col_select_mask', col_select_mask) # col_sel_estimated_attention_probs1
 
-                            print('sum_per_col', sum_per_col)
+                            #print('sum_per_col', sum_per_col)
+                            #print('sum_per_col.shape', sum_per_col.shape)
                             # breakpoint()
                             _, largest_indx = torch.topk(
                                 input=sum_per_col,
@@ -648,16 +649,17 @@ class PerlinAttention(nn.Module):
                                 dim=-1
                             ) # [N, selected_col_cnt] 0~H*T_M-1 in each row
                             # breakpoint()
-                            print('largest_indx', largest_indx)
-                            print('largest_indx.shape', largest_indx.shape)
+                            #print('largest_indx', largest_indx)
+                            #print('largest_indx.shape', largest_indx.shape)
                             large_inx = largest_indx.view(N, 1, selected_col_cnt)\
                                 .expand(N, T, selected_col_cnt) # [N, T, selected_col_cnt]
                             # breakpoint()
-                            print('large_inx', large_inx)
-                            print('large_inx.shape', large_inx.shape)
+                            #print('large_inx', large_inx)
+                            #print('large_inx.shape', large_inx.shape)
                             large_inx_mask = torch.zeros(col_sel_estimated_attention_probs.shape, device=col_sel_estimated_attention_probs.device)
                             large_inx_mask.scatter_(dim=-1, index=large_inx, value=1)
-                            print('large_inx_mask', large_inx_mask)
+                            #print('large_inx_mask', large_inx_mask)
+                            #print('large_inx_mask.shape', large_inx_mask.shape)
                             get_bench().register_temp_buffer('large_inx_mask', large_inx_mask)
 
                             if mask_in_probs:
@@ -671,7 +673,7 @@ class PerlinAttention(nn.Module):
                                 col_sel_estimated_attention_probs = col_sel_estimated_attention_probs.permute(0, 2, 1, 3).contiguous() # N T H T_M
                             
                             # breakpoint()
-                            #print('col_sel_estimated_attention_probs', col_sel_estimated_attention_probs)
+                            #print('col_sel_estimated_attention_probs_selcol_filled', col_sel_estimated_attention_probs)
                             get_bench().register_temp_buffer('col_sel_estimated_attention_probs_selcol_filled', col_sel_estimated_attention_probs)
                             t = col_sel_estimated_attention_probs.view(N, T*H*T_M) # [N, T, H*T_M] -> [N, T*H*T_M]
 
@@ -679,21 +681,21 @@ class PerlinAttention(nn.Module):
                             # 1 per head # TODO change to topk
                             selected_col_cnt = selected_col_per_head
                             sum_per_col = masked_estimated_attention_probs[:,:,:,:].sum(dim=2) # [N, H, T, T_M] -> [N, H, T_M]
-                            print('sum_per_col', sum_per_col)
+                            #print('sum_per_col', sum_per_col)
                             largest_indx = sum_per_col.argmax(dim=-1) # would be [N, H] 0~T_M-1 in each row
-                            print('largest_indx',largest_indx)
+                            #print('largest_indx',largest_indx)
                             large_inx = largest_indx.view(N, H, 1, 1)\
                                 .expand_as(masked_estimated_attention_probs) # [N, H, T, T_M]
-                            print('large_inx', large_inx)
+                            #print('large_inx', large_inx)
                             inx = torch.arange(
                                 T_M,
                                 dtype=large_inx.dtype, # TODO check dtype device
                                 device=large_inx.device,
                                 ).view(1,1,1,T_M)\
                                 .expand_as(masked_estimated_attention_probs) # [N, H, T, T_M]
-                            print('inx', inx)
+                            #print('inx', inx)
                             col_select_mask = (inx == large_inx) # TODO check device
-                            print('col_select_mask', col_select_mask)
+                            #print('col_select_mask', col_select_mask)
                             if mask_in_probs:
                                 masked_estimated_attention_probs[col_select_mask] = 0.0 # [N, H, T, T_M]
                             else:
@@ -804,7 +806,7 @@ class PerlinAttention(nn.Module):
                                 .expand(indices.shape)
                         )
                         # breakpoint()
-                        # print(partial_attention_mask[0].view(H, T, T_M)[0])
+                        # #print(partial_attention_mask[0].view(H, T, T_M)[0])
                     with timer("mask.masked_fill"):
                         
                         # # input()
@@ -824,6 +826,7 @@ class PerlinAttention(nn.Module):
                             # partial_attention_mask.fill_(FP_MIN)
                             # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
                             if perlin_col_select and k_flatten_dim=='batch':
+                                #print(f'{k_flatten_dim}: t_dead_mask.view(N, T, H*T_M)', t_dead_mask.float().view(N, T, H*T_M))
                                 get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, T, H*T_M))
                             partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
                             # breakpoint()
@@ -865,6 +868,8 @@ class PerlinAttention(nn.Module):
                     assert partial_attention_mask.shape ==(N, H, T, T_M)
                     # JINA_VIZ_COLSEL 1 partial_attention_mask (before interprete)
 
+            #print('partial_attention_mask_before_interp', partial_attention_mask)
+            #print('partial_attention_mask_before_interp.shape', partial_attention_mask.shape)
             get_bench().register_temp_buffer('partial_attention_mask_before_interp', partial_attention_mask)
             
             with timer("interp"):
@@ -877,7 +882,7 @@ class PerlinAttention(nn.Module):
                 # )
                 if not self.benchmarking:
                     with timer("interp.resize"):
-                        # print(torch.unique(partial_attention_mask).shape)
+                        # #print(torch.unique(partial_attention_mask).shape)
                         # TODO Fix this function to return COO tensor
                         # breakpoint()
                         partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN)
@@ -905,7 +910,7 @@ class PerlinAttention(nn.Module):
                             idx = torch.unique(idx, dim=-1) #TODO FIX this to masked select
                             idx = idx[:, 1:]
                             
-                            # print(nnz, idx.shape[-1])
+                            # #print(nnz, idx.shape[-1])
                             return torch.sparse_coo_tensor(
                                 indices=idx.contiguous(),
                                 values=torch.ones((idx.shape[-1],), device=img.device, dtype=img.dtype),
@@ -931,7 +936,7 @@ class PerlinAttention(nn.Module):
                             # idx = torch.unique(idx.long(), dim=-1)
                             idx = idx.masked_select(xs_okay).view(3, -1)
                             
-                            # print(nnz, idx.shape[-1])
+                            # #print(nnz, idx.shape[-1])
                             return torch.sparse_coo_tensor(
                                 indices=idx,
                                 values=torch.ones((1,), device=img.device, dtype=img.dtype).expand(idx.shape[-1]),
@@ -956,6 +961,8 @@ class PerlinAttention(nn.Module):
                 #     )
                 raise_if_nan(partial_attention_mask)
                 # JINA_VIZ_COLSEL 1 partial_attention_mask (after interprete)
+            #print('partial_attention_mask', partial_attention_mask)
+            #print('partial_attention_mask.shape', partial_attention_mask.shape)
             get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
             
             # N, H, T, HID = q.shape
@@ -972,16 +979,16 @@ class PerlinAttention(nn.Module):
                 if not self.benchmarking:
                     # start of masked attention mechanism
                     
-                    # NOTE: checking avearge k is expected. uncomment following print, and then run visualize_glue
-                    # print(
+                    # NOTE: checking avearge k is expected. uncomment following #print, and then run visualize_glue
+                    # #print(
                     #     (partial_attention_mask > -1).long().sum(-1).sum(-1)[:,0].view(-1),
                     #     (attention_mask > -1).long().sum(-1).view(-1),
                     #     (partial_attention_mask > -1).long().sum(-1).sum(-1)[:,0].view(-1) / (attention_mask > -1).long().sum(-1).view(-1),
                     #     k, T, T_M
                     # )
-                    # NOTE: print avg k per batch
+                    # NOTE: #print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask > -1).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()
-                    # print(metric.update(avg_k_per_batch, name='avgk'))
+                    # #print(metric.update(avg_k_per_batch, name='avgk'))
                     
                     attention_scores_dense = torch.matmul(q_for_score, k_for_score.transpose(-1, -2))
                     if not self.pconfig.causal:
@@ -1016,9 +1023,11 @@ class PerlinAttention(nn.Module):
                         attention_scores_dense_masked = attention_scores_dense + causal_attention_mask
                     attention_probs_dense = softmax_bf16(attention_scores_dense_masked, dim=-1)
                     
+                    #print('attention_probs_dense', attention_probs_dense)
+                    #print('attention_probs_dense.shape', attention_probs_dense.shape)
                     get_bench().register_temp_buffer('attention_probs_dense', attention_probs_dense)
                     # NOTE HJ you should not add attention_mask and attention_score, because partial_attention_mask already has it.
-                    # print(
+                    # #print(
                     #     torch.unique((partial_attention_mask).view(-1)), 
                     #     torch.max(attention_scores_dense.view(-1)), 
                     #     torch.min(attention_scores_dense.view(-1)),
@@ -1029,6 +1038,11 @@ class PerlinAttention(nn.Module):
                     raise_if_nan(partial_attention_scores)
                     partial_attention_probs = softmax_bf16(partial_attention_scores, -1)
                     partial_attention_probs = partial_attention_probs * (partial_attention_mask > -1)
+                    #print('partial_attention_scores', partial_attention_scores)
+                    #print('partial_attention_scores.shape', partial_attention_scores.shape)
+                    #print('partial_attention_probs', partial_attention_probs)
+                    #print('partial_attention_probs.shape', partial_attention_probs.shape)
+
                     get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
                     get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
                     raise_if_nan(partial_attention_probs)
@@ -1051,13 +1065,13 @@ class PerlinAttention(nn.Module):
                     
                     # TODO HJ Apply probs scaler!
                     
-                    # NOTE: print avg k per batch
+                    # NOTE: #print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask.to_dense() > 0).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()
                     # print(metric.update(avg_k_per_batch, name='avgk'))
                     
                     # using Numba
                     N, H, T, HEAD_H = q_for_score.shape
-                    # print((partial_attention_mask > -1).sum(), (partial_attention_mask > -1).sum() / partial_attention_mask.numel())
+                    # #print((partial_attention_mask > -1).sum(), (partial_attention_mask > -1).sum() / partial_attention_mask.numel())
                     with mem("attention"):
                         with timer("attention.coo"), mem("attention.coo"):
                             if not partial_attention_mask.is_sparse:
@@ -1065,15 +1079,15 @@ class PerlinAttention(nn.Module):
                             else:
                                 sparse_attention_mask = partial_attention_mask
                         with timer("attention.sparse"), mem("attention.sparse"):
-                            # print(torch.min(q_for_score))
-                            # print(torch.min(k_for_score))
-                            # print(torch.min(sparse_attention_mask))
+                            # #print(torch.min(q_for_score))
+                            # #print(torch.min(k_for_score))
+                            # #print(torch.min(sparse_attention_mask))
                             partial_attention_scores = sparse_attn(
                                 q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 sparse_attention_mask
                             ) / math.sqrt(self.attention_head_size)
-                            # print(partial_attention_scores)
+                            # #print(partial_attention_scores)
                             get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
                             del sparse_attention_mask
                         with timer("attention.sparse_softmax"), mem("attention.sparse_softmax"):
@@ -1182,7 +1196,13 @@ class PerlinAttention(nn.Module):
             raise_if_nan(attention_probs_dense)
             raise_if_nan(k_for_score)
             
+            #print('partial_context_layer', partial_context_layer)
+            #print('partial_context_layer.shape', partial_context_layer.shape)
+            
             estimated_attention_probs_for_output = estimated_attention_probs if self.benchmarking else estimated_attention_probs_resized
+            
+            #print('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
+            #print('estimated_attention_probs_for_output.shape', estimated_attention_probs_for_output.shape)
             get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
