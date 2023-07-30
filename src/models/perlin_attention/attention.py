@@ -99,6 +99,16 @@ class StatefulCausalPerformer:
             outs.append(out)
 
         return torch.cat(outs, dim = -2)
+
+    def causal_linear_attention_noncuda_stateful(
+        self, q, k, v, chunk_size = 1, eps=1e-6,
+    ):
+        assert chunk_size == 1
+        N, H, T_NEW, HID = q.shape
+        N, H, T_ALL, HID = k.shape
+        
+        for iq in range(T_NEW):
+            pass
     
     def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         # q:    N, H, T_NEW, HID
@@ -834,7 +844,7 @@ class PerlinAttention(nn.Module):
                                 per_item_top_k = torch.clamp((H * torch.floor(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T, 1), 1, H*T_M)
                         else: raise Exception()
                         
-                        top_k_elems = int(math.ceil(torch.max(per_item_top_k).item()))
+                        top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
                     with timer("mask.topk"):
                         _, indices = torch.topk(
