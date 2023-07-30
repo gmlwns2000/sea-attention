@@ -35,6 +35,7 @@ class PerlinAttentionConfig:
     colsel_method: str = "sum_values"
     colsel_mask_in_probs: bool = False
     causal: bool = False
+    use_cache: bool = False
     
     def to_json(self):
         return asdict(self)

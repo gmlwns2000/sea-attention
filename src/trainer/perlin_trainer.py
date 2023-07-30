@@ -293,6 +293,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_checkpointing=gradient_checkpointing,
             max_seq_len=max_seq_len,
+            lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
             additional_config=perlin_attention.get_default_config().to_json(),
         ))
         

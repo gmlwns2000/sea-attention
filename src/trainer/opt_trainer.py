@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, asdict
+import traceback
 
 import tqdm
 from ..utils import seed, batch_to, Metric
@@ -35,6 +36,8 @@ class TrainerConfig:
     model_config: str = 'Aalaa/opt-125m-wikitext2'
     # model_config: str = 'lnair/opt-350m-wikitext2'
     lr: float = 1e-5
+    lr_high_scale: float = 10.0
+    lr_low_scale: float = 1.0
     wd: float = 1e-2
     epochs: int = 100
     batch_size: int = 1
@@ -121,6 +124,8 @@ class Trainer:
         weight_decay:float=1e-3,
         no_decay_keywords=[]
     ):
+        lr_high = lr * self.config.lr_high_scale
+        lr_low = lr * self.config.lr_low_scale
         param_optimizer = list([(n, p) for n, p in model.named_parameters() if p.requires_grad])
         no_decay = [
             'bias', 
@@ -140,11 +145,14 @@ class Trainer:
         set_high_no_wd = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
+        
+        psort = lambda lst: list([item[1] for item in sorted(list(lst), key=lambda it: it[0])])
+        
         params = [
-            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr},
-            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
-            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
-            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
+            {'params': psort(set_normal), 'weight_decay': weight_decay, 'lr': lr_low},
+            {'params': psort(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr_low},
+            {'params': psort(set_high), 'weight_decay': weight_decay, 'lr': lr_high},
+            {'params': psort(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr_high},
         ]
 
         kwargs = {
@@ -321,9 +329,14 @@ class Trainer:
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
         state = torch.load(path, map_location='cpu')
-        self.model.load_state_dict(state['model'])
+        result = self.model.load_state_dict(state['model'], strict=False)
+        print(result)
         if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
-        self.optimizer.load_state_dict(state['optimizer'])
+        try:
+            self.optimizer.load_state_dict(state['optimizer'])
+        except Exception as ex:
+            traceback.print_exc()
+            print('error during load optimizer', ex)
         step = state['step']
         epoch = state['epoch']
         epochs = state['config']['epochs']
