@@ -1413,10 +1413,10 @@ class PerlinAttention(nn.Module):
             get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
-            root = './plots/attention/'
+            root = './debug/attention/'
             os.makedirs(root, exist_ok=True)
             
-            with open(os.path.join(root, 'colsel_debug.json'), 'w') as f:
+            with open(os.path.join(root, 'colsel.json'), 'w') as f:
                 json.dump({
                     'attention_mask.shape' : attention_mask.shape,
                     'attention_mask': attention_mask,
