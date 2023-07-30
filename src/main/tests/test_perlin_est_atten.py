@@ -1,6 +1,6 @@
 from ...utils import get_bench
-from ..visualize_glue import main as visualize_main
-from ..visualize_glue import add_perlin_model_options, parse_perlin_model_options
+from ..visualize.glue import main as visualize_main
+from ..visualize.glue import add_perlin_model_options, parse_perlin_model_options
 import argparse, os, torch
 import matplotlib.pyplot as plt
 
@@ -28,15 +28,24 @@ visualize_main(**kwargs)
 
 index_layer = 7
 
+v_for_atten = bench.get_temp_buffer('v_for_atten', index_layer)
+performer_context_layer = bench.get_temp_buffer('performer_context_layer', index_layer)
+estimated_attention_score = bench.get_temp_buffer('estimated_attention_score', index_layer)
 estimated_attention_probs = bench.get_temp_buffer('estimated_attention_probs', index_layer)
 attention_probs_dense = bench.get_temp_buffer('attention_probs_dense', index_layer)
 estimated_attention_probs_for_output = bench.get_temp_buffer('estimated_attention_probs_for_output', index_layer)
 partial_attention_mask_before_interp = bench.get_temp_buffer('partial_attention_mask_before_interp', index_layer)
 partial_attention_mask = bench.get_temp_buffer('partial_attention_mask', index_layer)
 attention_mask = bench.get_temp_buffer('attention_mask', index_layer)
+
 partial_attention_probs = bench.get_temp_buffer('attention_matrix', index_layer)
 
 N, T = attention_mask.shape[0], attention_mask.shape[-1]
+
+attention_probs_truth = bench.get_temp_buffer('attention_probs_truth', index_layer)
+attention_probs_truth_m = bench.get_temp_buffer('attention_probs_truth_m', index_layer)
+t_attention_predictor = bench.get_temp_buffer('t_attention_predictor', index_layer)
+
 
 def imsave(img: torch.Tensor, path):
     plt.clf()
@@ -51,6 +60,9 @@ os.makedirs(root, exist_ok=True)
 index_batch = 3
 index_head = 2
 
+imsave(v_for_atten[index_batch,index_head], os.path.join(root, 'v_atten.png'))
+imsave(performer_context_layer[index_batch,index_head], os.path.join(root, 'perf_cont.png'))
+imsave(estimated_attention_score[index_batch,index_head], os.path.join(root, 'est_score.png'))
 imsave(estimated_attention_probs[index_batch,index_head], os.path.join(root, 'est.png'))
 imsave(attention_probs_dense[index_batch,index_head], os.path.join(root, 'dense_origin.png'))
 imsave(estimated_attention_probs_for_output[index_batch,index_head], os.path.join(root, 'est_interp.png'))
@@ -59,6 +71,12 @@ imsave(
     (estimated_attention_probs_for_output[index_batch,index_head] * (attention_mask[index_batch,0] > -1)).sum(dim=-1, keepdim=True), os.path.join(root, 'est_interp_norm.png'))
 imsave(partial_attention_mask_before_interp[index_batch,index_head], os.path.join(root, 'part.png'))
 imsave(partial_attention_mask[index_batch,index_head], os.path.join(root, 'part_interp.png'))
+
 imsave(attention_mask[index_batch,0].expand(T, T), os.path.join(root, 'attn_mask.png'))
 imsave(partial_attention_probs[index_batch,0].expand(T, T), os.path.join(root, 'final_partial_probs.png'))
+
+
+imsave(attention_probs_truth[index_batch,index_head], os.path.join(root, 'attention_probs_truth.png'))
+imsave(attention_probs_truth_m[index_batch,index_head], os.path.join(root, 'attention_probs_truth_m.png'))
+imsave(t_attention_predictor[index_batch,index_head], os.path.join(root, 't_attention_predictor.png'))
 

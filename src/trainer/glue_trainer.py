@@ -16,6 +16,7 @@ from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+import torch.nn.functional as F
 
 import wandb
 
@@ -81,7 +82,7 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+BF16 = torch.float16 if torch.cuda.is_bf16_supported() else torch.float16
 from ..utils import Metric
 
 class Trainer:
@@ -101,6 +102,7 @@ class Trainer:
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
+        wandb_configs = {}
     ) -> None:
         seed()
         
@@ -112,6 +114,7 @@ class Trainer:
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
         self.using_loss = using_loss
+        self.wandb_configs = wandb_configs
         
         self.amp_enabled = amp_enabled
         self.device = 0
@@ -225,10 +228,14 @@ class Trainer:
         loss_kd = 0
         if self.using_kd:
             for ilayer in range(len(output_base.hidden_states)):
-                loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
+                loss_kd += F.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
-            loss_kd = loss_kd + torch.nn.functional.mse_loss(output_base.logits, output.logits) * 0.1
+            loss_kd = loss_kd + F.kl_div(
+                F.log_softmax(output.logits, dim=-1), 
+                F.softmax(output_base.logits, dim=-1),
+                reduction='batchmean',
+            ) * 0.1
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
@@ -247,9 +254,9 @@ class Trainer:
             self.optimizer.zero_grad()
             self.scaler.update()
         
-        for module in self.model.modules():
-            if hasattr(module, 'redraw_projections'):
-                module.redraw_projections(self.device)
+            for module in self.model.modules():
+                if hasattr(module, 'redraw_projections'):
+                    module.redraw_projections(self.device)
         
         self.loss = loss.item()
         self.loss_details = {
@@ -349,7 +356,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/merge4_local.pth'
         return path
     
     def save(self):
@@ -402,6 +409,7 @@ class Trainer:
                 "batch_size": self.batch_size,
                 "subset": self.subset,
                 "epochs": self.epochs,
+                "global_configs": self.wandb_configs,
             }
         )
         # wandb.watch(self.model, log='all')

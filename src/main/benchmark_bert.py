@@ -22,8 +22,8 @@ plt.style.use('seaborn-bright')
 @dataclass
 class BenchConfig:
     method: str = 'perlin'
-    t_warmup: int = 0.5
-    t_sample: int = 1
+    t_warmup: int = 1
+    t_sample: int = 3
     precision: torch.dtype = torch.float32
     bsize: int = 1
     seq_len: int = 4096
@@ -108,8 +108,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
             module.benchmarking = True
 
     attention_mask = torch.ones((BSIZE, SEQ_LEN), dtype=BENCH_PRECISION).to(device)
-    for i in range(attention_mask.shape[0]):
-        attention_mask[i, random.randint(128, attention_mask.shape[1]-1):] = 0
+    # for i in range(attention_mask.shape[0]):
+    #     attention_mask[i, random.randint(128, attention_mask.shape[1]-1):] = 0
     hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
     attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
     attention_mask_expand = (1-attention_mask_expand)*(-32000)
@@ -171,7 +171,7 @@ def main_plot():
             exam_config(BenchConfig(
                 precision=precision,
                 method=method,
-                seq_len=t
+                seq_len=t,
             ))
             for t in ts
         ]
