@@ -19,10 +19,11 @@ def main(
     **kwargs
 ):
     trainer = OptTrainer(
-        model='opt',
         subset=dataset,
         **kwargs,
     )
+    trainer.device = 'cpu'
+    trainer.device = 'cuda'
     if checkpoint_path is None:
         checkpoint_path = trainer.checkpoint_path()
     if os.path.exists(checkpoint_path):
@@ -30,16 +31,17 @@ def main(
     else:
         print('checkpoint not exists', checkpoint_path)
     
-    model = trainer.model.eval() # type: perlin_opt.OPTForCausalLM
+    model = trainer.model.to(trainer.device).eval() # type: perlin_opt.OPTForCausalLM
     tokenizer = trainer.tokenizer
     
     def generate(prompt):
         inputs = tokenizer(prompt, return_tensors="pt")
-        generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'])
+        with torch.no_grad():
+            generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'], use_cache=False)
         generated_text = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         return inputs, generate_ids, generated_text
     
-    perlin_attention.get_default_config().use_cache = True
+    perlin_attention.get_default_config().use_cache = False
     sample_text = "Robert <unk> is an English film , television and theatre actor ."
     _, _, generated_text = generate(sample_text)
     print('sample:', sample_text)
@@ -47,7 +49,13 @@ def main(
     
     while True:
         print('>>> ', end='', flush=True)
-        prompt = input().strip()
+        try:
+            prompt = input().strip()
+            if prompt in ['quit', 'exit']:
+                break
+        except KeyboardInterrupt as ex:
+            print()
+            continue
         
         gc.collect()
         torch.cuda.empty_cache()
@@ -69,6 +77,7 @@ if __name__ == '__main__':
     
     parser.add_argument('--dataset', type=str, default='wikitext2')
     parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--model', type=str, default='opt')
     parser.add_argument('--max-seq-len', type=int, default=768)
     add_perlin_model_options(parser)
     
@@ -77,6 +86,7 @@ if __name__ == '__main__':
     
     kwargs = parse_perlin_model_options(args)
     kwargs.update({
+        'model': args.model,
         'dataset': args.dataset,
         'checkpoint_path': args.checkpoint,
         'max_seq_len': args.max_seq_len,

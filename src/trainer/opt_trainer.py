@@ -139,10 +139,10 @@ class Trainer:
         high_lr = self.config.high_lr_names
         if no_decay_keywords is not None and len(no_decay_keywords) > 0:
             no_decay += no_decay_keywords
-        set_normal = set([p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
-        set_normal_no_wd = set([p for n, p in param_optimizer if any(nd in n for nd in no_decay)])
-        set_high = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
-        set_high_no_wd = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
+        set_normal = set([(n, p) for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
+        set_normal_no_wd = set([(n, p) for n, p in param_optimizer if any(nd in n for nd in no_decay)])
+        set_high = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
+        set_high_no_wd = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
         

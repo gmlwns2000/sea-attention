@@ -163,7 +163,9 @@ class StatefulCausalCNN:
         self.xs_len = 0
         self.ys = None
         
-    def __call__(self, cnn: torch.nn.Module, x: torch.Tensor):
+    def __call__(self, cnn: torch.nn.Module, x: torch.Tensor, x_len: int):
+        x = x[...,-x_len:,:]
+        
         if self.xs is None:
             xs_shape = list(x.shape)
             xs_shape[-2] = self.max_seq_len
@@ -175,22 +177,32 @@ class StatefulCausalCNN:
             self.xs[...,self.xs_len:self.xs_len+x.shape[-2],:] = x
             self.xs_len += x.shape[-2]
         
-        x_start = max(self.xs_len-self.window_size, 0)
-        x_start = x_start - (x_start % self.window_align)
+        x_start = max(self.xs_len-max(x.shape[-2], self.window_size), 0)
+        x_start = max(x_start - (x_start % self.window_align), 0)
         x_window = self.xs[...,x_start:self.xs_len,:]
         
         y = cnn(x_window)
         assert y.shape == x_window.shape, f"{y.shape} == {x_window.shape}"
-        print('cnn', self.xs.shape, self.ys.shape, x.shape, y.shape, x_window.shape)
+        print('cnn', self.xs.shape, self.ys.shape, x.shape, y.shape, x_window.shape, x_start, self.xs_len)
         self.ys[...,max(0, self.xs_len-x.shape[-2]):self.xs_len,:] = y[...,-x.shape[-2]:,:]
-        return self.ys[...,:self.xs_len,:]
+        output = self.ys[...,:self.xs_len,:]
+        return output
+    
+    def strify(self):
+        return strify({
+            'ws': self.window_size,
+            'wa': self.window_align,
+            'xs': self.xs,
+            'ys': self.ys,
+            'xs_len': self.xs_len
+        })
 
 class PerlinAttentionState:
     def __init__(self, parent: "PerlinAttention"):
         self.num_heads = parent.num_attention_heads
         self.head_dim = parent.attention_head_size
         self.embd_dim = parent.all_head_size
-        self.max_seq_length = 2048
+        self.max_seq_length = 768
         
         self.states = {}
     
@@ -208,21 +220,23 @@ class PerlinAttentionState:
         name: str,
         func: nn.Module,
         x: torch.Tensor,
+        x_len: torch.Tensor,
     ):
         if state is None:
             return None, func(x)
         else:
             state = copy.deepcopy(state)
-            return state, state.forward_causal_cnn_op(name, func, x)
+            return state, state.forward_causal_cnn_op(name, func, x, x_len)
     
     def forward_causal_cnn_op(
         self,
         name: str,
         func: nn.Module,
         x: torch.Tensor,
+        x_len: int,
     ):
         state = self.get_state(name, lambda: StatefulCausalCNN(self))
-        return state(func, x)
+        return state(func, x, x_len)
     
     @staticmethod
     def stateful_row_op(
@@ -230,19 +244,22 @@ class PerlinAttentionState:
         name: str,
         func: nn.Module,
         x: torch.Tensor,
+        x_len: int,
     ):
         if state is None:
             return None, func(x)
         else:
             state = copy.deepcopy(state)
-            return state, state.forward_row_op(name=name, func=func, x=x)
+            return state, state.forward_row_op(name=name, func=func, x=x, x_len=x_len)
     
     def forward_row_op(
         self,
         name: str,
         func: nn.Module,
         x: torch.Tensor,
+        x_len: int,
     ):
+        x = x[...,-x_len:,:]
         y = func(x)
         max_shape = list(y.shape)
         max_shape[-2] = self.max_seq_length
@@ -621,24 +638,31 @@ class PerlinAttention(nn.Module):
                     # raise_if_nan(estimated_attention_score)
                     # estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
                     # raise_if_nan(estimated_attention_score)
+                    # print('performer_value', strify(performer_value), q.shape[-2])
                     last_state, t_attention_predictor = PerlinAttentionState.stateful_row_op(
                         last_state,
                         "attention_predictor_enc->t_attention_predictor",
                         self.attention_predictor_enc,
                         performer_value,
+                        q.shape[-2],
                     )
+                    # print('t_attention_predictor', strify(t_attention_predictor))
                     last_state, estimated_attention_score = PerlinAttentionState.stateful_row_op(
                         last_state,
                         "attention_predictor_dec_row->estimated_attention_score",
                         self.attention_predictor_dec_row,
-                        t_attention_predictor
+                        t_attention_predictor,
+                        q.shape[-2],
                     )
+                    # print('estimated_attention_score', strify(estimated_attention_score))
                     last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
                         last_state,
                         "attention_predictor_cnn->estimated_attention_score",
                         self.attention_predictor_cnn,
-                        estimated_attention_score
+                        estimated_attention_score,
+                        q.shape[-2],
                     )
+                    # print('estimated_attention_score', strify(estimated_attention_score))
                 elif self.pconfig.attention_predictor_method == 'comp':
                     assert not use_cache
                     warnings.warn('attention prediction method is compressed one.')
@@ -666,6 +690,7 @@ class PerlinAttention(nn.Module):
                     "softmax_bf16(estimated_attention_score)->estimated_attention_probs",
                     lambda x: softmax_bf16(x, -1),
                     estimated_attention_score,
+                    q.shape[-2],
                 )
             
             get_bench().register_temp_buffer('estimated_attention_score', estimated_attention_score)
@@ -756,7 +781,7 @@ class PerlinAttention(nn.Module):
             
             loss = 0
             estimated_attention_probs_resized = estimated_attention_score_resized = None
-            if not self.benchmarking and not use_cache:
+            if not self.benchmarking and not use_cache and attention_scores_truth is not None:
                 N, H, T, T_M = estimated_attention_score.shape
                 # for loss calculation
                 estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)

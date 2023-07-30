@@ -256,6 +256,9 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         model_config = {
             'opt-125m': {
                 'wikitext2': 'Aalaa/opt-125m-wikitext2'
+            },
+            'opt-350m': {
+                'wikitext2': 'lnair/opt-350m-wikitext2'
             }
         }[model][subset]
         
