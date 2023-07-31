@@ -409,6 +409,9 @@ class Benchmark:
     
     def get_temp_buffer(self, name, index=-1):
         return self.buffers[name][index]
+    
+    def reset_temp_buffers(self):
+        self.buffers = {}
 
 BENCHMARK = Benchmark()
 

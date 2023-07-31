@@ -317,7 +317,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         assert args.model in ['bert']
     elif args.dataset == 'wikitext2':
-        assert args.model in ['opt']
+        assert args.model in ['opt', 'opt-125m', 'opt-350m']
     else:
         raise Exception()
     
@@ -338,7 +338,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 1)
         trainer = LraTrainer(**kwargs)
-    elif args.model in ['opt']:
+    elif args.model in ['opt', 'opt-125m', 'opt-350m']:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
         assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         trainer = OptTrainer(**kwargs)

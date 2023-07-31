@@ -36,11 +36,11 @@ def init_opt(
     
     return trainer, model, tokenizer
 
-def init(skip_init_loaders=False) -> Tuple[OptTrainer, perlin_opt.OPTForCausalLM, AutoTokenizer]:
+def init(skip_init_loaders=False, checkpoint_path=None) -> Tuple[OptTrainer, perlin_opt.OPTForCausalLM, AutoTokenizer]:
     parser = argparse.ArgumentParser()
     
     parser.add_argument('--dataset', type=str, default='wikitext2')
-    parser.add_argument('--checkpoint', type=str, default=None)
+    parser.add_argument('--checkpoint', type=str, default=checkpoint_path)
     parser.add_argument('--model', type=str, default='opt')
     parser.add_argument('--max-seq-len', type=int, default=768)
     add_perlin_model_options(parser)

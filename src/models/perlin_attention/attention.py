@@ -80,7 +80,16 @@ class StatefulCausalPerformer:
         self.seq_index = 0
         self.last_k_cumsum = 0
         self.last_context_cumsum = 0
+        
+        self.qs = []
     
+    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        # naive
+        self.qs.append(q)
+        qs = torch.cat(self.qs, dim=-2)
+        context = self.performer(qs, k, v)
+        return context[...,-q.shape[-2]:,:]
+
     # def _causal_linear_attention_noncuda_stateful(
     #     self, q, k, v, chunk_size = 128, eps = 1e-6
     # ):
@@ -102,53 +111,54 @@ class StatefulCausalPerformer:
 
     #     return torch.cat(outs, dim = -2)
 
-    def causal_linear_attention_noncuda_stateful(
-        self, q_chunk, k_all, v_all, chunk_size = 1, eps=1e-6,
-    ):
-        assert chunk_size == 1
-        N, H, T_NEW, HID = q_chunk.shape
-        N, H, T_ALL, HID = k_all.shape
+    # def causal_linear_attention_noncuda_stateful(
+    #     self, q_chunk, k_all, v_all, chunk_size = 1, eps=1e-20,
+    # ):
+    #     assert chunk_size == 1
+    #     N, H, T_NEW, HID = q_chunk.shape
+    #     N, H, T_ALL, HID = k_all.shape
         
-        outs = []
-        for iq in range(T_NEW):
-            q = q_chunk[...,iq:iq+1,:]
-            k = k_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
-            v = v_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
+    #     outs = []
+    #     for iq in range(T_NEW):
+    #         q = q_chunk[...,iq:iq+1,:]
+    #         k = k_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
+    #         v = v_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
             
-            k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2)
+    #         k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2).to(torch.float64)
+    #         # k_cumsum = self.last_k_cumsum + k.to(torch.float64)
 
-            D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
-            context = torch.einsum('...nd,...ne->...nde', k, v)
-            context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3)
-            out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum, q, D_inv)
+    #         D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
+    #         context = torch.einsum('...nd,...ne->...nde', k, v)
+    #         context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3).to(torch.float64)
+    #         out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum.type_as(q), q, D_inv)
 
-            self.last_k_cumsum = k_cumsum[:, :, -1:]
-            self.last_context_cumsum = context_cumsum[:, :, -1:]
-            outs.append(out)
+    #         self.last_k_cumsum = k_cumsum[..., -1:, :]
+    #         self.last_context_cumsum = context_cumsum[..., -1:, :]
+    #         outs.append(out)
         
-        self.seq_index += T_NEW
-        assert self.seq_index == T_ALL, f"{self.seq_index}({len(outs)}) == {T_ALL}"
+    #     self.seq_index += T_NEW
+    #     assert self.seq_index == T_ALL, f"{self.seq_index}({len(outs)}) == {T_ALL}"
         
-        return torch.cat(outs, dim=-2)
+    #     return torch.cat(outs, dim=-2)
     
-    def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        # q:    N, H, T_NEW, HID
-        # k, v: N, H, T_ALL, HID
-        # assert last_out == N, H, T_ALL-T_NEW, HID
-        # out:  N, H, T_ALL, HID
+    # def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+    #     # q:    N, H, T_NEW, HID
+    #     # k, v: N, H, T_ALL, HID
+    #     # assert last_out == N, H, T_ALL-T_NEW, HID
+    #     # out:  N, H, T_ALL, HID
         
-        N, H, T_NEW, HID = q.shape
-        assert k.shape[:-1] == v.shape[:-1], f"{k.shape} == {v.shape}"
-        N, H, T_ALL, HID = k.shape
+    #     N, H, T_NEW, HID = q.shape
+    #     assert k.shape[:-1] == v.shape[:-1], f"{k.shape} == {v.shape}"
+    #     N, H, T_ALL, HID = k.shape
         
-        original_causal_fn = self.performer.causal_linear_fn
-        self.performer.causal_linear_fn = self.causal_linear_attention_noncuda_stateful
-        context_layer = self.performer(q,k,v)
-        self.performer.causal_linear_fn = original_causal_fn
+    #     original_causal_fn = self.performer.causal_linear_fn
+    #     self.performer.causal_linear_fn = self.causal_linear_attention_noncuda_stateful
+    #     context_layer = self.performer(q,k,v)
+    #     self.performer.causal_linear_fn = original_causal_fn
         
-        assert context_layer.shape[:-1] == (N, H, T_NEW)
+    #     assert context_layer.shape[:-1] == (N, H, T_NEW)
         
-        return context_layer
+    #     return context_layer
     
     def strify(self):
         return f"StatePerformer({self.seq_index}, {strify(self.last_k_cumsum)}, {strify(self.last_context_cumsum)})"
@@ -164,6 +174,7 @@ class StatefulCausalPerformer:
             self.last_k_cumsum.clone() \
             if isinstance(self.last_k_cumsum, torch.Tensor) \
             else self.last_k_cumsum
+        new.qs = list([q for q in self.qs])
         return new
 
 class StatefulCausalCNN:
@@ -651,6 +662,7 @@ class PerlinAttention(nn.Module):
                         v
                     ], dim=-1)#.detach()
                 raise_if_nan(performer_value)
+                get_bench().register_temp_buffer('performer_value', performer_value)
             
             # estimate attention scores
             with timer("predictor"):
@@ -1185,7 +1197,8 @@ class PerlinAttention(nn.Module):
                     partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
                     get_bench().register_temp_buffer('estimated_scales', estimated_scales)
                     get_bench().register_temp_buffer('average_scale', average_scale)
-                    get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
+                    if not self.pconfig.causal:
+                        get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
                     get_bench().register_temp_buffer('average_context_layer', average_context_layer)
                     get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
             
