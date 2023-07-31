@@ -53,14 +53,14 @@ class TrainerConfig:
 BF_16 = torch.float16
 
 class Trainer:
-    def __init__(self, config: TrainerConfig = None) -> None:
+    def __init__(self, config: TrainerConfig = None, skip_init_loaders = False) -> None:
         seed()
         
         self.config = config if config is not None else TrainerConfig()
         self.device = 0
         
         self.init_model()
-        self.init_loader()
+        if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
     
     def init_model(self):

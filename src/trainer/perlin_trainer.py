@@ -273,7 +273,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             max_seq_len=max_seq_len,
             lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
             additional_config=perlin_attention.get_default_config().to_json(),
-        ))
+        ), skip_init_loaders=kwargs.get('skip_init_loaders', False))
         
         self.apply_model_options(self.model)
 
