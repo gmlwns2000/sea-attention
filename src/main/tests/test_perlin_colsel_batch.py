@@ -45,16 +45,18 @@ masked_estimated_attention_probs = bench.get_temp_buffer('masked_estimated_atten
 estimated_attention_score_resized = bench.get_temp_buffer('estimated_attention_score_resized', index_layer)
 estimated_attention_probs_resized = bench.get_temp_buffer('estimated_attention_probs_resized', index_layer)
 # teacher : T*T, T*T_M
+attention_scores_truth = bench.get_temp_buffer('attention_scores_truth', index_layer)
 attention_probs_truth = bench.get_temp_buffer('attention_probs_truth', index_layer)
 attention_probs_truth_m = bench.get_temp_buffer('attention_probs_truth_m', index_layer)
 # "sum_mask" : col_select_mask
-if kwargs['perlin_colsel_method'] == 'sum_mask':
-    col_select_mask = bench.get_temp_buffer('col_select_mask', index_layer)
-# large_inx_mask
-large_inx_mask = bench.get_temp_buffer('large_inx_mask', index_layer)
-# col_sel_estimated_attention_probs
-col_sel_estimated_attention_probs_bef_select = bench.get_temp_buffer('col_sel_estimated_attention_probs_bef_select', index_layer)
-col_sel_estimated_attention_probs_selcol_filled = bench.get_temp_buffer('col_sel_estimated_attention_probs_selcol_filled', index_layer)
+if kwargs['perlin_colsel']:
+    if kwargs['perlin_colsel_method'] == 'sum_mask':
+        col_select_mask = bench.get_temp_buffer('col_select_mask', index_layer)
+    # large_inx_mask
+    large_inx_mask = bench.get_temp_buffer('large_inx_mask', index_layer)
+    # col_sel_estimated_attention_probs
+    col_sel_estimated_attention_probs_bef_select = bench.get_temp_buffer('col_sel_estimated_attention_probs_bef_select', index_layer)
+    col_sel_estimated_attention_probs_selcol_filled = bench.get_temp_buffer('col_sel_estimated_attention_probs_selcol_filled', index_layer)
 # t_dead_mask : topk applied (partial_attention_mask)
 t_dead_mask = bench.get_temp_buffer('t_dead_mask', index_layer)
 # partial_attention_mask after topk, colsel (before interp)
@@ -87,7 +89,8 @@ def imsave(t: torch.Tensor, path):
     global INDEX
     img = convert_to_colormap(t.cpu().numpy())
     # path = f"./plots/poc/test_resizing/{name}.png"
-    cv2.imwrite(path, INDEX+'_'+img)
+    path = os.path.join(root, (str(INDEX)+'_'+path))
+    cv2.imwrite(path, img)
     print('processed', path)
     INDEX += 1
 
@@ -97,33 +100,35 @@ os.makedirs(root, exist_ok=True)
 index_batch = 3
 index_head = 2
 
-imsave(estimated_attention_score[index_batch,index_head], os.path.join(root, 'est_score.png'))
-imsave(estimated_attention_probs[index_batch,index_head], os.path.join(root, 'est_probs.png'))
-imsave(masked_estimated_attention_probs[index_batch,index_head], os.path.join(root, 'masked_est_probs.png'))
+imsave(estimated_attention_score[index_batch,index_head], 'est_score.png')
+imsave(estimated_attention_probs[index_batch,index_head], 'est_probs.png')
+imsave(masked_estimated_attention_probs[index_batch,index_head], 'masked_est_probs.png')
 
-imsave(estimated_attention_score_resized[index_batch,index_head], os.path.join(root, 'est_score_resized.png'))
-imsave(estimated_attention_probs_resized[index_batch,index_head], os.path.join(root, 'est_probs_resized.png'))
+imsave(estimated_attention_score_resized[index_batch,index_head], 'est_score_resized.png')
+imsave(estimated_attention_probs_resized[index_batch,index_head], 'est_probs_resized.png')
 
-imsave(attention_probs_truth[index_batch,index_head], os.path.join(root, 'probs_truth.png'))
-imsave(attention_probs_truth_m[index_batch,index_head], os.path.join(root, 'probs_truth_m.png'))
+imsave(attention_scores_truth[index_batch,index_head], 'scores_truth.png')
+imsave(attention_probs_truth[index_batch,index_head], 'probs_truth.png')
+imsave(attention_probs_truth_m[index_batch,index_head], 'probs_truth_m.png')
 
-if kwargs['perlin_colsel_method'] == 'sum_mask':
-    imsave(col_select_mask[index_batch], os.path.join(root, 'col_select_mask.png'))
+if kwargs['perlin_colsel']:
+    if kwargs['perlin_colsel_method'] == 'sum_mask':
+        imsave(col_select_mask[index_batch], 'col_select_mask.png')
 
-imsave(large_inx_mask[index_batch], os.path.join(root, 'large_inx_mask.png'))
-imsave(col_sel_estimated_attention_probs_bef_select[index_batch], os.path.join(root, 'colsel_est_probs_bef_select.png'))
+    imsave(large_inx_mask[index_batch], 'large_inx_mask.png')
+    imsave(col_sel_estimated_attention_probs_bef_select[index_batch], 'colsel_est_probs_bef_select.png')
 
-imsave(col_sel_estimated_attention_probs_selcol_filled[index_batch], os.path.join(root, 'colsel_est_probs_aft_select.png'))
+    imsave(col_sel_estimated_attention_probs_selcol_filled[index_batch], 'colsel_est_probs_aft_select.png')
 
-imsave(t_dead_mask[index_batch], os.path.join(root, 't_dead_mask.png'))
-imsave(partial_attention_mask_before_interp[index_batch,index_head], os.path.join(root, 'part_attn_mask_bef_interp.png'))
-imsave(partial_attention_mask[index_batch,index_head], os.path.join(root, 'part_attn_mask_aft_interp.png'))
+imsave(t_dead_mask[index_batch], 't_dead_mask.png')
+imsave(partial_attention_mask_before_interp[index_batch,index_head], 'part_attn_mask_bef_interp.png')
+imsave(partial_attention_mask[index_batch,index_head], 'part_attn_mask_aft_interp.png')
 
-imsave(attention_probs_dense[index_batch,index_head], os.path.join(root, 'attn_dense.png'))
-imsave(partial_attention_probs[index_batch,index_head], os.path.join(root, 'part_attn_probs.png'))
-imsave(partial_context_layer[index_batch], os.path.join(root, 'part_context_layer.png'))
+imsave(attention_probs_dense[index_batch,index_head], 'attn_dense.png')
+imsave(partial_attention_probs[index_batch,index_head], 'part_attn_probs.png')
+imsave(partial_context_layer[index_batch], 'part_context_layer.png')
 
-imsave(estimated_attention_probs_for_output[index_batch,index_head], os.path.join(root, 'est_probs_output.png'))
+imsave(estimated_attention_probs_for_output[index_batch,index_head], 'est_probs_output.png')
 
 # imsave(
 #     (estimated_attention_probs_for_output[index_batch,index_head] * (attention_mask[index_batch,0] > -1)) /\

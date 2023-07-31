@@ -163,7 +163,7 @@ class BaseTrainer:
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
-        name_colsel = f"_colsel_({self.perlin_colsel_method})_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
+        name_colsel = f"_colsel_{self.perlin_colsel_method}_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
@@ -222,7 +222,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
-            eval_steps=2,
+            eval_steps=2000,
             lr = lr,
             epochs = epochs,
             gradient_checkpointing = gradient_checkpointing,

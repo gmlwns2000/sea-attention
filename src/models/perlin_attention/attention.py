@@ -843,6 +843,7 @@ class PerlinAttention(nn.Module):
                 #print('attention_probs_truth_m', lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1))
                 #print('estimated_attention_probs_resized', estimated_attention_probs_resized)
                 #print('estimated_attention_score_resized', estimated_attention_score_resized)
+                get_bench().register_temp_buffer('attention_scores_truth', attention_scores_truth)
                 get_bench().register_temp_buffer('attention_probs_truth', None, lazy=lambda: F.softmax(attention_scores_truth, dim=-1) * (attention_mask.transpose(-1, -2) > -1))
                 get_bench().register_temp_buffer('attention_probs_truth_m', None, lazy=lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (attention_mask.transpose(-1, -2) > -1))
                 get_bench().register_temp_buffer('estimated_attention_probs_resized', estimated_attention_probs_resized)
@@ -894,7 +895,7 @@ class PerlinAttention(nn.Module):
                             elif col_select_method == "sum_mask":
                                 col_select_mask = col_sel_estimated_attention_probs >= (1/T_M) # [N, T, H*T_M]
                                 sum_per_col = col_select_mask.sum(dim=-2) # [N, H*T_M]
-                                get_bench().register_temp_buffer('col_select_mask', col_select_mask)
+                                get_bench().register_temp_buffer('col_select_mask', col_select_mask.float())
 
                             #print('sum_per_col', sum_per_col)
                             #print('sum_per_col.shape', sum_per_col.shape)
@@ -1079,7 +1080,7 @@ class PerlinAttention(nn.Module):
                             # breakpoint()
                             # partial_attention_mask.fill_(FP_MIN)
                             # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
-                            if perlin_col_select and k_flatten_dim=='batch':
+                            if k_flatten_dim=='batch':
                                 #print(f'{k_flatten_dim}: t_dead_mask.view(N, T, H*T_M)', t_dead_mask.float().view(N, T, H*T_M))
                                 get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, T, H*T_M))
                             partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
@@ -1423,7 +1424,7 @@ class PerlinAttention(nn.Module):
             if perlin_col_select:
                 save_colsel = self.pconfig.colsel_save
                 warnings.warn(f"save_colsel {save_colsel}")
-            if perlin_col_select and save_colsel:
+            if perlin_col_select and save_colsel: # can add global var to make this work once
                 root = './debug/colsel/'
                 os.makedirs(root, exist_ok=True)
                 path = root + f'{col_select_method}.hdf5'
