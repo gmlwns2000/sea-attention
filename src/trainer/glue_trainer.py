@@ -327,9 +327,9 @@ class Trainer:
         model.eval()
         
         if self.subset == 'bert':
-            metric = load_metric('glue', 'cola')
+            metric = load_metric('glue', 'cola', cache_dir = '/d1/jinakim/.cache/huggingface/metrics')
         else:
-            metric = load_metric('glue', self.subset)
+            metric = load_metric('glue', self.subset, cache_dir = '/d1/jinakim/.cache/huggingface/metrics')
         
         loader = self.valid_loader
         if split == 'train':
