@@ -94,7 +94,13 @@ def imsave(t: torch.Tensor, path):
     print('processed', path)
     INDEX += 1
 
-root = './saves/tests/test_perlin_col_sel_batch/'
+bool2int = lambda x: 1 if x else 0
+r = bool2int(kwargs['perlin_colsel'])
+m = kwargs['perlin_colsel_method']
+p = bool2int(kwargs['perlin_colsel_mask_in_probs'])
+root = f'./saves/tests/test_perlin_col_sel_batch/colsel{r}'
+if kwargs['perlin_colsel']:
+    root += f'/{m}_mprobs{p}'
 os.makedirs(root, exist_ok=True)
 
 index_batch = 3

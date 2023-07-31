@@ -391,7 +391,10 @@ class Trainer:
             except Exception as ex:
                 traceback.print_exc()
                 warnings.warn(f"optimizer load is failed due to {ex}, however we will just ignore it")
-            self.scaler.load_state_dict(state['scaler'])
+            if 'scaler' in state and len(state['scaler'])!=0:
+                self.scaler.load_state_dict(state['scaler'])
+            elif not self.amp_enabled and len(state['scaler'])!=0:
+                raise Exception(f"amp_enabled {self.amp_enabled} len(state[scaler]) {len(state['scaler'])}")
             del state
         except Exception as ex:
             print('error while load', ex)

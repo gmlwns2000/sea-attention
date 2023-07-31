@@ -12,6 +12,8 @@ from .common import (
     process_batch_index,
 )
 
+bool2int = lambda x: 1 if x else 0
+
 def main(
     subset = 'mnli',
     checkpoint_path = None,
@@ -51,13 +53,19 @@ def main(
                 'dense_attn': dense_attn,
                 'partial_attn': partial_attn,
             })
-    
-    os.makedirs(f"./plots/visualize_glue", exist_ok=True)
+    r = bool2int(kwargs['perlin_colsel'])
+    m = kwargs['perlin_colsel_method']
+    p = bool2int(kwargs['perlin_colsel_mask_in_probs'])
+    root = f"./plots/visualize_glue/colsel{r}/"
+    if kwargs['perlin_colsel']:
+        root += f'/{m}_mprobs{p}'
+    os.makedirs(root, exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
         # token_length = batch['input_ids'].shape[-1]
         img = process_batch_index(attentions, i, token_length)
-        path = f"./plots/visualize_glue/{i}.png"
+        
+        path = f"./plots/visualize_glue/colsel{r}/{i}.png"
         cv2.imwrite(path, img)
         print('processed', path)
     
