@@ -468,16 +468,17 @@ class PerlinAttention(nn.Module):
             cnn_first_padding = 2
             cnn_resnet_padding = 2
             cnn_resnet_dilation = 2
+        N_H = self.num_attention_heads
         self.attention_predictor_cnn = nn.Sequential(
             (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity()),
             KeepRes(
-                CausalConv2d(12, 48, cnn_first_kernel_size, padding=cnn_first_padding, stride=cnn_stride, causal=self.pconfig.causal),
+                CausalConv2d(N_H, 4*N_H, cnn_first_kernel_size, padding=cnn_first_padding, stride=cnn_stride, causal=self.pconfig.causal),
                 nn.ReLU(),
-                ResBlock(48, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
-                CausalConv2d(48, 48, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
-                ResBlock(48, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
+                ResBlock(4*N_H, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
+                CausalConv2d(4*N_H, 4*N_H, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
+                ResBlock(4*N_H, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
                 UpsampleFP32(cnn_stride, torch.float16),
-                CausalConv2d(48, 12, 3, padding=1, causal=self.pconfig.causal),
+                CausalConv2d(4*N_H, N_H, 3, padding=1, causal=self.pconfig.causal),
             ),
             # this prevent model explode within causal setting...
             (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity())

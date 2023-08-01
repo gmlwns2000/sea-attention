@@ -95,7 +95,8 @@ class Trainer:
                 if hasattr(m, 'gradient_checkpointing'):
                     print(f'patch gradient checkpointing {type(m)}')
                     m.gradient_checkpointing = True
-                    m.config.use_cache = False
+                    if hasattr(m, "config"):
+                        m.config.use_cache = False
         
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
     

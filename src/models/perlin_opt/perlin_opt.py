@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch OPT model."""
+from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
 from .. import hf_opt
@@ -501,6 +502,8 @@ class OPTDecoderLayer(nn.Module):
         self.fc1 = nn.Linear(self.embed_dim, config.ffn_dim, bias=config.enable_bias)
         self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim, bias=config.enable_bias)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine)
+        
+        self.gradient_checkpointing = False
 
     def forward(
         self,
@@ -531,7 +534,14 @@ class OPTDecoderLayer(nn.Module):
 
         # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
         if self.do_layer_norm_before:
-            hidden_states = self.self_attn_layer_norm(hidden_states)
+            def before_self_atten(hidden_states):
+                hidden_states = self.self_attn_layer_norm(hidden_states)
+                return hidden_states
+            
+            if self.gradient_checkpointing and self.training:
+                hidden_states = torch.utils.checkpoint.checkpoint(before_self_atten, hidden_states)
+            else:
+                hidden_states = before_self_atten(hidden_states)
 
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
@@ -542,33 +552,42 @@ class OPTDecoderLayer(nn.Module):
             output_attentions=output_attentions,
             use_cache=use_cache,
         )
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
-        hidden_states = residual + hidden_states
+        
+        def after_self_atten(residual, hidden_states):
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = residual + hidden_states
 
-        # 350m applies layer norm AFTER attention
-        if not self.do_layer_norm_before:
-            hidden_states = self.self_attn_layer_norm(hidden_states)
+            # 350m applies layer norm AFTER attention
+            if not self.do_layer_norm_before:
+                hidden_states = self.self_attn_layer_norm(hidden_states)
 
-        # Fully Connected
-        hidden_states_shape = hidden_states.shape
-        hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
-        residual = hidden_states
+            # Fully Connected
+            hidden_states_shape = hidden_states.shape
+            hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
+            residual = hidden_states
 
-        # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
-        if self.do_layer_norm_before:
-            hidden_states = self.final_layer_norm(hidden_states)
+            # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
+            if self.do_layer_norm_before:
+                hidden_states = self.final_layer_norm(hidden_states)
 
-        hidden_states = self.fc1(hidden_states)
-        hidden_states = self.activation_fn(hidden_states)
+            hidden_states = self.fc1(hidden_states)
+            hidden_states = self.activation_fn(hidden_states)
 
-        hidden_states = self.fc2(hidden_states)
-        hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            hidden_states = self.fc2(hidden_states)
+            hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
-        hidden_states = (residual + hidden_states).view(hidden_states_shape)
+            hidden_states = (residual + hidden_states).view(hidden_states_shape)
 
-        # 350m applies layer norm AFTER attention
-        if not self.do_layer_norm_before:
-            hidden_states = self.final_layer_norm(hidden_states)
+            # 350m applies layer norm AFTER attention
+            if not self.do_layer_norm_before:
+                hidden_states = self.final_layer_norm(hidden_states)
+                
+            return hidden_states
+        
+        if self.gradient_checkpointing and self.training:
+            hidden_states = torch.utils.checkpoint.checkpoint(after_self_atten, residual, hidden_states)
+        else:
+            hidden_states = after_self_atten(residual, hidden_states)
 
         outputs = (hidden_states,)
 
@@ -901,7 +920,7 @@ class OPTDecoder(OPTPreTrainedModel):
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
-            if self.gradient_checkpointing and self.training:
+            if self.gradient_checkpointing and self.training and False:
 
                 def create_custom_forward(module):
                     def custom_forward(*inputs):

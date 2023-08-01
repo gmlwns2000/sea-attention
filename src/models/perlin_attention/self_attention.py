@@ -16,6 +16,7 @@ from ..common.lora import (
 from ..hf_bert import BertConfig
 from .attention import PerlinAttention, PerlinAttentionOutput
 from .config import PerlinAttentionConfig, get_default_config
+import torch.utils.checkpoint
 
 default_lazy = lambda x, d: d() if x is None else x
 
@@ -52,6 +53,8 @@ class PerlinSelfAttention(nn.Module):
             config=config,
             perlin_config=perlin_config,
         )
+        
+        self.gradient_checkpointing = False
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim == 4: return x
@@ -149,20 +152,80 @@ class PerlinSelfAttention(nn.Module):
         else:
             query_layer_for_atten = query_layer_for_score = query_layer
         
-        output = self.attention(
-            q=query_layer,
-            k=key_layer,
-            v=value_layer,
-            q_for_atten=query_layer_for_atten,
-            k_for_atten=key_layer_for_atten,
-            v_for_atten=value_layer_for_atten,
-            q_for_score=query_layer_for_score,
-            k_for_score=key_layer_for_score,
-            attention_mask=attention_mask,
-            attention_scores_truth=attention_scores_truth,
-            context_layer_truth=context_layer_truth,
-            last_state=last_state,
-        ) #type: PerlinAttentionOutput
+        if self.gradient_checkpointing and self.training:
+            def custom_forward(
+                query_layer, key_layer, value_layer, 
+                query_layer_for_atten, key_layer_for_atten, value_layer_for_atten, 
+                query_layer_for_score, key_layer_for_score, 
+                attention_mask, attention_scores_truth, context_layer_truth, 
+                last_state
+            ):
+                output = self.attention(
+                    q=query_layer,
+                    k=key_layer,
+                    v=value_layer,
+                    q_for_atten=query_layer_for_atten,
+                    k_for_atten=key_layer_for_atten,
+                    v_for_atten=value_layer_for_atten,
+                    q_for_score=query_layer_for_score,
+                    k_for_score=key_layer_for_score,
+                    attention_mask=attention_mask,
+                    attention_scores_truth=attention_scores_truth,
+                    context_layer_truth=context_layer_truth,
+                    last_state=last_state,
+                ) #type: PerlinAttentionOutput
+                return (
+                    output.context_layer, 
+                    output.dense_attention_probs, 
+                    output.estimated_attention_probs, 
+                    output.key_for_score, 
+                    output.loss, 
+                    output.partial_attention_mask, 
+                    output.partial_attention_probs, 
+                    output.state
+                )
+            (
+                context_layer, 
+                dense_attention_probs, 
+                estimated_attention_probs, 
+                key_for_score, 
+                loss, 
+                partial_attention_mask, 
+                partial_attention_probs, 
+                state
+            ) = torch.utils.checkpoint.checkpoint(custom_forward, 
+                query_layer, key_layer, value_layer, 
+                query_layer_for_atten, key_layer_for_atten, value_layer_for_atten, 
+                query_layer_for_score, key_layer_for_score, 
+                attention_mask, attention_scores_truth, context_layer_truth, 
+                last_state, 
+                use_reentrant=True
+            )
+            output = PerlinAttentionOutput(
+                loss=loss,
+                context_layer=context_layer,
+                partial_attention_probs=partial_attention_probs,
+                partial_attention_mask=partial_attention_mask,
+                estimated_attention_probs=estimated_attention_probs,
+                dense_attention_probs=dense_attention_probs,
+                key_for_score=key_for_score,
+                state=state
+            )
+        else:
+            output = self.attention(
+                q=query_layer,
+                k=key_layer,
+                v=value_layer,
+                q_for_atten=query_layer_for_atten,
+                k_for_atten=key_layer_for_atten,
+                v_for_atten=value_layer_for_atten,
+                q_for_score=query_layer_for_score,
+                k_for_score=key_layer_for_score,
+                attention_mask=attention_mask,
+                attention_scores_truth=attention_scores_truth,
+                context_layer_truth=context_layer_truth,
+                last_state=last_state,
+            ) #type: PerlinAttentionOutput
         self.last_attention_probs = output.partial_attention_probs
         
         if self.pconfig.layerwise and self.training:
