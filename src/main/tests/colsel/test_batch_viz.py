@@ -1,9 +1,9 @@
-from ...utils import get_bench
-from ..visualize.glue import main as visualize_main
-from ..visualize.glue import add_perlin_model_options, parse_perlin_model_options
+from ....utils import get_bench
+from ...visualize.glue import main as visualize_main
+from ...visualize.glue import add_perlin_model_options, parse_perlin_model_options
 import argparse, os, torch
 import matplotlib.pyplot as plt
-from ..visualize.common import convert_to_colormap
+from ...visualize.common import convert_to_colormap
 import cv2
 
 # if __name__ == '__main__':
@@ -38,7 +38,7 @@ index_layer = 7
 attention_mask = bench.get_temp_buffer('attention_mask', index_layer)
 # estimated : right after prediction
 estimated_attention_score = bench.get_temp_buffer('estimated_attention_score', index_layer)
-estimated_attention_probs = bench.get_temp_buffer('estimated_attention_probs', index_layer) # masked in 594
+estimated_attention_probs_bef_masked = bench.get_temp_buffer('estimated_attention_probs_bef_masked', index_layer) # masked in 594
 masked_estimated_attention_probs = bench.get_temp_buffer('masked_estimated_attention_probs', index_layer) # must be same with estimated_attention_probs, delete this
 
 # estimated : after resized
@@ -100,14 +100,14 @@ m = kwargs['perlin_colsel_method']
 p = bool2int(kwargs['perlin_colsel_mask_in_probs'])
 root = f'./saves/tests/test_perlin_col_sel_batch/colsel{r}'
 if kwargs['perlin_colsel']:
-    root += f'/{m}_mprobs{p}'
+    root += f'_{m}_mprobs{p}'
 os.makedirs(root, exist_ok=True)
 
 index_batch = 3
 index_head = 2
 
 imsave(estimated_attention_score[index_batch,index_head], 'est_score.png')
-imsave(estimated_attention_probs[index_batch,index_head], 'est_probs.png')
+imsave(estimated_attention_probs_bef_masked[index_batch,index_head], 'est_probs_bef_masked.png')
 imsave(masked_estimated_attention_probs[index_batch,index_head], 'masked_est_probs.png')
 
 imsave(estimated_attention_score_resized[index_batch,index_head], 'est_score_resized.png')
@@ -126,7 +126,7 @@ if kwargs['perlin_colsel']:
 
     imsave(col_sel_estimated_attention_probs_selcol_filled[index_batch], 'colsel_est_probs_aft_select.png')
 
-imsave(t_dead_mask[index_batch], 't_dead_mask.png')
+imsave(t_dead_mask[index_batch], 't_dead_mask.png') # NOTE shape differs btw 'batch' and 'head'
 imsave(partial_attention_mask_before_interp[index_batch,index_head], 'part_attn_mask_bef_interp.png')
 imsave(partial_attention_mask[index_batch,index_head], 'part_attn_mask_aft_interp.png')
 

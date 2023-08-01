@@ -695,7 +695,7 @@ class PerlinAttention(nn.Module):
             
             # JINA_VIZ_COLSEL 2
             #print('estimated_attention_score',estimated_attention_score)
-            #print('estimated_attention_probs', estimated_attention_probs)
+            #print('estimated_attention_probs_bef_masked', estimated_attention_probs)
             get_bench().register_temp_buffer('estimated_attention_score', estimated_attention_score)
             get_bench().register_temp_buffer('estimated_attention_probs', estimated_attention_probs)
             
@@ -1076,13 +1076,26 @@ class PerlinAttention(nn.Module):
                         # #print((token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)).view(-1), token_length.view(-1), top_k, self.pconfig.k, (T_M/token_length).view(-1), per_item_top_k.view(-1))
                         # t_dead_mask = partial_attention_mask >= (token_length * (top_k * H if k_flatten_dim == 'batch' else top_k)) #k is resized
                         if not self.benchmarking:
-                            t_dead_mask = partial_attention_mask >= per_item_top_k
+                            if k_flatten_dim in ['batch', 'causal_batch']: # TODO check for causal_batch case
+                                t_dead_mask = partial_attention_mask >= per_item_top_k
+                            elif k_flatten_dim == 'head':
+                                t_dead_mask = partial_attention_mask >= ((per_item_top_k).view(N, 1, 1).expand_as(partial_attention_mask)) # N, H, T*T_M
+                            else:
+                                raise Exception(f"k_flatten_dim {k_flatten_dim}")
+                            
                             # breakpoint()
                             # partial_attention_mask.fill_(FP_MIN)
                             # partial_attention_mask.masked_fill_(t_alive_mask, value=0)
+                            
                             if k_flatten_dim=='batch':
                                 #print(f'{k_flatten_dim}: t_dead_mask.view(N, T, H*T_M)', t_dead_mask.float().view(N, T, H*T_M))
-                                get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, T, H*T_M))
+                                if perlin_col_select:
+                                    get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, T, H*T_M))
+                                else:
+                                    get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, H, T, T_M).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M)) # N, H*T*T_M
+                            elif k_flatten_dim == 'head':
+                                get_bench().register_temp_buffer('t_dead_mask', None, lambda: t_dead_mask.float().view(N, H, T, T_M))
+
                             partial_attention_mask = t_dead_mask.to(q.dtype) * FP_MIN
                             # breakpoint()
                         else:
@@ -1097,7 +1110,7 @@ class PerlinAttention(nn.Module):
                             # breakpoint()
                             partial_attention_mask.scatter_(dim=-1, index=large_inx, value=0.0) # [N, T, selected_col_cnt] ~> (N, T, H*T_M)
                             # breakpoint()
-                            partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).permute(0,2,1,3)
+                            partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).permute(0,2,1,3) # TODO check : no need to add contiguous
                             # breakpoint()
                         elif k_flatten_dim=="head":
                             partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
@@ -1439,7 +1452,7 @@ class PerlinAttention(nn.Module):
                         'estimated_attention_score': estimated_attention_score,
 
                         'estimated_attention_probs.shape' : estimated_attention_probs.shape,
-                        'estimated_attention_probs': estimated_attention_probs,
+                        'estimated_attention_probs_bef_masked': estimated_attention_probs,
 
                         'masked_estimated_attention_probs.shape' : masked_estimated_attention_probs.shape,
                         'masked_estimated_attention_probs': masked_estimated_attention_probs,
@@ -1497,8 +1510,8 @@ class PerlinAttention(nn.Module):
                     }
                     for k, v in d.items():
                         f.create_dataset(k, data=v)
-
-
+                print(f"attention: saved {path}")
+                
             if use_cache:
                 partial_context_layer = partial_context_layer[:,-1:,:]
             

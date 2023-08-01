@@ -65,7 +65,7 @@ def main(
         # token_length = batch['input_ids'].shape[-1]
         img = process_batch_index(attentions, i, token_length)
         
-        path = f"./plots/visualize_glue/colsel{r}/{i}.png"
+        path = root + f"/{i}.png"
         cv2.imwrite(path, img)
         print('processed', path)
     

@@ -28,7 +28,7 @@ visualize_main(**kwargs)
 index_layer = 7
 
 attention_mask = bench.get_temp_buffer('attention_mask', index_layer)
-estimated_attention_probs_bef_colsel = bench.get_temp_buffer('estimated_attention_probs', index_layer)
+estimated_attention_probs_bef_colsel = bench.get_temp_buffer('estimated_attention_probs_bef_masked', index_layer)
 attention_probs_dense = bench.get_temp_buffer('attention_probs_dense', index_layer)
 col_sel_estimated_attention_probs_bef_select = bench.get_temp_buffer('col_sel_estimated_attention_probs_bef_select', index_layer)
 # sum_per_col = bench.get_temp_buffer('sum_per_col', index_layer)
