@@ -550,6 +550,8 @@ class PerlinAttention(nn.Module):
         else:
             raise Exception('unknown type')
         
+        _, _, _, T_SRC = attention_mask.shape
+        T_DST = T_SRC
         if self.pconfig.causal:
             if not use_cache:
                 N, H, T_DST, T_SRC = attention_mask.shape
@@ -788,7 +790,8 @@ class PerlinAttention(nn.Module):
                                 # token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) + 2).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
                                 mask = token_index_x
                                 mask_cs = mask.cumsum(-1)
-                                token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * math.floor(mask_cs[:, :, -1].unsqueeze(-1)/T_M)
+                                # token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * torch.floor(mask_cs[:, :, -1].unsqueeze(-1)/T_M)
+                                token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * mask_cs[:, :, -1].unsqueeze(-1) / T_M
                                 token_index_x = torch.clamp(((((mask_cs - 1) + (1 - mask) * 5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
                                 token_index_x = token_index_x.expand(N, T1, T2)
                             else:

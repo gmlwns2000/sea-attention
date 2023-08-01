@@ -262,8 +262,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }
         }[model][subset]
         
-        # double the length!
-        perlin_attention.get_default_config().attention_predictor_length = 256
+        # # double the length!
+        # perlin_attention.get_default_config().attention_predictor_length = 256
         
         BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
