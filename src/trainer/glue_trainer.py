@@ -269,6 +269,8 @@ class Trainer:
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
         }
+
+        # breakpoint()
         
         return loss.item()
     
@@ -326,10 +328,11 @@ class Trainer:
             model = self.model
         model.eval()
         
+        from ..utils.secrets import CACHE_DIR
         if self.subset == 'bert':
-            metric = load_metric('glue', 'cola', cache_dir = '/d1/jinakim/.cache/huggingface/metrics')
+            metric = load_metric('glue', 'cola', cache_dir = CACHE_DIR)
         else:
-            metric = load_metric('glue', self.subset, cache_dir = '/d1/jinakim/.cache/huggingface/metrics')
+            metric = load_metric('glue', self.subset, cache_dir = CACHE_DIR)
         
         loader = self.valid_loader
         if split == 'train':
@@ -359,7 +362,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint_dummy.pth'
         return path
     
     def save(self):
