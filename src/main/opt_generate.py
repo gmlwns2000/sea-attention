@@ -34,14 +34,15 @@ def main(
     model = trainer.model.to(trainer.device).eval() # type: perlin_opt.OPTForCausalLM
     tokenizer = trainer.tokenizer
     
+    use_cache = True
     def generate(prompt):
         inputs = tokenizer(prompt, return_tensors="pt")
         with torch.no_grad():
-            generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'], use_cache=False)
+            generate_ids = model.generate(inputs.input_ids.to(trainer.device), max_length=kwargs['max_seq_len'], use_cache=use_cache)
         generated_text = tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         return inputs, generate_ids, generated_text
     
-    perlin_attention.get_default_config().use_cache = False
+    perlin_attention.get_default_config().use_cache = use_cache
     sample_text = "Robert <unk> is an English film , television and theatre actor ."
     _, _, generated_text = generate(sample_text)
     print('sample:', sample_text)

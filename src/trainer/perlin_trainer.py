@@ -262,6 +262,9 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }
         }[model][subset]
         
+        # double the length!
+        perlin_attention.get_default_config().attention_predictor_length = 256
+        
         BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
             model_cls=perlin_opt.OPTForCausalLM,
@@ -271,6 +274,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_checkpointing=gradient_checkpointing,
             max_seq_len=max_seq_len,
+            lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
             lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
             additional_config=perlin_attention.get_default_config().to_json(),
         ), skip_init_loaders=kwargs.get('skip_init_loaders', False))

@@ -35,14 +35,15 @@ from .modules import (
     interpolate
 )
 from math import ceil, floor
-# NOTE HJ comment below to debug NaN
+# NOTE comment below to debug NaN
 raise_if_nan = lambda x: x
+# torch.autograd.set_detect_anomaly(True)
 
 timer = lambda name: get_bench().region(name)
 mem = lambda name: get_bench().mem_region(name)
 metric = Metric()
 
-# NOTE HJ for temperaty development
+# NOTE for temperaty development
 T_MASK = None
 
 def grid_sample_bf16(input, grid, mode='nearest', align_corners=False, padding_mode='zeros'):
@@ -85,31 +86,47 @@ class StatefulCausalPerformer:
     
     def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
         # naive
+        self.seq_index += q.shape[-2]
         self.qs.append(q)
         qs = torch.cat(self.qs, dim=-2)
-        context = self.performer(qs, k, v)
-        return context[...,-q.shape[-2]:,:]
+        
+        #TODO: fix this!!
+        qs = F.pad(qs, pad=(0,0,0,256-qs.shape[-2]), mode='constant', value=0)
+        k = F.pad(k, pad=(0,0,0,256-k.shape[-2]), mode='constant', value=0)
+        v = F.pad(v, pad=(0,0,0,256-v.shape[-2]), mode='constant', value=0)
+        
+        original_causal_fn = self.performer.causal_linear_fn
+        self.performer.causal_linear_fn = self._causal_linear_attention_noncuda_stateful
+        context = self.performer(qs,k,v)
+        self.performer.causal_linear_fn = original_causal_fn
+        
+        return context[...,self.seq_index-q.shape[-2]:self.seq_index,:]
+    
+        # context = self.performer(q, k, v)
+        # return context
 
-    # def _causal_linear_attention_noncuda_stateful(
-    #     self, q, k, v, chunk_size = 128, eps = 1e-6
-    # ):
-    #     last_k_cumsum = 0
-    #     last_context_cumsum = 0
-    #     outs = []
+    def _causal_linear_attention_noncuda_stateful(
+        self, q, k, v, chunk_size = None, eps = 1e-6
+    ):
+        last_k_cumsum = 0
+        last_context_cumsum = 0
+        outs = []
+        
+        chunk_size = q.shape[-2]
 
-    #     for q, k, v in zip(*map(lambda t: t.chunk(chunk_size, dim = -2), (q, k, v))):
-    #         k_cumsum = last_k_cumsum + k.cumsum(dim=-2)
+        for q, k, v in zip(*map(lambda t: t.chunk(chunk_size, dim = -2), (q, k, v))):
+            k_cumsum = last_k_cumsum + k.cumsum(dim=-2, dtype=torch.float64)
 
-    #         D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
-    #         context = torch.einsum('...nd,...ne->...nde', k, v)
-    #         context_cumsum = last_context_cumsum + context.cumsum(dim=-3)
-    #         out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum, q, D_inv)
+            D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
+            context = torch.einsum('...nd,...ne->...nde', k, v)
+            context_cumsum = last_context_cumsum + context.cumsum(dim=-3, dtype=torch.float64)
+            out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum.type_as(q), q, D_inv)
 
-    #         last_k_cumsum = k_cumsum[:, :, -1:]
-    #         last_context_cumsum = context_cumsum[:, :, -1:]
-    #         outs.append(out)
+            last_k_cumsum = k_cumsum[:, :, -1:]
+            last_context_cumsum = context_cumsum[:, :, -1:]
+            outs.append(out)
 
-    #     return torch.cat(outs, dim = -2)
+        return torch.cat(outs, dim = -2)
 
     # def causal_linear_attention_noncuda_stateful(
     #     self, q_chunk, k_all, v_all, chunk_size = 1, eps=1e-20,
@@ -124,12 +141,12 @@ class StatefulCausalPerformer:
     #         k = k_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
     #         v = v_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
             
-    #         k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2).to(torch.float64)
+    #         k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2, dtype=torch.float64)
     #         # k_cumsum = self.last_k_cumsum + k.to(torch.float64)
 
     #         D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
     #         context = torch.einsum('...nd,...ne->...nde', k, v)
-    #         context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3).to(torch.float64)
+    #         context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3, dtype=torch.float64)
     #         out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum.type_as(q), q, D_inv)
 
     #         self.last_k_cumsum = k_cumsum[..., -1:, :]
@@ -181,7 +198,7 @@ class StatefulCausalCNN:
     def __init__(self, parent: "PerlinAttentionState"):
         self.parent = parent
         self.max_seq_len = self.parent.max_seq_length
-        self.window_size = 32
+        self.window_size = 24
         self.window_align = 4
         self.xs = []
         self.xs_len = 0
@@ -396,6 +413,7 @@ class PerlinAttention(nn.Module):
             dim_heads = self.attention_head_size,
             nb_features = self.performer_nb_features,
             causal=self.pconfig.causal,
+            generalized_attention=self.pconfig.causal,
         )
         self.performer_proj_updater = ProjectionUpdater(
             self.performer,
@@ -439,14 +457,32 @@ class PerlinAttention(nn.Module):
         #     nn.Conv2d(12, 12, 3, padding=1, padding_mode=padding_mode),
         #     nn.LayerNorm(self.pconfig.attention_predictor_length),
         # )
-        self.attention_predictor_cnn = KeepRes(
-            CausalConv2d(12, 48, 3, padding=1, stride=2, causal=self.pconfig.causal),
-            nn.ReLU(),
-            ResBlock(48, causal=self.pconfig.causal),
-            ResBlock(48, causal=self.pconfig.causal),
-            UpsampleFP32(2, torch.float16),
-            CausalConv2d(48, 12, 3, padding=1, causal=self.pconfig.causal),
+        cnn_stride = 2
+        cnn_first_kernel_size = 3
+        cnn_first_padding = 1
+        cnn_resnet_dilation = 1
+        cnn_resnet_padding = 1
+        if self.pconfig.causal:
+            cnn_stride = (1, 4)
+            cnn_first_kernel_size = 5
+            cnn_first_padding = 2
+            cnn_resnet_padding = 2
+            cnn_resnet_dilation = 2
+        self.attention_predictor_cnn = nn.Sequential(
+            (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity()),
+            KeepRes(
+                CausalConv2d(12, 48, cnn_first_kernel_size, padding=cnn_first_padding, stride=cnn_stride, causal=self.pconfig.causal),
+                nn.ReLU(),
+                ResBlock(48, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
+                CausalConv2d(48, 48, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
+                ResBlock(48, causal=self.pconfig.causal, padding=cnn_resnet_padding, dilation=cnn_resnet_dilation),
+                UpsampleFP32(cnn_stride, torch.float16),
+                CausalConv2d(48, 12, 3, padding=1, causal=self.pconfig.causal),
+            ),
+            # this prevent model explode within causal setting...
+            (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity())
         )
+        # self.attention_predictor_cnn = nn.Identity()
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 2),
         )
@@ -638,7 +674,7 @@ class PerlinAttention(nn.Module):
                         )
                     if q_type != performer_context_layer.dtype:
                         performer_context_layer = performer_context_layer.to(q_type)
-                    assert performer_context_layer.shape[-2] == q.shape[-2]
+                    assert performer_context_layer.shape[-2] == q.shape[-2], f"{performer_context_layer.shape} == {q.shape}, {v_for_atten.shape}"
                     # print('pcl', strify(performer_context_layer), strify(q), strify(k), strify(v))
                 else:
                     # TODO: fix numerical stability...
@@ -671,6 +707,7 @@ class PerlinAttention(nn.Module):
                     t_attention_predictor = self.attention_predictor_enc(performer_value)
                     raise_if_nan(t_attention_predictor)
                     estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
+                    get_bench().register_temp_buffer('estimated_attention_score_dec_row', estimated_attention_score)
                     raise_if_nan(estimated_attention_score)
                     # estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
                     # raise_if_nan(estimated_attention_score)
@@ -751,7 +788,7 @@ class PerlinAttention(nn.Module):
                                 # token_index_x = (token_index_x / ((zero_one_attention_mask.sum(-1) + 2).view(N, 1, 1) + 1e-8) * 2 - 1).expand(N, T1, T2)
                                 mask = token_index_x
                                 mask_cs = mask.cumsum(-1)
-                                token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * (mask_cs[:, :, -1].unsqueeze(-1)/T_M)
+                                token_length = (mask_cs[:, :, -1].unsqueeze(-1) - 1) + 3 * math.floor(mask_cs[:, :, -1].unsqueeze(-1)/T_M)
                                 token_index_x = torch.clamp(((((mask_cs - 1) + (1 - mask) * 5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
                                 token_index_x = token_index_x.expand(N, T1, T2)
                             else:
@@ -762,8 +799,10 @@ class PerlinAttention(nn.Module):
                             mask = (causal_attention_mask > -1).float()
                             _N, _H, _TQ, _TK = mask.shape
                             mask_cs = mask.cumsum(-1)
-                            token_length = (mask_cs[:, :, :, -1].unsqueeze(-1) - 1) + 3 * (_TK/T_M)
-                            token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000  * (_TK/T_M))) / (token_length + 1e-8)) * 2 - 1, -1, 1)
+                            token_length = (mask_cs[:, :, :, -1].unsqueeze(-1) - 1) + 3 * math.floor(_TK/T_M)
+                            if self.training:
+                                mask_cs = torch.clamp(mask_cs + (torch.rand_like(mask_cs) * 4 - 2), torch.min(mask_cs), torch.max(mask_cs))
+                            token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
                             assert _H == 1
                             token_index_x = token_index_x[:,0,:,:]
                         token_index_y = (
@@ -789,7 +828,7 @@ class PerlinAttention(nn.Module):
                             input=grid_input,
                             grid=token_index,
                             mode='nearest',
-                            align_corners=True,
+                            align_corners=False,
                             padding_mode='border'
                         )
             
@@ -1235,10 +1274,15 @@ class PerlinAttention(nn.Module):
                     performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
                     performer_context_layer = performer_context_layer.view(new_context_layer_shape)
             
+            get_bench().register_temp_buffer('partial_context_layer_sparse', partial_context_layer)
+            
             with timer("out"):
                 if not self.pconfig.random_lookup:
+                    normalized_partial_context_layer = self.norm_partial(partial_context_layer)
+                    get_bench().register_temp_buffer('normalized_partial_context_layer', normalized_partial_context_layer)
+                    
                     partial_context_layer = \
-                        self.norm_partial(partial_context_layer) +\
+                        normalized_partial_context_layer +\
                         partial_context_layer
                     if self.pconfig.out_add_performer_context:
                         raise Exception('performer context hidden size is modified')

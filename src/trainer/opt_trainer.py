@@ -91,9 +91,9 @@ class Trainer:
         self.max_seq_len = min(default(self.config.max_seq_len, 32000), max_length)
         
         if self.config.gradient_checkpointing:
-            print('patch gradient checkpointing')
             for m in self.model.modules():
                 if hasattr(m, 'gradient_checkpointing'):
+                    print(f'patch gradient checkpointing {type(m)}')
                     m.gradient_checkpointing = True
                     m.config.use_cache = False
         
