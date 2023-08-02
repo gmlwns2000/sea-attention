@@ -903,15 +903,16 @@ class PerlinAttention(nn.Module):
                             softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
                         )
                     else:
-                        loss_kl_t = F.kl_div(
-                            F.log_softmax(estimated_attention_score_resized.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, estimated_attention_probs_resized.shape[-1]),
-                            F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, estimated_attention_probs_resized.shape[-1]),
-                            reduction='batchmean',
-                        ) * 0.1
-                        loss_mse_t = F.mse_loss(
-                            softmax_bf16(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN), dim=-1), 
-                            softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN), dim=-1)
-                        )
+                        with torch.autocast('cuda', torch.float32):
+                            loss_kl_t = F.kl_div(
+                                F.log_softmax(estimated_attention_score_resized.masked_fill(causal_attention_mask < -1, FP_MIN).to(torch.float32), dim=-1).view(-1, estimated_attention_probs_resized.shape[-1]),
+                                F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).to(torch.float32).view(-1, estimated_attention_probs_resized.shape[-1]),
+                                reduction='batchmean',
+                            ) * 0.1
+                            loss_mse_t = F.mse_loss(
+                                softmax_bf16(estimated_attention_score_resized.masked_fill(attention_mask < -1, FP_MIN).to(torch.float32), dim=-1), 
+                                softmax_bf16(attention_scores_truth.masked_fill(attention_mask < -1, FP_MIN).to(torch.float32), dim=-1)
+                            )
                     
                     raise_if_nan(loss_kl_t)
                     raise_if_nan(loss_mse_t)
@@ -986,6 +987,9 @@ class PerlinAttention(nn.Module):
                                 # NOTE consider causal token length
                                 per_item_top_k = torch.clamp((H * torch.floor(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
                         else: raise Exception()
+                        
+                        # NOTE to prevent 0 top-k when large T and small T_m
+                        per_item_top_k = torch.clamp_min(per_item_top_k, 1)
                         
                         top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
@@ -1140,15 +1144,16 @@ class PerlinAttention(nn.Module):
                             )
                         else:
                             attention_scores_dense = attention_scores_dense
-                            loss += F.kl_div(
-                                F.log_softmax(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
-                                F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1).view(-1, attention_scores_dense.shape[-1]),
-                                reduction='batchmean',
-                            ) * 0.1
-                            loss += F.mse_loss(
-                                softmax_bf16(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1), 
-                                softmax_bf16(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN), dim=-1),
-                            )
+                            with torch.autocast('cuda', torch.float32):
+                                loss += F.kl_div(
+                                    F.log_softmax(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN).to(torch.float32), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                                    F.softmax(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN).to(torch.float32), dim=-1).view(-1, attention_scores_dense.shape[-1]),
+                                    reduction='batchmean',
+                                ) * 0.1
+                                loss += F.mse_loss(
+                                    softmax_bf16(attention_scores_dense.masked_fill(causal_attention_mask < -1, FP_MIN).to(torch.float32), dim=-1), 
+                                    softmax_bf16(attention_scores_truth.masked_fill(causal_attention_mask < -1, FP_MIN).to(torch.float32), dim=-1),
+                                )
                     get_bench().register_temp_buffer('attention_scores_dense', attention_scores_dense)
                     raise_if_nan(loss)
                     
@@ -1189,7 +1194,7 @@ class PerlinAttention(nn.Module):
                     
                     # NOTE: print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask.to_dense() > 0).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()
-                    # print(metric.update(avg_k_per_batch, name='avgk'))
+                    # print(metric.update(avg_k_per_batch, name='avgk'), flush=True)
                     
                     # using Numba
                     N, H, T, HEAD_H = q_for_score.shape
@@ -1201,6 +1206,7 @@ class PerlinAttention(nn.Module):
                             else:
                                 sparse_attention_mask = partial_attention_mask
                         with timer("attention.sparse"), mem("attention.sparse"):
+                            assert sparse_attention_mask._nnz() > 0, sparse_attention_mask
                             partial_attention_scores = sparse_attn(
                                 q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 

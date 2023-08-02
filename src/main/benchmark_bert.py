@@ -48,11 +48,19 @@ def bench(name, fn, config: BenchConfig):
                 break
         torch.cuda.synchronize()
         print('benchmarking', end = '', flush=True)
-        t = time.time()
+        elapsed = 0
         last_report = time.time()
         while True:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            
+            start.record()
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
+            end.record()
+            torch.cuda.synchronize()
+            elapsed += start.elapsed_time(end) / 1000
+            
             sample_count += 1
             if time.time() - t > config.t_sample:
                 break
@@ -61,7 +69,6 @@ def bench(name, fn, config: BenchConfig):
                 print('.', end='', flush=True)
         torch.cuda.synchronize()
         mem = torch.cuda.max_memory_allocated() - start_mem
-        elapsed = time.time() - t
     except torch.cuda.OutOfMemoryError as ex: # type: ignore
         mem = 0
         elapsed = 0
@@ -88,6 +95,12 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     config = AutoConfig.from_pretrained('bert-base-uncased')
     config.max_position_embeddings = SEQ_LEN
 
+    pred_len = 128
+    if bench_config.seq_len >= 4096:
+        pred_len = 256
+    elif bench_config.seq_len >= 8192:
+        pred_len = 512
+
     register_default_config(PerlinAttentionConfig(
         performer_nb_factor=bench_config.nbf if method == 'perlin' else 1,
         lora_enabed=False,
@@ -95,6 +108,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         partial_attention_scaler=True,
         k_flatten=True,
         k=bench_config.k,
+        attention_predictor_length=pred_len
     ))
     perlin = BertModel(config).eval()
     for module in perlin.modules():
@@ -138,18 +152,22 @@ def exam_config(config: BenchConfig):
     proc.join()
     return q.get()
 
+BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+
 def main_methods():
-    for method in ['perlin', 'none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']:
+    for method in BASELINES:
         exam_config(BenchConfig(
             method=method
         ))
     
-def main_plot():
+def measure_and_dump():
     precision = torch.float32
     
-    baseline_methods = ['none', 'performer', 'reformer', 'sinkhorn', 'synthesizer', 'scatterbrain']
-    ts = [2**x for x in range(8, 14)]
-    ks = [2**x for x in range(3, 9)]
+    baseline_methods = BASELINES
+    ts = [2**x for x in range(8, 16)]
+    ks = [2**x for x in range(3, 8)]
+    # ts = [2048]
+    # ks = [8]
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
     
@@ -207,29 +225,87 @@ def main_plot():
             'ts': ts,
             'ks': ks,
         }, f)
+
+def load_and_plot():
+    baseline_methods = BASELINES
+    root = './plots/main/benchmark_bert'
+    os.makedirs(root, exist_ok=True)
     
-    def plot(metric_name, baselines, perlins, ts, ks):
+    with open(os.path.join(root, 'data.json'), 'r') as f:
+        data = json.load(f)
+    latencies_baseline = data['latencies_baseline']
+    latencies_perlin = data['latencies_perlin']
+    vram_baseline = data['vram_baseline']
+    vram_perlin = data['vram_perlin']
+    ts = data['ts']
+    ks = data['ks']
+    
+    def plot(filename, title, ylabel, baselines, perlins, ts, ks):
         plt.clf()
         
-        for iy, ys in enumerate(baselines):
-            plt.plot(ts, ys, label=baseline_methods[iy], linestyle='--', linewidth=0.75)
-        for ik, k in enumerate(ks):
-            plt.plot(ts, perlins[ik], label=f'k={k}', linewidth=0.75)
+        MARKERS = {
+            'none': '>',
+            'performer': 'v',
+            'reformer': '^',
+            'scatterbrain': 'x',
+            'sinkhorn': 'h',
+            'synthesizer': '.',
+        }
         
-        plt.title(f'{metric_name}')
+        for iy, ys in enumerate(baselines):
+            plt.plot(
+                ts, 
+                ys, 
+                label=baseline_methods[iy], 
+                linestyle='--', 
+                linewidth=0.75,
+                marker=MARKERS[baseline_methods[iy]],
+            )
+        for ik, k in enumerate(ks):
+            plt.plot(
+                ts, 
+                perlins[ik], 
+                label=f'Ours (k={k})', 
+                linewidth=0.75,
+                marker='*',
+            )
+        
+        plt.title(f'{title}')
         plt.xlabel(f'tokens')
-        plt.ylabel(f'{metric_name}')
+        plt.ylabel(f'{ylabel}')
         plt.yscale('log', base=2)
         plt.xscale('log', base=2)
         plt.grid()
-        plt.legend()
+        plt.legend(fontsize=8)
         
-        path = os.path.join(root, f'{metric_name}.png')
-        plt.savefig(path, dpi=300)
+        path = os.path.join(root, f'{filename}.png')
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        print('saved', path)
+        path = os.path.join(root, f'{filename}.pdf')
+        plt.savefig(path, dpi=300, bbox_inches='tight')
         print('saved', path)
     
-    plot('latency', latencies_baseline, latencies_perlin, ts, ks)
-    plot('vram', vram_baseline, vram_perlin, ts, ks)
+    plot(
+        'exp_latency', 
+        'Latency Comparison', 'ms/it', 
+        latencies_baseline, 
+        latencies_perlin, 
+        ts, 
+        ks
+    )
+    plot(
+        'exp_vram', 
+        'Peak VRAM Usage Comparison', 
+        'MB', 
+        vram_baseline, 
+        vram_perlin, 
+        ts, 
+        ks
+    )
+
+def main_plot():
+    measure_and_dump()
+    load_and_plot()
 
 if __name__ == '__main__':
     mp.set_start_method('spawn')

@@ -53,6 +53,8 @@ class PerlinSelfAttention(nn.Module):
             config=config,
             perlin_config=perlin_config,
         )
+        if self.pconfig.compile:
+            self.attention = torch.compile(self.attention)
         
         self.gradient_checkpointing = False
 
@@ -199,7 +201,8 @@ class PerlinSelfAttention(nn.Module):
                 query_layer_for_score, key_layer_for_score, 
                 attention_mask, attention_scores_truth, context_layer_truth, 
                 last_state, 
-                use_reentrant=True
+                use_reentrant=True,
+                preserve_rng_state=True,
             )
             output = PerlinAttentionOutput(
                 loss=loss,

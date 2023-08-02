@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field, asdict
+import math
 import traceback
 
 import tqdm
@@ -51,6 +52,12 @@ class TrainerConfig:
     
 # BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 BF_16 = torch.float16
+
+def gc_cuda():
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
 
 class Trainer:
     def __init__(self, config: TrainerConfig = None, skip_init_loaders = False) -> None:
@@ -246,22 +253,34 @@ class Trainer:
         return loss, loss_details
     
     def train_epoch(self):
+        self.model.train()
+        self.base_model.train()
+        
         m = Metric()
         
         train_loader_len = len(self.train_loader)
         with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
             for istep, batch in enumerate(pbar):
                 wandb_dict = {}
-                loss, loss_details = self.train_step(batch)
+                try:
+                    loss, loss_details = self.train_step(batch)
+                except torch.cuda.OutOfMemoryError: # type: ignore
+                    gc_cuda()
+                    loss, loss_details = self.train_step(batch) # tried GC
                 wandb_dict['train/loss'] = loss
                 wandb_dict['train/epoch'] = self.epoch + istep / train_loader_len
                 wandb_dict.update({
                     f'trian/loss/{k}': v for k, v in loss_details.items()
                 })
                 
-                if ((self.step + 1) % self.config.eval_steps) == 0:
+                if ((self.step + 1) % self.config.eval_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
+                    gc_cuda()
                     score = self.evaluate()
+                    gc_cuda()
                     wandb_dict['eval/score'] = score
+                    
+                    self.model.train()
+                    self.base_model.train()
                 
                 pbar.set_description(
                     f'[{self.epoch}/{self.config.epochs}] '\
@@ -284,7 +303,8 @@ class Trainer:
         self.model.eval()
         self.base_model.eval()
         
-        nlls = []
+        # nlls = []
+        nll_sum = 0
         for batch in tqdm.tqdm(self.valid_loader, dynamic_ncols=True, desc='evaluate'):
             batch = batch_to(batch, self.device)
             trg_len = batch['trg_len']
@@ -299,12 +319,13 @@ class Trainer:
                 batch['teacher'] = self.base_model
                 output_student = self.model(**batch)
                 neg_log_likelihood = output_student.loss * trg_len.item()
-            nlls.append(neg_log_likelihood)
+            # nlls.append(neg_log_likelihood)
+            nll_sum += neg_log_likelihood.item()
 
             # for debugging
             if on_step is not None: on_step()
         
-        ppl = torch.exp(torch.stack(nlls).sum() / self.valid_loader.dataset.seq_len).item()
+        ppl = math.exp(nll_sum / self.valid_loader.dataset.seq_len)
         if not quite: print(f'[{self.epoch}/{self.config.epochs}] PPL:', ppl)
         return ppl
     
@@ -345,6 +366,8 @@ class Trainer:
         print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
     
     def main(self):
+        torch.set_float32_matmul_precision('high')
+        
         from ..utils.secrets import WANDB_KEY, USER_NAME
         os.environ['WANDB_API_KEY'] = WANDB_KEY
         wandb.init(
@@ -355,7 +378,9 @@ class Trainer:
         for epoch in range(self.config.epochs):
             self.epoch = epoch
             self.train_epoch()
+            gc_cuda()
             score = self.evaluate()
+            gc_cuda()
             wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
             self.save()
 

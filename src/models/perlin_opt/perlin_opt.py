@@ -172,7 +172,7 @@ class OPTAttention(nn.Module):
         
         self.perlin_reformer_atten = LSHAttention(
             dropout=dropout,
-            bucket_size=32,
+            bucket_size=32, # this will re adjust atomatically
             n_hashes=8,
             return_attn=False,
             causal=True,
@@ -539,7 +539,7 @@ class OPTDecoderLayer(nn.Module):
                 return hidden_states
             
             if self.gradient_checkpointing and self.training:
-                hidden_states = torch.utils.checkpoint.checkpoint(before_self_atten, hidden_states)
+                hidden_states = torch.utils.checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
 
@@ -585,7 +585,7 @@ class OPTDecoderLayer(nn.Module):
             return hidden_states
         
         if self.gradient_checkpointing and self.training:
-            hidden_states = torch.utils.checkpoint.checkpoint(after_self_atten, residual, hidden_states)
+            hidden_states = torch.utils.checkpoint.checkpoint(after_self_atten, residual, hidden_states, preserve_rng_state=True)
         else:
             hidden_states = after_self_atten(residual, hidden_states)
 

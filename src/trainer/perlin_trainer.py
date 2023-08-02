@@ -70,6 +70,7 @@ class BaseTrainer:
         perlin_token_merging = False,
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
+        compile = False,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -99,6 +100,7 @@ class BaseTrainer:
             attention_predictor_method = perlin_attention_predictor_method,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
+            compile = compile,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -247,7 +249,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         max_seq_len: int = None,
         **kwargs
     ):
-        BaseTrainer.__init__(self, **kwargs)
+        BaseTrainer.__init__(self, compile=True, **kwargs)
         
         model = {
             'opt': 'opt-125m',
@@ -262,24 +264,29 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }
         }[model][subset]
         
-        # # double the length!
-        # perlin_attention.get_default_config().attention_predictor_length = 256
+        eval_steps = {
+            'opt-125m': 1000,
+            'opt-350m': 500,
+        }[model]
         
         BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
             model_cls=perlin_opt.OPTForCausalLM,
             model_config=model_config,
             amp_enabled=not disable_amp,
-            epochs=epochs if epochs is not None else 100,
+            epochs=epochs if epochs is not None else 10,
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_checkpointing=gradient_checkpointing,
             max_seq_len=max_seq_len,
             lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
             lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
             additional_config=perlin_attention.get_default_config().to_json(),
+            eval_steps=eval_steps,
         ), skip_init_loaders=kwargs.get('skip_init_loaders', False))
         
         self.apply_model_options(self.model)
+
+OPT_MODELS = ['opt', 'opt-125m', 'opt-350m']
 
 if __name__ == '__main__':
     import argparse
@@ -321,7 +328,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         assert args.model in ['bert']
     elif args.dataset == 'wikitext2':
-        assert args.model in ['opt', 'opt-125m', 'opt-350m']
+        assert args.model in OPT_MODELS
     else:
         raise Exception()
     
@@ -342,7 +349,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 1)
         trainer = LraTrainer(**kwargs)
-    elif args.model in ['opt', 'opt-125m', 'opt-350m']:
+    elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
         assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         trainer = OptTrainer(**kwargs)
