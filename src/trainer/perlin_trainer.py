@@ -261,12 +261,16 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             },
             'opt-350m': {
                 'wikitext2': 'lnair/opt-350m-wikitext2'
+            },
+            'opt-1.3b': {
+                'wikitext2': 'lnair/opt-1.3b-wikitext2'
             }
         }[model][subset]
         
         eval_steps = {
             'opt-125m': 1000,
             'opt-350m': 500,
+            'opt-1.3b': 250,
         }[model]
         
         BaseOptTrainer.__init__(self, OptTrainerConfig(
