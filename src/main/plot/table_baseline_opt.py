@@ -7,7 +7,7 @@ data = {
     },
     'opt-350m': {
         'none': 20.0,
-        'ours': 25.0,
+        'ours': 23.0,
         'reformer': 70.0,
         'performer': 0.0,
     },

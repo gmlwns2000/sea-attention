@@ -382,6 +382,7 @@ class PerlinAttentionOutput:
     context_layer: torch.Tensor
     partial_attention_probs: torch.Tensor
     partial_attention_mask: torch.Tensor
+    estimated_attention_probs_m: torch.Tensor
     estimated_attention_probs: torch.Tensor
     dense_attention_probs: torch.Tensor
     key_for_score: torch.Tensor
@@ -553,6 +554,7 @@ class PerlinAttention(nn.Module):
             partial_attention_probs=None,
             partial_attention_mask=None,
             estimated_attention_probs=None,
+            estimated_attention_probs_m=None,
             dense_attention_probs=None,
             key_for_score=None,
             state=None,
@@ -983,7 +985,8 @@ class PerlinAttention(nn.Module):
                     raise_if_nan(loss)
                     
                 get_bench().register_temp_buffer('attention_probs_truth', None, lazy=lambda: F.softmax(attention_scores_truth, dim=-1) * (dst_attention_mask > -1))
-                get_bench().register_temp_buffer('attention_probs_truth_m', None, lazy=lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (dst_attention_mask > -1))
+                if not self.pconfig.causal:
+                    get_bench().register_temp_buffer('attention_probs_truth_m', None, lazy=lambda: F.softmax(resize_from_t_to_m(attention_scores_truth, T_M), dim=-1) * (dst_attention_mask > -1))
                 get_bench().register_temp_buffer('estimated_attention_probs_resized', estimated_attention_probs_resized)
                 get_bench().register_temp_buffer('estimated_attention_score_resized', estimated_attention_score_resized)
             
@@ -1027,6 +1030,8 @@ class PerlinAttention(nn.Module):
                     with timer("mask.view"):
                         masked_estimated_attention_probs = (estimated_attention_probs * (dst_attention_mask > -1))
                         
+                        get_bench().register_temp_buffer('masked_estimated_attention_probs', masked_estimated_attention_probs)
+                        
                         if not self.pconfig.causal:
                             token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
                         else:
@@ -1058,6 +1063,7 @@ class PerlinAttention(nn.Module):
                         
                         top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
+                        get_bench().register_temp_buffer('top_k_elems', None, lazy=lambda: torch.tensor(top_k_elems, dtype=torch.float64))
                     with timer("mask.topk"):
                         _, indices = torch.topk(
                             input=t,
@@ -1065,6 +1071,7 @@ class PerlinAttention(nn.Module):
                             dim=-1, 
                             sorted=True #sorted true is important
                         )
+                        get_bench().register_temp_buffer('topk_indices', indices.double())
                     with timer("mask.empty"):
                         partial_attention_mask = torch.empty(
                             t.shape, 
@@ -1182,7 +1189,8 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
                         partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
                     else:
-                        raise Exception() # TODO support causal sparse masking
+                        # TODO support causal sparse masking
+                        partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
                 
                 raise_if_nan(partial_attention_mask)
             
@@ -1267,7 +1275,7 @@ class PerlinAttention(nn.Module):
                     get_bench().register_temp_buffer('partial_context_layer_1', partial_context_layer)
                 else:
                     # TODO implement optimized causal kernel
-                    if self.pconfig.causal: raise Exception()
+                    # if self.pconfig.causal: raise Exception()
                     
                     attention_probs_dense = partial_attention_probs = attention_scores_dense = None
                     partial_context_layer = q_for_score
@@ -1293,7 +1301,9 @@ class PerlinAttention(nn.Module):
                                 q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 sparse_attention_mask
-                            ) / math.sqrt(self.attention_head_size)
+                            ) 
+                            if not self.pconfig.causal:
+                                partial_attention_scores = partial_attention_scores / math.sqrt(self.attention_head_size)
                             get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
                             del sparse_attention_mask
                         with timer("attention.sparse_softmax"), mem("attention.sparse_softmax"):
@@ -1432,6 +1442,7 @@ class PerlinAttention(nn.Module):
                 context_layer=partial_context_layer,
                 partial_attention_probs=partial_attention_probs,
                 partial_attention_mask=partial_attention_mask,
+                estimated_attention_probs_m = estimated_attention_probs,
                 estimated_attention_probs=estimated_attention_probs_for_output,
                 dense_attention_probs=attention_probs_dense,
                 key_for_score=k_for_score,

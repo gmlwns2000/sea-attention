@@ -21,6 +21,7 @@ def init_opt(
 ):
     trainer = OptTrainer(
         subset=dataset,
+        disable_compile=True,
         **kwargs,
     )
     trainer.device = 'cuda'
