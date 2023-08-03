@@ -44,7 +44,7 @@ from transformers.utils import (
 )
 from transformers.models.opt.configuration_opt import OPTConfig
 
-from ...utils import strify
+from ...utils import strify, checkpoint
 
 logger = logging.get_logger(__name__)
 
@@ -539,7 +539,7 @@ class OPTDecoderLayer(nn.Module):
                 return hidden_states
             
             if self.gradient_checkpointing and self.training:
-                hidden_states = torch.utils.checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
+                hidden_states = checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
 
@@ -585,7 +585,7 @@ class OPTDecoderLayer(nn.Module):
             return hidden_states
         
         if self.gradient_checkpointing and self.training:
-            hidden_states = torch.utils.checkpoint.checkpoint(after_self_atten, residual, hidden_states, preserve_rng_state=True)
+            hidden_states = checkpoint.checkpoint(after_self_atten, residual, hidden_states, preserve_rng_state=True)
         else:
             hidden_states = after_self_atten(residual, hidden_states)
 

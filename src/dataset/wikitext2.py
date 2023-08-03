@@ -3,6 +3,7 @@ import math
 import torch
 import os
 from datasets import load_dataset
+import tqdm
 
 class Wikitext2Dataset(Dataset):
     def __init__(self, subset, tokenizer, stride=2048, max_length=None, strided_indexing=None):
@@ -20,6 +21,8 @@ class Wikitext2Dataset(Dataset):
         self.seq_len = self.encodings.input_ids.size(1)
         self.stride = stride
         self.max_length = max_length
+        self.check_last_shape = subset == 'train'
+        self.last_shape = None
     
     def __len__(self):
         if self.strided_indexing:
@@ -43,6 +46,11 @@ class Wikitext2Dataset(Dataset):
         target_ids = input_ids.clone()
         target_ids[:, :-trg_len] = -100
         
+        if self.check_last_shape:
+            if self.last_shape is not None:
+                assert self.last_shape == input_ids.shape
+            self.last_shape = input_ids.shape
+        
         return {
             'input_ids': input_ids[0],
             'labels': target_ids[0],
@@ -62,7 +70,8 @@ def get_dataloader(subset, tokenizer, batch_size=1, max_length=None):
 if __name__ == '__main__':
     import transformers
     t = transformers.AutoTokenizer.from_pretrained('facebook/opt-125m')
-    loader = get_dataloader('valid', t, batch_size=1, max_length=2048)
+    loader = get_dataloader('train', t, batch_size=1, max_length=2048)
     
-    for batch in loader:
-        print([(k, v.shape) for k, v in batch.items()])
+    for batch in tqdm.tqdm(loader):
+        # print([(k, v.shape) for k, v in batch.items()])
+        pass

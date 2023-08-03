@@ -227,7 +227,7 @@ class OPTAttention(nn.Module):
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
             )
-            self.last_attention_scores = attn_weights
+            self.last_attention_scores = attn_weights.to('cpu', non_blocking=True)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
@@ -259,7 +259,7 @@ class OPTAttention(nn.Module):
 
         attn_output = torch.bmm(attn_probs, value_states)
         
-        self.last_context_layer = attn_output
+        self.last_context_layer = attn_output.to('cpu', non_blocking=True)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(

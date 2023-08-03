@@ -243,13 +243,15 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         model: str = 'opt',
         subset: str = 'wikitext2',
         disable_amp: bool = False,
+        disable_compile: bool = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         epochs: int = None,
         max_seq_len: int = None,
+        eval_steps: int = None,
         **kwargs
     ):
-        BaseTrainer.__init__(self, compile=True, **kwargs)
+        BaseTrainer.__init__(self, compile=not disable_compile, **kwargs)
         
         model = {
             'opt': 'opt-125m',
@@ -267,11 +269,12 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }
         }[model][subset]
         
-        eval_steps = {
-            'opt-125m': 1000,
-            'opt-350m': 500,
-            'opt-1.3b': 250,
-        }[model]
+        if eval_steps is None:
+            eval_steps = {
+                'opt-125m': 1000,
+                'opt-350m': 500,
+                'opt-1.3b': 250,
+            }[model]
         
         BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
@@ -308,6 +311,8 @@ if __name__ == '__main__':
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=None, type=int)
     parser.add_argument('--disable-amp', action='store_true', default=False)
+    parser.add_argument('--disable-compile', action='store_true', default=False)
+    parser.add_argument('--eval-steps', default=None, type=int)
     
     add_perlin_model_options(parser)
     
@@ -343,7 +348,9 @@ if __name__ == '__main__':
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,
+        'disable_compile': args.disable_compile,
         'max_seq_len': args.max_seq_len,
+        'eval_steps': args.eval_steps,
     }
     kwargs.update(parse_perlin_model_options(args))
     

@@ -16,7 +16,8 @@ from ..common.lora import (
 from ..hf_bert import BertConfig
 from .attention import PerlinAttention, PerlinAttentionOutput
 from .config import PerlinAttentionConfig, get_default_config
-import torch.utils.checkpoint
+# import torch.utils.checkpoint
+from ...utils import checkpoint
 
 default_lazy = lambda x, d: d() if x is None else x
 
@@ -54,6 +55,7 @@ class PerlinSelfAttention(nn.Module):
             perlin_config=perlin_config,
         )
         if self.pconfig.compile:
+            self._attention_unwrap = self.attention
             self.attention = torch.compile(self.attention)
         
         self.gradient_checkpointing = False
@@ -195,7 +197,7 @@ class PerlinSelfAttention(nn.Module):
                 partial_attention_mask, 
                 partial_attention_probs, 
                 state
-            ) = torch.utils.checkpoint.checkpoint(custom_forward, 
+            ) = checkpoint.checkpoint(custom_forward, 
                 query_layer, key_layer, value_layer, 
                 query_layer_for_atten, key_layer_for_atten, value_layer_for_atten, 
                 query_layer_for_score, key_layer_for_score, 

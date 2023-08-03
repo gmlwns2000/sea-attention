@@ -273,6 +273,19 @@ class Trainer:
                     f'trian/loss/{k}': v for k, v in loss_details.items()
                 })
                 
+                pbar.set_description(
+                    f'[{self.epoch}/{self.config.epochs}] '\
+                    f'L:{m.update(loss, "l"):.4f} '\
+                    f'Lsp:{m.update(loss_details["loss_sp"], "sp"):.4f} '\
+                    f'Lkd:{m.update(loss_details["loss_kd"], "kd"):.4f} '\
+                    f'Lm:{m.update(loss_details["loss_model"], "md"):.4f} '\
+                    f'M:{torch.cuda.max_memory_allocated()/1024/1024:.1f}'\
+                )
+                
+                self._istep += 1
+                self.step = self._istep // self.config.gradient_accumulation_steps
+                
+                reported = False
                 if ((self.step + 1) % self.config.eval_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
                     gc_cuda()
                     score = self.evaluate()
@@ -281,19 +294,10 @@ class Trainer:
                     
                     self.model.train()
                     self.base_model.train()
+                    
+                    reported = True
                 
-                pbar.set_description(
-                    f'[{self.epoch}/{self.config.epochs}] '\
-                    f'L:{m.update(loss, "l"):.4f} '\
-                    f'Lsp:{m.update(loss_details["loss_sp"], "sp"):.4f} '\
-                    f'Lkd:{m.update(loss_details["loss_kd"], "kd"):.4f} '\
-                    f'Lm:{m.update(loss_details["loss_model"], "md"):.4f}'
-                )
-                
-                self._istep += 1
-                self.step = self._istep // self.config.gradient_accumulation_steps
-                
-                if (self.step % self.config.wandb_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
+                if ((self.step % self.config.wandb_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0) or reported:
                     wandb.log(wandb_dict, step=self.step)
     
     def evaluate(self, on_step=None, quite=False):
