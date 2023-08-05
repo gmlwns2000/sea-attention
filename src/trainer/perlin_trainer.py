@@ -33,8 +33,9 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--colsel', action='store_true', default=False)
-    parser.add_argument('--colsel-method', default="sum_mask", type=str)
+    parser.add_argument('--colsel-method', default="mean_values", type=str)
     parser.add_argument('--colsel-mask-in-scores', action='store_true', default=False)
+    parser.add_argument('--colsel-per-head-col', default = -1, type=int)
     parser.add_argument('--colsel-save', action='store_true', default=False)
     return parser
 
@@ -58,6 +59,7 @@ def parse_perlin_model_options(args):
         'perlin_colsel': args.colsel,
         "perlin_colsel_method": args.colsel_method,
         "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores,
+        "perlin_colsel_per_head_col" : args.colsel_per_head_col,
         "perlin_colsel_save" : args.colsel_save
     }
     return kwargs
@@ -81,6 +83,7 @@ class BaseTrainer:
         perlin_colsel = False,
         perlin_colsel_method = "sum_values",
         perlin_colsel_mask_in_probs = True,
+        perlin_colsel_per_head_col = -1,
         perlin_colsel_save = False,
         **kwargs,
     ) -> None:
@@ -103,6 +106,7 @@ class BaseTrainer:
         self.perlin_colsel = perlin_colsel
         self.perlin_colsel_method = perlin_colsel_method
         self.perlin_colsel_mask_in_probs = perlin_colsel_mask_in_probs
+        self.perlin_colsel_per_head_col = perlin_colsel_per_head_col
         self.perlin_colsel_save = perlin_colsel_save
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
@@ -120,7 +124,8 @@ class BaseTrainer:
             colsel = perlin_colsel,
             colsel_method = perlin_colsel_method,
             colsel_mask_in_probs = perlin_colsel_mask_in_probs,
-            colsel_save = self.perlin_colsel_save
+            colsel_per_head_cnt_limit = self.perlin_colsel_per_head_col,
+            colsel_save = self.perlin_colsel_save,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -164,6 +169,7 @@ class BaseTrainer:
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_colsel = f"_colsel_{self.perlin_colsel_method}_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
+        name_colsel += f"_perhead{self.perlin_colsel_per_head_col}" if (self.perlin_colsel_per_head_col>-1) else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\

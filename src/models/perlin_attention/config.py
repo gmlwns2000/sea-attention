@@ -34,6 +34,7 @@ class PerlinAttentionConfig:
     colsel: bool = False
     colsel_method: str = "sum_values"
     colsel_mask_in_probs: bool = False
+    colsel_per_head_cnt_limit : int = -1
     colsel_save: bool = False
     causal: bool = False
     use_cache: bool = False

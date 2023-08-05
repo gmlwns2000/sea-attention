@@ -15,7 +15,7 @@ import torch
 # from transformers.models.bert import modeling_bert as berts
 from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
-from ..utils import batch_to, seed
+from ..utils import batch_to, raise_if_nan, seed
 from ..dataset.wikitext import WikitextBatchLoader
 import torch.nn.functional as F
 
@@ -247,7 +247,11 @@ class Trainer:
             loss_special = self.model.calc_loss_special()
         
         loss = loss_model + loss_kd + loss_special
-        
+        raise_if_nan(loss_model)
+        raise_if_nan(loss_kd)
+        raise_if_nan(loss_special)
+        raise_if_nan(loss)
+
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
         
@@ -268,10 +272,7 @@ class Trainer:
             'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
             'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
-        }
-
-        # breakpoint()
-        
+        } 
         return loss.item()
     
     def train_epoch(self):
