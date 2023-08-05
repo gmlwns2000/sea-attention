@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from .common_opt import init
 
 seed()
+get_bench().disabled = False
 
 # device = torch.device('cuda')
 
@@ -37,7 +38,7 @@ def set_benchmark(model, v):
 N = 1
 H = 12
 HID = 64
-SEQ_LEN = 32
+SEQ_LEN = 2048
 BENCH_PRECISION = torch.float32
 FP_MIN = torch.finfo(torch.float32).min
 
@@ -46,14 +47,14 @@ k = q.clone()
 v = q.clone()
 attention_mask = (torch.arange(SEQ_LEN).view(1, SEQ_LEN) > torch.arange(SEQ_LEN).view(SEQ_LEN, 1)) * FP_MIN
 attention_mask = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
-attention_scores_truth = torch.randn((1, 12, SEQ_LEN, SEQ_LEN), device=device)
+attention_scores_truth = torch.randn((1, H, SEQ_LEN, SEQ_LEN), device=device)
 context_layer_truth = torch.randn((1, SEQ_LEN, H*HID), device=device)
 
 layer = model.model.decoder.layers[0] # type: OPTDecoderLayer
 attention = layer.self_attn.perlin_self_attention
 
 def samples(
-    sample_from_benchmark=True, 
+    sample_from_benchmark=False, 
     score_mask_keys=[],
     masked_score_keys=[],
 ):
@@ -121,7 +122,9 @@ sample_b0_keys, sample_b0 = samples(
     ]
 )
 set_benchmark(model, True)
-sample_b1_keys, sample_b1 = samples()
+sample_b1_keys, sample_b1 = samples(
+    sample_from_benchmark=True,
+)
 
 keys = sample_b1_keys
 just_width = max([len(k) for k in keys])
@@ -157,3 +160,31 @@ def exam(name, a, b, thresh=1e-5):
 
 for key in keys:
     exam(key, sample_b0.get(key, None), sample_b1.get(key, None))
+
+#############################
+
+N_WARNUP = 30
+N_SAMPLE = 500
+get_bench().synchronize = True
+
+get_bench().reset_trace()
+get_bench().reset_measures()
+set_benchmark(model, True)
+for _ in tqdm.tqdm(range(N_WARNUP)):
+    samples()
+for _ in tqdm.tqdm(range(N_SAMPLE)):
+    samples()
+
+data = get_bench().todict()
+# print(data)
+
+root = get_bench().traced_callstack
+total_time = data[root.name]
+def format_tree_percent(self, indent=0):
+    spaces = "--" * indent
+    messages =  [f"{spaces}> {self.name} ({data[self.name]*1000:.2f} ms, {data[self.name] / total_time * 100:.2f}%)"]
+    for child in self.children:
+        messages.append(format_tree_percent(child, indent+1))
+    return "\n".join(messages)
+tree = format_tree_percent(root)
+print(tree)
