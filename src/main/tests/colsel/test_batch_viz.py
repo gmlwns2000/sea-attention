@@ -102,7 +102,6 @@ if kwargs['perlin_colsel']:
 
     if not kwargs['perlin_colsel_mask_in_probs']:
         estimated_attention_score_after_mp0 = bench.get_temp_buffer('estimated_attention_score_after_mp0', index_layer)
-    per_t_in_item_top_k = bench.get_temp_buffer('per_t_in_item_top_k', index_layer)
 
     # TODO add case for self.benchmark
     t_dead_mask_before_colsel = bench.get_temp_buffer('t_dead_mask_before_colsel', index_layer)
@@ -113,6 +112,7 @@ else:
     t_dead_mask = bench.get_temp_buffer('t_dead_mask', index_layer)
 
 per_item_top_k = bench.get_temp_buffer('per_item_top_k', index_layer)
+per_t_in_item_top_k = bench.get_temp_buffer('per_t_in_item_top_k', index_layer)
 print('per_item_top_k', per_item_top_k)
 print('per_t_in_item_top_k', per_t_in_item_top_k)
 

@@ -69,7 +69,7 @@ def main(
     p = bool2int(kwargs['perlin_colsel_mask_in_probs'])
     root = f"./plots/visualize_glue/colsel{r}/"
     if kwargs['perlin_colsel']:
-        root += f'/{m}_mprobs{p}'
+        root += f'{m}_mprobs{p}'
     os.makedirs(root, exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())

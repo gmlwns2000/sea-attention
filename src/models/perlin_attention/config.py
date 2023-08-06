@@ -36,6 +36,7 @@ class PerlinAttentionConfig:
     colsel_mask_in_probs: bool = False
     colsel_per_head_cnt_limit : int = -1
     colsel_save: bool = False
+    partial_attention_scaler: bool = True
     causal: bool = False
     use_cache: bool = False
     
