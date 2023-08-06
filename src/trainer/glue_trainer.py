@@ -107,6 +107,18 @@ class Trainer:
     ) -> None:
         seed()
         
+        seed1 = 0
+        print(seed1)
+        print(torch.manual_seed(seed1))
+        print(torch.backends.cudnn.deterministic)
+        print(torch.backends.cudnn.benchmark)
+        print(np.random.seed(seed1))
+        print(random.seed(seed1))
+        print(torch.cuda.manual_seed(seed1))
+        print(torch.cuda.manual_seed_all(seed1))# if use multi-GPU
+        print(os.environ["PYTHONHASHSEED"])
+    
+        
         self.gradient_accumulation_steps = gradient_accumulation_steps
         self.load_ignore_keys = load_ignore_keys
         self.running_type = running_type
@@ -363,7 +375,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint_dummy.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint_dummy.pth'# _viz_ep{self.epoch}
         return path
     
     def save(self):

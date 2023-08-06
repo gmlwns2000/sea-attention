@@ -13,7 +13,7 @@ from .common import (
 )
 
 bool2int = lambda x: 1 if x else 0
-
+LAYER_ID = 0
 def main(
     subset = 'mnli',
     checkpoint_path = None,
@@ -32,6 +32,16 @@ def main(
     teacher = trainer.base_model
     bert = trainer.model
     
+    if 'benchmark_for_sparse' in kwargs:
+        for module in bert.modules():
+            if hasattr(module, 'benchmarking'):
+                module.benchmarking = kwargs['benchmark_for_sparse']
+            if hasattr(module, 'layer_id'):
+                global LAYER_ID
+                module.layer_id = LAYER_ID
+                LAYER_ID += 1
+
+
     teacher.eval()
     bert.eval()
     
@@ -52,7 +62,8 @@ def main(
                 'estimated_attn': estimated_attn,
                 'dense_attn': dense_attn,
                 'partial_attn': partial_attn,
-            })
+            })            
+        
     r = bool2int(kwargs['perlin_colsel'])
     m = kwargs['perlin_colsel_method']
     p = bool2int(kwargs['perlin_colsel_mask_in_probs'])

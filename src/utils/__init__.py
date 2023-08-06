@@ -407,11 +407,11 @@ class Benchmark:
         buffer.append(v)
         self.buffers[name] = buffer
     
-    def get_temp_buffer(self, name, index=-1):
+    def get_temp_buffer(self, name, index=None):
+        if index == None:
+            return self.buffers[name]
         return self.buffers[name][index]
-    
-    def get_all_temp_buffer(self, name):
-        return self.buffers[name]
+
 
 BENCHMARK = Benchmark()
 

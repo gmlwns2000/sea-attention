@@ -93,6 +93,56 @@ def softmax_bf16(input, dim=-1):
         y = y.to(input_dtype)
     return y
 
+def resize_width(img: torch.Tensor, scale: float):
+    N, H, W = img.shape
+    # img = img.coalesce() # TODO why not using this?
+    idx = img.indices() #.float()
+    nnz = idx.shape[-1]
+    if scale < 1.0:
+        xs_scaled = idx[2] * scale
+        xs_rounded = torch.clamp(torch.round(xs_scaled), 0, round(W*scale)-1)
+        xs_okay = torch.abs(xs_rounded - xs_scaled) > (scale * 0.5)
+        idx[2] = xs_rounded# * xs_okay
+        # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
+        idx.masked_fill_(xs_okay, value=-1)
+        idx = torch.unique(idx, dim=-1) #TODO FIX this to masked select
+        idx = idx[:, 1:]
+        
+        # print(nnz, idx.shape[-1])
+        return torch.sparse_coo_tensor(
+            indices=idx.contiguous(),
+            values=torch.ones((idx.shape[-1],), device=img.device, dtype=img.dtype),
+            size=(N, H, round(W*scale)),
+        )
+    elif scale > 1.0:
+        scale_ceil = math.ceil(scale)
+        # idx = F.interpolate(idx.view(1, 1, 3, nnz), size=(3, nnz*scale_ceil), mode='nearest').view(3, nnz*scale_ceil) # type: torch.Tensor
+        idx = idx.view(3, nnz, 1).expand(3, nnz, scale_ceil).reshape(3, nnz*scale_ceil)
+        # idx[2] = idx[2] * scale_ceil + torch.arange(nnz*scale_ceil, device=img.device) % scale_ceil
+        
+        shrink_scale = scale / scale_ceil
+        xs_scaled = (idx[2] * scale_ceil + torch.arange(scale_ceil, device=img.device).unsqueeze(0).expand(nnz, scale_ceil).reshape(-1)) * shrink_scale
+        xs_rounded = torch.round(xs_scaled)
+        xs_okay = torch.abs(xs_rounded - xs_scaled) < (shrink_scale * 0.5)
+        del xs_scaled
+        idx[2] = torch.clamp(xs_rounded, 0, round(W*scale)-1)
+        # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
+        # idx.masked_fill_(xs_okay, value=-1)
+        # del xs_okay
+        # idx = torch.unique(idx, dim=-1)
+        # idx = idx[:, 1:]
+        # idx = torch.unique(idx.long(), dim=-1)
+        idx = idx.masked_select(xs_okay).view(3, -1)
+        
+        # print(nnz, idx.shape[-1])
+        return torch.sparse_coo_tensor(
+            indices=idx,
+            values=torch.ones((1,), device=img.device, dtype=img.dtype).expand(idx.shape[-1]),
+            size=(N, H, round(W*scale)),
+        )
+    else:
+        return img
+                                                
 class StatefulCausalPerformer:
     def __init__(self, parent: "PerlinAttentionState", performer: FastAttention):
         self.parent = parent
@@ -348,7 +398,8 @@ class PerlinAttention(nn.Module):
         ### Perlin
         #- configs
         self.benchmarking = False
-        
+        self.layer_id = -1
+
         #- attention predictor
         #-- mlp predictor
         self.performer_nb_features = int(
@@ -643,6 +694,23 @@ class PerlinAttention(nn.Module):
                         k_for_atten, 
                         v_for_atten
                     )
+                    # q_type = q_for_atten.dtype
+                    # if torch.get_autocast_gpu_dtype() in [torch.float16, torch.bfloat16]:
+                    #     PRECISION_PERF = torch.float32 if torch.cuda.is_bf16_supported() else torch.float32
+                    # else:
+                    #     PRECISION_PERF = torch.float32
+                    # with torch.autocast('cuda', PRECISION_PERF):
+                    #     last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
+                    #         last_state,
+                    #         "performer->performer_context_layer",
+                    #         self.performer,
+                    #         q_for_atten, 
+                    #         k_for_atten, 
+                    #         v_for_atten,
+                    #     )
+                    # if q_type != performer_context_layer.dtype:
+                    #     performer_context_layer = performer_context_layer.to(q_type)
+                    
                 get_bench().register_temp_buffer('performer_context_layer', performer_context_layer)
                 get_bench().register_temp_buffer('performer_context_layer>0', performer_context_layer>0)
                 
@@ -1019,7 +1087,8 @@ class PerlinAttention(nn.Module):
                         warnings.warn(f"mask_in_probs {mask_in_probs}")
 
                         # TODO currently implemented with the thought that it gets thicker, need to consider case of being thinner
-                        # TODO add test_set for per_item_col_thickness
+                        # TODO add test_set for checking whether per_item_col_thickness is right
+                        # input : per_item_col_thickness, interpolate rate(T Ti T_M), considering interpolation method
                         per_item_col_thickness = torch.min(torch.max(torch.round(1* T_M/token_length), torch.tensor([1]).to(token_length.device)), torch.tensor([T_M]).to(token_length.device))
                         get_bench().register_temp_buffer('per_item_col_thickness', per_item_col_thickness) # N, 1
                         
@@ -1119,17 +1188,18 @@ class PerlinAttention(nn.Module):
                                         if not self.benchmarking:
                                             # TODO recheck resize_from_m_to_t, t_to_m, whether it works well
                                             col_t_alive_mask_t = resize_from_m_to_t(col_t_alive_mask, masked_fill_value=0)
-                                            col_t_alive_mask_t_for_viz = col_t_alive_mask_t.view(N, H, T, T).clone().permute(0,2,1,3).reshape(N, T, H*T)
+                                            col_t_alive_mask_t_for_viz = col_t_alive_mask_t.clone().view(N, H, T, T).permute(0,2,1,3).reshape(N, T, H*T)
                                             col_t_alive_mask = resize_from_t_to_m(col_t_alive_mask_t, T_M)
-                                            col_t_alive_mask_m_for_viz = col_t_alive_mask.view(N, H, T, T_M).clone().permute(0,2,1,3).reshape(N, T, H*T_M)
+                                            col_t_alive_mask_m_for_viz = col_t_alive_mask.clone().view(N, H, T, T_M).permute(0,2,1,3).reshape(N, T, H*T_M)
 
                                         else:
-                                            raise Exception()
                                             # TODO check how this works!!!, TODO check per_item_col_thickness
                                             col_t_alive_mask = col_t_alive_mask.reshape(N*H, T, T_M).to_sparse_coo()
                                             col_t_alive_mask_t = resize_width(col_t_alive_mask, T/T_M)
-                                            col_t_alive_mask = resize_width(col_t_alive_mask_t, T_M/T)
-                                        raise_if_nan(col_t_alive_mask)
+                                            col_t_alive_mask_t_for_viz = col_t_alive_mask_t.clone().to_dense().view(N, H, T, T).permute(0,2,1,3).reshape(N, T, H*T)
+
+                                            col_t_alive_mask = resize_width(col_t_alive_mask_t, T_M/T).to_dense().view(N, H, T, T_M)
+                                            col_t_alive_mask_m_for_viz = col_t_alive_mask.clone().permute(0,2,1,3).reshape(N, T, H*T_M)
 
                                     assert col_t_alive_mask.shape == (N, H, T, T_M)
                                     col_t_alive_mask = col_t_alive_mask.permute(0, 2, 1, 3).reshape(N, T, H*T_M)
@@ -1146,7 +1216,6 @@ class PerlinAttention(nn.Module):
                                 col_t_alive_mask, per_item_col_real_1, per_item_condition_not_satisfied_1,\
                                 col_t_alive_mask_for_viz_1, col_t_alive_mask_t_for_viz_1, col_t_alive_mask_m_for_viz_1= colsel(inflated_top_k_elems_col, inflated_per_item_col)
                                 colsel_perform_cnt = 0 # for viz
-                                get_bench().register_temp_buffer('colsel_perform_cnt', colsel_perform_cnt)
                                 get_bench().register_temp_buffer('per_item_col_real_1', per_item_col_real_1)
                                 get_bench().register_temp_buffer('col_t_alive_mask_bef_inter_1', col_t_alive_mask_for_viz_1)
                                 get_bench().register_temp_buffer('col_t_alive_mask_t_1', col_t_alive_mask_t_for_viz_1)
@@ -1167,8 +1236,9 @@ class PerlinAttention(nn.Module):
                                     col_t_alive_mask_for_viz_2, col_t_alive_mask_t_for_viz_2, col_t_alive_mask_m_for_viz_2= colsel(top_k_elems_new_col, per_item_new_col)
                                     
                                     colsel_perform_cnt += 1
-                                    get_bench().register_temp_buffer('colsel_perform_cnt', colsel_perform_cnt)
-                                    
+
+                                    get_bench().register_temp_buffer('layer_id', self.layer_id)
+                                    # NOTE I think this is not necessary now; once using layer_id
                                     get_bench().register_temp_buffer('per_item_col_real_1_for2', per_item_col_real_1_for2)
                                     get_bench().register_temp_buffer('col_t_alive_mask_bef_inter_1_for2', col_t_alive_mask_for_viz_1_for2)
                                     get_bench().register_temp_buffer('col_t_alive_mask_t_1_for2', col_t_alive_mask_t_for_viz_1_for2)
@@ -1195,6 +1265,8 @@ class PerlinAttention(nn.Module):
                                 else:
                                     per_t_in_item_top_k = per_t_in_item_top_k-per_item_col_real_1
                                 
+                                get_bench().register_temp_buffer('colsel_perform_cnt', colsel_perform_cnt)
+
                                 col_t_alive_mask_final = col_t_alive_mask.clone()
                                 get_bench().register_temp_buffer('col_t_alive_mask_final', col_t_alive_mask_final)
                                 col_t_before_masked = col_t.clone()
@@ -1318,10 +1390,10 @@ class PerlinAttention(nn.Module):
                         if k_flatten_dim=='batch':
                             if perlin_col_select:
                                 col_t_alive_mask = col_t_alive_mask.view(N, T, H, T_M).permute(0,2,1,3).reshape(N, H*T*T_M)
-                                t_alive_mask.masked_fill_(mask=col_t_alive_mask, value=1)
+                                t_alive_mask.masked_fill_(mask=col_t_alive_mask > 0, value=1)
                                 get_bench().register_temp_buffer('t_alive_mask_after_colsel', None, lambda: t_alive_mask.clone().float().view(N, H, T, T_M).permute(0, 2, 1, 3).contiguous().view(N, T, H*T_M))
-                            else:
-                                raise Exception("f k_flatten_dim {k_flatten_dim} not provided yet")
+                        else:
+                            raise Exception(f"k_flatten_dim {k_flatten_dim} not provided yet")
                         partial_attention_mask = t_alive_mask.float()
 
                 if k_flatten_dim == 'causal_batch':
@@ -1334,12 +1406,17 @@ class PerlinAttention(nn.Module):
                     pass
                 else: raise Exception()
                 partial_attention_mask = partial_attention_mask.view(N, H, T, T_M) # NOTE memory order considered
-                partial_attention_mask.masked_fill_(
-                    mask=attention_mask.transpose(-1, -2) < -1,
-                    value=FP_MIN
-                ) # NOTE note that colsel fills 0 till T, not till token_length
+                if not self.benchmarking: # NOTE partial_attention_mask : in [0, FP_MIN]
+                    partial_attention_mask.masked_fill_(
+                        mask=attention_mask.transpose(-1, -2) < -1,
+                        value=FP_MIN
+                    ) # NOTE note that colsel fills 0 till T, not till token_length
+                else: # NOTE partial_attention_mask : in [0, 1]
+                    partial_attention_mask.masked_fill_(
+                        mask=attention_mask.transpose(-1, -2) < -1,
+                        value=0.0
+                    ) # NOTE note that colsel fills 0 till T, not till token_length
             assert partial_attention_mask.shape ==(N, H, T, T_M)
-            # breakpoint()
 
             # TODO check what's wrong
             partial_attention_mask_before_interp = partial_attention_mask.clone().permute(0,2,1,3).reshape(N, T, H*T_M)
@@ -1358,71 +1435,26 @@ class PerlinAttention(nn.Module):
                             partial_attention_mask.masked_fill_(causal_attention_mask < -1, FP_MIN)
                 else:
                     if not self.pconfig.causal:
-                        def resize_width(img: torch.Tensor, scale: float):
-                            N, H, W = img.shape
-                            # img = img.coalesce()
-                            idx = img.indices() #.float()
-                            nnz = idx.shape[-1]
-                            if scale < 1.0:
-                                xs_scaled = idx[2] * scale
-                                xs_rounded = torch.clamp(torch.round(xs_scaled), 0, round(W*scale)-1)
-                                xs_okay = torch.abs(xs_rounded - xs_scaled) > (scale * 0.5)
-                                idx[2] = xs_rounded# * xs_okay
-                                # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
-                                idx.masked_fill_(xs_okay, value=-1)
-                                idx = torch.unique(idx, dim=-1) #TODO FIX this to masked select
-                                idx = idx[:, 1:]
-                                
-                                # print(nnz, idx.shape[-1])
-                                return torch.sparse_coo_tensor(
-                                    indices=idx.contiguous(),
-                                    values=torch.ones((idx.shape[-1],), device=img.device, dtype=img.dtype),
-                                    size=(N, H, round(W*scale)),
-                                )
-                            elif scale > 1.0:
-                                scale_ceil = math.ceil(scale)
-                                # idx = F.interpolate(idx.view(1, 1, 3, nnz), size=(3, nnz*scale_ceil), mode='nearest').view(3, nnz*scale_ceil) # type: torch.Tensor
-                                idx = idx.view(3, nnz, 1).expand(3, nnz, scale_ceil).reshape(3, nnz*scale_ceil)
-                                # idx[2] = idx[2] * scale_ceil + torch.arange(nnz*scale_ceil, device=img.device) % scale_ceil
-                                
-                                shrink_scale = scale / scale_ceil
-                                xs_scaled = (idx[2] * scale_ceil + torch.arange(scale_ceil, device=img.device).unsqueeze(0).expand(nnz, scale_ceil).reshape(-1)) * shrink_scale
-                                xs_rounded = torch.round(xs_scaled)
-                                xs_okay = torch.abs(xs_rounded - xs_scaled) < (shrink_scale * 0.5)
-                                del xs_scaled
-                                idx[2] = torch.clamp(xs_rounded, 0, round(W*scale)-1)
-                                # idx = idx * xs_okay.unsqueeze(0) + (~xs_okay.unsqueeze(0)) * -1
-                                # idx.masked_fill_(xs_okay, value=-1)
-                                # del xs_okay
-                                # idx = torch.unique(idx, dim=-1)
-                                # idx = idx[:, 1:]
-                                # idx = torch.unique(idx.long(), dim=-1)
-                                idx = idx.masked_select(xs_okay).view(3, -1)
-                                
-                                # print(nnz, idx.shape[-1])
-                                return torch.sparse_coo_tensor(
-                                    indices=idx,
-                                    values=torch.ones((1,), device=img.device, dtype=img.dtype).expand(idx.shape[-1]),
-                                    size=(N, H, round(W*scale)),
-                                )
-                            else:
-                                return img
-
                         N, H, T, T_M = partial_attention_mask.shape
                         
                         # original
                         # partial_attention_mask_original = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
                         
                         # optimized
+                        partial_attention_mask_bef_coo = partial_attention_mask.clone().permute(0,2,1,3).reshape(N, T, H*T_M)
+                        get_bench().register_temp_buffer('partial_attention_mask_bef_coo_intp', partial_attention_mask_bef_coo)
                         partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
                         partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
+                        partial_attention_mask_aft_coo = partial_attention_mask.clone().to_dense().reshape(N, H, T, T).permute(0,2,1,3).reshape(N, T, H*T)
+                        get_bench().register_temp_buffer('partial_attention_mask_aft_coo_intp', partial_attention_mask_aft_coo)
                     else:
                         raise Exception() # TODO support causal sparse masking
                 
-                raise_if_nan(partial_attention_mask) # TODO check partial_attention_mask shape in self.benchmark
-                # TODO check what's wrong
-                partial_attention_mask_after_interp2 = partial_attention_mask.clone().permute(0,2,1,3).reshape(N, T, H*T)
-                get_bench().register_temp_buffer('partial_attention_mask_after_interp', partial_attention_mask_after_interp2)
+                raise_if_nan(partial_attention_mask)
+                    # TODO check what's wrong  #+ TODO any way to viz i.c.o self.benchmark?
+                if not self.benchmarking:
+                    partial_attention_mask_after_interp2 = partial_attention_mask.clone().permute(0,2,1,3).reshape(N, T, H*T)
+                    get_bench().register_temp_buffer('partial_attention_mask_after_interp', partial_attention_mask_after_interp2)
             
             with timer("attention"):
                 if not self.benchmarking:
@@ -1519,7 +1551,7 @@ class PerlinAttention(nn.Module):
                             else:
                                 sparse_attention_mask = partial_attention_mask
                         with timer("attention.sparse"), mem("attention.sparse"):
-                            partial_attention_scores = sparse_attn(
+                            partial_attention_scores = sparse_attn( # detach ?
                                 q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
                                 sparse_attention_mask
@@ -1642,7 +1674,11 @@ class PerlinAttention(nn.Module):
             
             #print('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
             #print('estimated_attention_probs_for_output.shape', estimated_attention_probs_for_output.shape)
-            estimated_attention_probs_for_output_for_viz = estimated_attention_probs_for_output.clone().permute(0,2,1,3).reshape(N, T, H*T)
+            if not self.benchmarking:
+                estimated_attention_probs_for_output_for_viz = estimated_attention_probs_for_output.clone().permute(0,2,1,3).reshape(N, T, H*T)
+            else:
+                estimated_attention_probs_for_output_for_viz = estimated_attention_probs_for_output.clone().permute(0,2,1,3).reshape(N, T, H*T_M)
+
             get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output_for_viz)
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
