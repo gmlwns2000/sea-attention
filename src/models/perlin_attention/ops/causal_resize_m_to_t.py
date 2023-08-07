@@ -24,77 +24,6 @@ def grid_sample_bf16(input, grid, mode='nearest', align_corners=False, padding_m
         y = y.to(input_dtype)
     return y
 
-def causal_topk_masking(
-    probs, 
-    k,
-    attention_mask, 
-    dst_attention_mask, 
-    causal_attention_mask, 
-    not_padded=True, 
-    k_flatten_dim='causal_batch'
-):
-    # attention_mask is always for src
-    assert k_flatten_dim == 'causal_batch'
-    assert not_padded
-    
-    N, H, T_DST, T_M = probs.shape
-    FP_MIN = torch.finfo(torch.float16).min * 0.5
-    
-    top_k_elems = None
-    per_item_top_k = None
-    assert k_flatten_dim in ['head', 'batch', 'causal_batch']
-        
-    masked_estimated_attention_probs = (probs * (dst_attention_mask > -1))
-    
-    causal_token_length = (causal_attention_mask > -1).long().sum(-1).view(1, 1, T_DST, 1)
-    
-    t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T_DST, H*T_M)
-    # NOTE consider causal token length
-    per_item_top_k = torch.clamp((H * torch.floor(k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
-    
-    # NOTE to prevent 0 top-k when large T and small T_m
-    per_item_top_k = torch.clamp_min(per_item_top_k, 1)
-    
-    top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
-        
-    _, indices = torch.topk(
-        input=t,
-        k=top_k_elems, 
-        dim=-1, 
-        sorted=True #sorted true is important
-    )
-        
-    partial_attention_mask = torch.empty(
-        t.shape, 
-        dtype=torch.long, 
-        device=attention_mask.device,
-    )
-    partial_attention_mask.fill_(t.shape[-1])
-    partial_attention_mask.scatter_(
-        dim=-1,
-        index=indices,
-        src=torch.arange(
-            top_k_elems, 
-            dtype=torch.long,
-            device=attention_mask.device, 
-        )\
-            .view((1, -1) if t.ndim == 2 else (1, 1, -1))\
-            .expand(indices.shape)
-    )
-        
-    t_alive_mask = partial_attention_mask < per_item_top_k
-    partial_attention_mask = t_alive_mask.float()
-    
-    partial_attention_mask = partial_attention_mask.view(N, T_DST, H, T_M).transpose(1, 2)
-    partial_attention_mask.masked_fill_(
-        mask=dst_attention_mask < -1,
-        value=FP_MIN
-    )
-    
-    partial_attention_mask = partial_attention_mask.view(N, H, T_DST, T_M)
-    
-    return partial_attention_mask
-
 def resize_from_m_to_t(x, masked_fill_value, causal_attention_mask, target_width=None, output_dtype=None, training=False):
     N, H, T1, T_M = x.shape
     if target_width is not None:
@@ -111,7 +40,7 @@ def resize_from_m_to_t(x, masked_fill_value, causal_attention_mask, target_width
         mask_cs = torch.clamp(mask_cs + (torch.rand_like(mask_cs) * 4 - 2), torch.min(mask_cs), torch.max(mask_cs))
     token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
     assert _H == 1
-    token_index_x = token_index_x[:,0,:,:]
+    token_index_x = token_index_x[:,0,:,:].expand(N, T1, T2)
     token_index_y = (
         torch.arange(T1, dtype=torch.long, device=token_index_x.device)\
             .view(1, T1, 1) / (T1 - 1) * 2 - 1)\
@@ -192,10 +121,10 @@ def __scan_col_compute(
     #                 last_index += n_pixel
     #         ncols[n, a] = last_index
     n = tl.program_id(0)
-    block_a = tl.program_id(1)
+    pid_a = tl.program_id(1)
     
     for ia in range(BLOCK_A):
-        a = block_a * BLOCK_A + ia
+        a = pid_a * BLOCK_A + ia
         mask_a = a < A
         
         scales_a = tl.load(SCALE + a*stride_scale, mask=mask_a, other=0)
@@ -233,7 +162,7 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     col_indices = torch.zeros((N, A, max_col_z), device=x.device, dtype=torch.long)
     scales = target_width / original_width
     
-    BLOCK_A = 16
+    BLOCK_A = 16 if A > 512 else 1
     grid = (N, A//BLOCK_A,)
     __scan_col_compute[grid](
         x, 
@@ -258,14 +187,14 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     
     return ncols, col_indices
 
-def compute_cols_py(ncols_cs, col_indices, out_col_indices):
+def compact_cols_py(ncols_cs, col_indices, out_col_indices):
     N, A, _ = col_indices.shape
     for n in range(N):
         for a in range(A):
             out_col_indices[n, ncols_cs[n, a]:ncols_cs[n, a+1]] = col_indices[n, a, :ncols_cs[n, a+1]-ncols_cs[n, a]]
 
 @triton.jit
-def __compute_cols_compute(
+def __compact_cols_compute(
     NCOLS_CS,
     stride_ncols_cs_n, stride_ncols_cs_a,
     N, A,
@@ -312,10 +241,10 @@ def compact_cols(ncols, col_indices: torch.Tensor):
     out_col_indices = torch.zeros((N, z_per_batch), dtype=torch.long, device=ncols.device) # type: torch.Tensor
     
     # print()
-    BLOCK_A = 16
+    BLOCK_A = 16 if A > 512 else 1
     grid = (N, A//BLOCK_A)
     # print(triton.next_power_of_2(max(1, int(torch.max(ncols).item()))))
-    __compute_cols_compute[grid](
+    __compact_cols_compute[grid](
         ncols_cs,
         ncols_cs.stride(0), ncols_cs.stride(1),
         N, A,
@@ -344,7 +273,7 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
         x, 
         original_width=T_M, 
         target_width_max=T_SRC, 
-        target_width=(torch.arange(1, T_SRC+1, device=x.device).repeat(H)), 
+        target_width=(torch.arange(1, T_SRC+1, device=x.device)[-T_DST:].repeat(H)), 
         max_col_z=H*k
     )
     # print(ncols, _col_indices)
@@ -356,33 +285,37 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
         crow_indices=crows_indices,
         col_indices=col_indices,
         values=torch.ones(col_indices.shape, device=col_indices.device),
-        size=(N, H*T_DST, T_DST),
+        size=(N, H*T_DST, T_SRC),
     )
 
 def test_main():
     from ....utils import seed
     from ....utils.bench import bench
+    from .causal_topk_masking import causal_topk_masking
 
     seed()
     
-    # N = 1
-    # H = 12
-    # T = 8
-    # T_M = 4
-    # K = 4
-    
     N = 1
     H = 12
-    T = 1024
+    T = 8
+    T_DST = 3
+    T_M = 4
+    K = 4
+    
+    N = 2
+    H = 12
+    T = 2048
+    T_DST = 2048
     T_M = 128
     K = 128
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
     
-    estimated_scores = torch.randn((N, H, T, T_M), device=device)
+    estimated_scores = torch.randn((N, H, T_DST, T_M), device=device)
     estimated_probs = torch.softmax(estimated_scores, dim=-1)
     causal_attention_mask = ((torch.arange(T, device=device).view(1, T) > torch.arange(T, device=device).view(T, 1)) * FP_MIN).view(1, 1, T, T)
+    causal_attention_mask = causal_attention_mask[:, :, -T_DST:, :]
     attention_mask = causal_attention_mask[:,:,-1:,:]
     dst_attention_mask = causal_attention_mask[:,:,:,:1]
     
@@ -399,7 +332,8 @@ def test_main():
         target_width=causal_attention_mask.shape[-1]
     )
     if t is not None:
-        resized_mask_csr = t.to_dense().view(N, H, T, T)
+        print(t.shape)
+        resized_mask_csr = t.to_dense().view(N, H, T_DST, T)
     
     # print(resized_mask_csr)
     
@@ -414,7 +348,9 @@ def test_main():
     
     # for i in range(H):
     #     print('-=-')
+    #     print('old')
     #     print(resized_mask[0,i])
+    #     print('new')
     #     print(resized_mask_csr[0,i])
     
     # return
@@ -425,8 +361,11 @@ def test_main():
             causal_attention_mask=causal_attention_mask,
             target_width=causal_attention_mask.shape[-1],
         )
-        resized_mask = resized_mask.transpose(1, 2).reshape(N, T, H*T)
-        return resized_mask.to_sparse_csr()
+        resized_mask = resized_mask.transpose(1, 2).reshape(N, T_DST, H*T)
+        for i in range(N):
+            strided = resized_mask[i:i+1]
+            strided.to_sparse_csr()
+        # return resized_mask.to_sparse_csr()
     
     def bench_csr_convert():
         return resize_from_m_to_t_csr(
