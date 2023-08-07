@@ -140,7 +140,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     
     BLOCK_HID = 64
     BLOCK_CROW = 64
-    grid = (N, R, math.ceil((max_z_per_row) / BLOCK_CROW))
+    grid = (N, R, math.ceil(max_z_per_row / BLOCK_CROW))
     __flatten_masked_bmm_csr_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
@@ -181,21 +181,21 @@ def test_main():
 
     seed()
     
-    # N = 1
-    # H = 12
-    # T = 32
-    # T_DST = 6
-    # T_M = 4
-    # K = 4
-    # HID = 64
-    
     N = 1
     H = 12
-    T = 2048
-    T_DST = 2048
-    T_M = 128
-    K = 64
+    T = 200
+    T_DST = 200
+    T_M = 4
+    K = 4
     HID = 64
+    
+    # N = 1
+    # H = 12
+    # T = 2048
+    # T_DST = 2048
+    # T_M = 128
+    # K = 64
+    # HID = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -262,7 +262,14 @@ def test_main():
     print(score_sparse[0,1])
     print(mask_dense[0,1])
     
-    print((score - score_sparse).abs().sum())
+    print((score - score_sparse).abs().max())
+    for i in range(N):
+        for j in range(H):
+            for k in range(T_DST):
+                for m in range(T):
+                    err = (score[i,j,k,m] - score_sparse[i,j,k,m]).abs().item()
+                    if err > 1e-3:
+                        print(i,j,k,m)
     
     bench('sparse_bmm', bench_sparse, 0.5, 3)
     bench('naive_bmm', bench_naive, 0.5, 3)

@@ -45,5 +45,5 @@ def bench(name, fn, t_warmup, t_sample):
         mem = 0
         elapsed = 0
     interval = elapsed/(sample_count + 1e-8)
-    print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem // 1024 // 1024} MB', flush=True)
+    print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem / 1024 / 1024:.2f} MB', flush=True)
     return interval, mem
