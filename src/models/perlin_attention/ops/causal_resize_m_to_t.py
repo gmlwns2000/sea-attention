@@ -70,22 +70,22 @@ def resize_from_m_to_t(x, masked_fill_value, causal_attention_mask, target_width
 def scan_col_py(x, original_width, target_width, max_col_z):
     N, A, B = x.shape
     assert target_width.shape == (A,)
-    ncols = torch.zeros((N, A), dtype=torch.long)
-    col_indices = torch.zeros((N, A, max_col_z))
+    ncols = torch.zeros((N, A), dtype=torch.long, device=x.device)
+    col_indices = torch.zeros((N, A, max_col_z), device=x.device)
     for n in range(N): #prange
         for a in range(A): #prange
             last_index = 0
             for b in range(B):
                 if x[n, a, b] != 0:
                     n_pixel = 0
-                    v = b #x[n, a, b]
+                    v = b % original_width #x[n, a, b]
                     scale = target_width[a] / original_width
                     v_start = torch.round(v * scale)
                     v_end = torch.round((v+1) * scale)
                     n_pixel = v_end - v_start
                     n_pixel = int(n_pixel.item())
                     for i in range(n_pixel):
-                        col_indices[n, a, last_index+i] = (v_start + i)
+                        col_indices[n, a, last_index+i] = (v_start + i) + (b // original_width * target_width[-1])
                     last_index += n_pixel
             ncols[n, a] = last_index
     return ncols, col_indices
@@ -103,6 +103,8 @@ def __scan_col_compute(
     stride_coln, stride_cola, stride_colz,
     MAX_Z: tl.constexpr,
     MAX_INTERP: tl.constexpr,
+    ORIGINAL_WIDTH: tl.constexpr,
+    TARGET_WIDTH_MAX: tl.constexpr,
 ):
     # for n in range(N): #prange
     #     for a in range(A): #prange
@@ -130,8 +132,9 @@ def __scan_col_compute(
         scales_a = tl.load(SCALE + a*stride_scale, mask=mask_a, other=0)
         
         last_index = int(0)
-        for b in range(B):
-            x_mask = tl.load(X + n*stride_xn + a*stride_xa + b*stride_xb, mask=mask_a, other=0).to(tl.int32)
+        for _b in range(B):
+            b = _b % ORIGINAL_WIDTH
+            x_mask = tl.load(X + n*stride_xn + a*stride_xa + _b*stride_xb, mask=mask_a, other=0).to(tl.int32)
             v_start = tl.math.round(b*scales_a)
             v_end = tl.math.round((b+1)*scales_a)
             n_pixel = tl.math.ceil(v_end-v_start).to(tl.int32) * x_mask
@@ -140,17 +143,12 @@ def __scan_col_compute(
                     + n*stride_coln \
                     + a*stride_cola \
                     + (tl.arange(0, MAX_INTERP) + last_index.to(tl.int64)) * stride_colz,
-                tl.arange(0, MAX_INTERP) + v_start,
+                # TARGET_WIDTH_MAX,
+                # b,
+                # tl.math.ceil(tl.math.ceil(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
+                tl.arange(0, MAX_INTERP) + v_start + tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
                 mask=(tl.arange(0, MAX_INTERP) < n_pixel) & mask_a,
             )
-            # tl.store(
-            #     COL_INDICES \
-            #         + n*stride_coln \
-            #         + a*stride_cola \
-            #         + (tl.arange(0, MAX_INTERP) + last_index.to(tl.int64)) * stride_colz,
-            #     1,
-            #     mask=(tl.arange(0, MAX_INTERP) < -1),
-            # )
             last_index += n_pixel
         
         tl.store(NCOLS + n*stride_ncolsn + a*stride_ncolsa, last_index, mask=mask_a)
@@ -161,6 +159,9 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     ncols = torch.zeros((N, A), dtype=torch.long, device=x.device)
     col_indices = torch.zeros((N, A, max_col_z), device=x.device, dtype=torch.long)
     scales = target_width / original_width
+    
+    # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
+    # return truth
     
     BLOCK_A = 16 if A > 512 else 1
     grid = (N, A//BLOCK_A,)
@@ -176,15 +177,16 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
         col_indices.stride(0), col_indices.stride(1), col_indices.stride(2), 
         max_col_z,
         triton.next_power_of_2(int(math.ceil(target_width_max / original_width))),
+        original_width,
+        target_width_max,
     )
-    
-    # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
     
     # print(ncols)
     # print(col_indices[0])
     # print(truth[0], torch.any(truth[0].to(ncols.device) != ncols))
     # print(truth[1][0])
     
+    # return truth
     return ncols, col_indices
 
 def compact_cols_py(ncols_cs, col_indices, out_col_indices):
@@ -267,13 +269,13 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
     else:
         T_SRC = T_DST
     
-    x = x.reshape(N, H*T_DST, T_M)
+    x = x.transpose(1, 2).reshape(N, T_DST, H*T_M)
     
     ncols, _col_indices = scan_col(
         x, 
         original_width=T_M, 
         target_width_max=T_SRC, 
-        target_width=(torch.arange(1, T_SRC+1, device=x.device)[-T_DST:].repeat(H)), 
+        target_width=(torch.arange(1, T_SRC+1, device=x.device)[-T_DST:]), 
         max_col_z=H*k
     )
     # print(ncols, _col_indices)
@@ -285,7 +287,7 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
         crow_indices=crows_indices,
         col_indices=col_indices,
         values=torch.ones(col_indices.shape, device=col_indices.device),
-        size=(N, H*T_DST, T_SRC),
+        size=(N, T_DST, H*T_SRC),
     )
 
 def test_main():
@@ -295,14 +297,14 @@ def test_main():
 
     seed()
     
-    N = 1
-    H = 12
-    T = 8
-    T_DST = 3
-    T_M = 4
-    K = 4
+    # N = 1
+    # H = 64
+    # T = 8
+    # T_DST = 8
+    # T_M = 4
+    # K = 4
     
-    N = 2
+    N = 1
     H = 12
     T = 2048
     T_DST = 2048
@@ -312,7 +314,27 @@ def test_main():
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
     
-    estimated_scores = torch.randn((N, H, T_DST, T_M), device=device)
+    def rand_perlin_2d(shape, res, fade = lambda t: 6*t**5 - 15*t**4 + 10*t**3):
+        delta = (res[0] / shape[0], res[1] / shape[1])
+        d = (shape[0] // res[0], shape[1] // res[1])
+        
+        grid = torch.stack(torch.meshgrid(torch.arange(0, res[0], delta[0]), torch.arange(0, res[1], delta[1])), dim = -1) % 1
+        angles = 2*math.pi*torch.rand(res[0]+1, res[1]+1)
+        gradients = torch.stack((torch.cos(angles), torch.sin(angles)), dim = -1)
+        
+        tile_grads = lambda slice1, slice2: gradients[slice1[0]:slice1[1], slice2[0]:slice2[1]].repeat_interleave(d[0], 0).repeat_interleave(d[1], 1)
+        dot = lambda grad, shift: (torch.stack((grid[:shape[0],:shape[1],0] + shift[0], grid[:shape[0],:shape[1], 1] + shift[1]  ), dim = -1) * grad[:shape[0], :shape[1]]).sum(dim = -1)
+        
+        n00 = dot(tile_grads([0, -1], [0, -1]), [0,  0])
+        n10 = dot(tile_grads([1, None], [0, -1]), [-1, 0])
+        n01 = dot(tile_grads([0, -1],[1, None]), [0, -1])
+        n11 = dot(tile_grads([1, None], [1, None]), [-1,-1])
+        t = fade(grid[:shape[0], :shape[1]])
+        return math.sqrt(2) * torch.lerp(torch.lerp(n00, n10, t[..., 0]), torch.lerp(n01, n11, t[..., 0]), t[..., 1])
+    estimated_scores = F.interpolate(rand_perlin_2d((128, 128), (16, 16)).view(1, 1, 128, 128), (T_DST, T_M)).expand(N, H, T_DST, T_M).contiguous().to(device)
+    
+    # estimated_scores = torch.randn((N, H, T_DST, T_M), device=device)
+    
     estimated_probs = torch.softmax(estimated_scores, dim=-1)
     causal_attention_mask = ((torch.arange(T, device=device).view(1, T) > torch.arange(T, device=device).view(T, 1)) * FP_MIN).view(1, 1, T, T)
     causal_attention_mask = causal_attention_mask[:, :, -T_DST:, :]
@@ -333,15 +355,23 @@ def test_main():
     )
     if t is not None:
         print(t.shape)
-        resized_mask_csr = t.to_dense().view(N, H, T_DST, T)
+        resized_mask_csr = t.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
     
     # print(resized_mask_csr)
+    # return
     
     resized_mask = resize_from_m_to_t(
         compressed_mask, 0, 
         causal_attention_mask=causal_attention_mask,
         target_width=causal_attention_mask.shape[-1],
     )
+    
+    os.makedirs('./saves/tests/ops/causal_resize_m_to_t', exist_ok=True)
+    torch.save({
+        'csr': resized_mask_csr,
+        'dense': resized_mask,
+    }, './saves/tests/ops/causal_resize_m_to_t/state.pth')
+    print('saved sample ./saves/tests/ops/causal_resize_m_to_t/state.pth')
     
     # print(resized_mask)
     # return
