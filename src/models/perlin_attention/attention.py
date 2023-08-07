@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from .masked_mm import sparse_attn
 
 import torch
-import torch.sparse._triton_ops
+# import torch.sparse._triton_ops
 import torch.nn.functional as F
 from performer_pytorch import FastAttention
 from torch import nn, optim
@@ -873,7 +873,7 @@ class PerlinAttention(nn.Module):
                             token_index_x = token_index_x[:,0,:,:]
                         token_index_y = (
                             torch.arange(T1, dtype=torch.long, device=token_index_x.device)\
-                                .view(1, T1, 1) / T1 * 2 - 1)\
+                                .view(1, T1, 1) / (T1 - 1) * 2 - 1)\
                                 .expand(N, T1, T2) #type: torch.Tensor
                         
                         # print('ti', strify(token_index_x), strify(token_index_y))
@@ -900,7 +900,7 @@ class PerlinAttention(nn.Module):
                             input=grid_input,
                             grid=token_index,
                             mode='nearest',
-                            align_corners=False,
+                            align_corners=True,
                             padding_mode='border',
                             output_dtype=output_dtype,
                         )
