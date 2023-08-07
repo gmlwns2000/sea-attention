@@ -1,55 +1,9 @@
 import torch, math
 import os, tqdm, gc
-os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
-from ....utils import seed
 import torch.nn.functional as F
 import time
-
-def bench(name, fn, t_warmup, t_sample):
-    sample_count = 0
-    try:
-        torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        start_mem = torch.cuda.max_memory_allocated()
-        torch.cuda.synchronize()
-        print(f'[{name}] warmup... ', end = '', flush=True)
-        t = time.time()
-        while True:
-            with torch.no_grad():
-                fn()
-            if time.time() - t > t_warmup:
-                break
-        torch.cuda.synchronize()
-        print('benchmarking', end = '', flush=True)
-        elapsed = 0
-        last_report = time.time()
-        while True:
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            
-            start.record()
-            with torch.no_grad():
-                fn()
-            end.record()
-            torch.cuda.synchronize()
-            elapsed += start.elapsed_time(end) / 1000
-            
-            sample_count += 1
-            if time.time() - t > t_sample:
-                break
-            if time.time() - last_report > 0.5:
-                last_report = time.time()
-                print('.', end='', flush=True)
-        torch.cuda.synchronize()
-        mem = torch.cuda.max_memory_allocated() - start_mem
-    except torch.cuda.OutOfMemoryError as ex: # type: ignore
-        mem = 0
-        elapsed = 0
-    interval = elapsed/(sample_count + 1e-8)
-    print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem // 1024 // 1024} MB', flush=True)
-    return interval, mem
+import triton
+import triton.language as tl
 
 def grid_sample_bf16(input, grid, mode='nearest', align_corners=False, padding_mode='zeros', output_dtype=None):
     input_dtype = input.dtype
@@ -206,9 +160,6 @@ def scan_col_py(x, original_width, target_width, max_col_z):
                     last_index += n_pixel
             ncols[n, a] = last_index
     return ncols, col_indices
-
-import triton
-import triton.language as tl
 
 @triton.jit
 def __scan_col_compute(
@@ -409,6 +360,9 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
     )
 
 def test_main():
+    from ....utils import seed
+    from ....utils.bench import bench
+
     seed()
     
     # N = 1
