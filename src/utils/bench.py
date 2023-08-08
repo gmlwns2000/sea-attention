@@ -2,7 +2,7 @@ import torch
 import gc
 import time
 
-def bench(name, fn, t_warmup, t_sample):
+def bench(name, fn, t_warmup, t_sample, timeunit='ms'):
     sample_count = 0
     try:
         torch.cuda.synchronize()
@@ -45,5 +45,10 @@ def bench(name, fn, t_warmup, t_sample):
         mem = 0
         elapsed = 0
     interval = elapsed/(sample_count + 1e-8)
-    print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem / 1024 / 1024:.2f} MB', flush=True)
+    if timeunit == 'ms':
+        print(f' done. sampled {sample_count}its. {interval*1000:.2f}ms/it {mem / 1024 / 1024:.2f} MB', flush=True)
+    elif timeunit == 'us':
+        print(f' done. sampled {sample_count}its. {interval*1000*1000:.2f}us/it {mem / 1024 / 1024:.2f} MB', flush=True)
+    else:
+        raise Exception()
     return interval, mem
