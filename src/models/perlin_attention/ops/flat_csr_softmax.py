@@ -181,8 +181,8 @@ def test_main():
     
     N = 1
     H = 12
-    T = 4096
-    T_DST = 4096
+    T = 2048
+    T_DST = 2048
     T_M = 128
     K = 64
     HID = 64
