@@ -127,14 +127,27 @@ def __scan_col_compute(
     
     for ia in range(BLOCK_A):
         a = pid_a * BLOCK_A + ia
+        # mask_a = (a < A) & (a < 19)
         mask_a = a < A
         
-        scales_a = tl.load(SCALE + a*stride_scale, mask=mask_a, other=0)
+        scales_a = tl.load(
+            SCALE\
+                + a*stride_scale, 
+            mask=mask_a, 
+            other=0
+        )
         
         last_index = int(0)
         for _b in range(B):
             b = _b % ORIGINAL_WIDTH
-            x_mask = tl.load(X + n*stride_xn + a*stride_xa + _b*stride_xb, mask=mask_a, other=0).to(tl.int32)
+            x_mask = tl.load(
+                X \
+                    + n*stride_xn \
+                    + a*stride_xa \
+                    + _b*stride_xb, 
+                mask=mask_a, 
+                other=0
+            ).to(tl.int32)
             v_start = tl.math.round(b*scales_a)
             v_end = tl.math.round((b+1)*scales_a)
             n_pixel = tl.math.ceil(v_end-v_start).to(tl.int32) * x_mask
@@ -143,9 +156,21 @@ def __scan_col_compute(
                     + n*stride_coln \
                     + a*stride_cola \
                     + (tl.arange(0, MAX_INTERP) + last_index.to(tl.int64)) * stride_colz,
+                # BLOCK_A,
+                # mask_a,
+                # x_mask,
+                # a,
+                # scales_a,
+                # pid_a,
+                # n,
+                # ia,
+                # n_pixel,
                 # TARGET_WIDTH_MAX,
-                # b,
-                # tl.math.ceil(tl.math.ceil(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
+                # _b,
+                # tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
+                # v_start,
+                # tl.arange(0, MAX_INTERP),
+                # n_pixel,
                 tl.arange(0, MAX_INTERP) + v_start + tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
                 mask=(tl.arange(0, MAX_INTERP) < n_pixel) & mask_a,
             )
@@ -163,8 +188,8 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
     # return truth
     
-    BLOCK_A = 16 if A > 512 else 1
-    grid = (N, A//BLOCK_A,)
+    BLOCK_A = 32 if A > 256 else 1
+    grid = (N, triton.cdiv(A,BLOCK_A),)
     __scan_col_compute[grid](
         x, 
         x.stride(0), x.stride(1), x.stride(2),
@@ -244,7 +269,7 @@ def compact_cols(ncols, col_indices: torch.Tensor):
     
     # print()
     BLOCK_A = 16 if A > 512 else 1
-    grid = (N, A//BLOCK_A)
+    grid = (N, triton.cdiv(A,BLOCK_A))
     # print(triton.next_power_of_2(max(1, int(torch.max(ncols).item()))))
     __compact_cols_compute[grid](
         ncols_cs,
@@ -271,13 +296,15 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
     
     x = x.transpose(1, 2).reshape(N, T_DST, H*T_M)
     
+    max_col_z = H*k*max(1, math.ceil(T_SRC / T_M))
     ncols, _col_indices = scan_col(
-        x, 
+        x,
         original_width=T_M, 
         target_width_max=T_SRC, 
         target_width=(torch.arange(1, T_SRC+1, device=x.device)[-T_DST:]), 
-        max_col_z=H*k
+        max_col_z=max_col_z
     )
+    # assert ncols.max() < max_col_z, f"{max_col_z}, {H}, {k}, {ncols.max()}"
     # print(ncols, _col_indices)
     # print(ncols.shape, _col_indices.shape)
     crows_indices, col_indices = compact_cols(ncols, _col_indices)
@@ -306,10 +333,10 @@ def test_main():
     
     N = 1
     H = 12
-    T = 2048
-    T_DST = 2048
+    T = 300
+    T_DST = 300
     T_M = 128
-    K = 128
+    K = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -383,7 +410,7 @@ def test_main():
     #     print('new')
     #     print(resized_mask_csr[0,i])
     
-    # return
+    return
     
     def bench_naive_convert():
         resized_mask = resize_from_m_to_t(

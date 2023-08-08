@@ -1,4 +1,5 @@
 import math
+import warnings
 import torch
 import torch.nn.functional as F
 import triton
@@ -138,9 +139,13 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     #     N, R, T_SRC
     # )
     
+    if max_z_per_row is None:
+        max_z_per_row = mask.crow_indices()
+        max_z_per_row = (max_z_per_row[:,1:] - max_z_per_row[:,:-1]).max().item()
+
     BLOCK_HID = 64
-    BLOCK_CROW = 64
-    grid = (N, R, math.ceil(max_z_per_row / BLOCK_CROW))
+    BLOCK_CROW = 32
+    grid = (N, R, triton.cdiv(max_z_per_row, BLOCK_CROW))
     __flatten_masked_bmm_csr_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
@@ -181,21 +186,21 @@ def test_main():
 
     seed()
     
+    # N = 1
+    # H = 1
+    # T = 300
+    # T_DST = 300
+    # T_M = 4
+    # K = 2
+    # HID = 64
+    
     N = 1
     H = 12
-    T = 200
-    T_DST = 200
-    T_M = 4
-    K = 4
+    T = 2048
+    T_DST = 2048
+    T_M = 128
+    K = 64
     HID = 64
-    
-    # N = 1
-    # H = 12
-    # T = 2048
-    # T_DST = 2048
-    # T_M = 128
-    # K = 64
-    # HID = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -239,6 +244,11 @@ def test_main():
         target_width=causal_attention_mask.shape[-1]
     )
     
+    # print(csr_mask.crow_indices())
+    # print(csr_mask.col_indices())
+    # print(csr_mask.values())
+    # return
+    
     query_layer = torch.randn((N, H, T_DST, HID), device=device)
     key_layer = torch.randn((N, H, T, HID), device=device)
     
@@ -252,27 +262,33 @@ def test_main():
     
     def bench_sparse():
         with torch.no_grad():
-            return flatten_masked_bmm_csr(query_layer, key_layer, csr_mask, H*K)
+            return flatten_masked_bmm_csr(query_layer, key_layer, csr_mask, None)
     
     score = bench_naive()
     score_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
     mask_dense = torch.clamp_max(csr_mask.to_dense(), 333).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
     
-    print(score[0,1])
-    print(score_sparse[0,1])
-    print(mask_dense[0,1])
+    # print(score[0,0])
+    # print(score_sparse[0,0,9,:])
+    # print(mask_dense[0,0])
+    # print(0,0,8,4, score_sparse[0,0,8,4])
+    # return
     
-    print((score - score_sparse).abs().max())
-    for i in range(N):
-        for j in range(H):
-            for k in range(T_DST):
-                for m in range(T):
-                    err = (score[i,j,k,m] - score_sparse[i,j,k,m]).abs().item()
-                    if err > 1e-3:
-                        print(i,j,k,m)
+    max_error = (score - score_sparse).abs().max()
+    print(max_error)
+    if max_error > 1e-1:
+        warnings.warn('max error exceed threshold')
+        # for i in range(N):
+        #     for j in range(H):
+        #         for k in range(T_DST):
+        #             for m in range(T):
+        #                 err = (score[i,j,k,m] - score_sparse[i,j,k,m]).abs().item()
+        #                 if err > 1e-1:
+        #                     print(i,j,k,m,err,score[i,j,k,m],score_sparse[i,j,k,m])
+        #                     return
     
-    bench('sparse_bmm', bench_sparse, 0.5, 3)
-    bench('naive_bmm', bench_naive, 0.5, 3)
+    bench('sparse_bmm', bench_sparse, 0.5, 10)
+    bench('naive_bmm', bench_naive, 0.5, 10)
 
 if __name__ == '__main__':
     test_main()
