@@ -39,6 +39,7 @@ def __flatten_masked_bmm_csr_compute(
     OUT_VALUES,
     stride_out_n, stride_out_z,
     N, R, T_SRC, HID,
+    GRID_ROW, GRID_COL,
     BLOCK_ROW: tl.constexpr, BLOCK_COL: tl.constexpr, BLOCK_HID: tl.constexpr,
 ):
     n = tl.program_id(0)
@@ -47,7 +48,7 @@ def __flatten_masked_bmm_csr_compute(
     
     for _ir in range(BLOCK_ROW):
         # ir = pid_ir * BLOCK_ROW + _ir
-        ir = _ir * BLOCK_ROW + pid_ir
+        ir = _ir * GRID_ROW + pid_ir
         ir_mask = ir < R
         
         crow_start = tl.load(
@@ -69,7 +70,7 @@ def __flatten_masked_bmm_csr_compute(
             # index_col = index_cols[i]
             # index_head = index_heads[i]
             icol = (ic + pid_icol * BLOCK_COL + crow_start)
-            # icol = (ic * BLOCK_COL + pid_icol  + crow_start)
+            # icol = (ic * GRID_COL + pid_icol + crow_start)
             _index_col = tl.load(
                 COL_INDICES\
                     + n*stride_col_n\
@@ -169,6 +170,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
         out_values,
         out_values.stride(0), out_values.stride(1),
         N, R, T_SRC, HID,
+        grid[1], grid[2],
         BLOCK_ROW, BLOCK_COL, BLOCK_HID,
     )
     
