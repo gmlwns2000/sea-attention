@@ -39,70 +39,79 @@ def __flatten_masked_bmm_csr_compute(
     OUT_VALUES,
     stride_out_n, stride_out_z,
     N, R, T_SRC, HID,
-    BLOCK_CROW: tl.constexpr, BLOCK_HID: tl.constexpr,
+    BLOCK_ROW: tl.constexpr, BLOCK_COL: tl.constexpr, BLOCK_HID: tl.constexpr,
 ):
     n = tl.program_id(0)
-    ir = tl.program_id(1)
-    icrow = tl.program_id(2)
+    pid_ir = tl.program_id(1)
+    pid_icol = tl.program_id(2)
     
-    crow_start = tl.load(
-        CROW_INDICES\
-            + n*stride_crow_n\
-            + ir*stride_crow_r1
-    )
-    crow_end = tl.load(
-        CROW_INDICES\
-            + n*stride_crow_n\
-            + (ir+1)*stride_crow_r1
-    )
-    
-    index_row = ir
-    
-    for ic in range(BLOCK_CROW):
-        # index_col = index_cols[i]
-        # index_head = index_heads[i]
-        _index_col = tl.load(
-            COL_INDICES\
-                + n*stride_col_n\
-                + (ic + icrow * BLOCK_CROW + crow_start)*stride_col_z,
-            mask=(ic + icrow * BLOCK_CROW + crow_start)<crow_end,
-        )
-        index_col = _index_col % T_SRC
-        index_head = _index_col // T_SRC
+    for _ir in range(BLOCK_ROW):
+        # ir = pid_ir * BLOCK_ROW + _ir
+        ir = _ir * BLOCK_ROW + pid_ir
+        ir_mask = ir < R
         
-        accumulator = 0.0
-        for ih in range(0, tl.cdiv(HID, BLOCK_HID)):
-            index_hids = tl.arange(0, BLOCK_HID) + ih*BLOCK_HID
-            index_hids_mask = index_hids < HID
+        crow_start = tl.load(
+            CROW_INDICES\
+                + n*stride_crow_n\
+                + ir*stride_crow_r1,
+            mask=ir_mask
+        )
+        crow_end = tl.load(
+            CROW_INDICES\
+                + n*stride_crow_n\
+                + (ir+1)*stride_crow_r1,
+            mask=ir_mask
+        )
+        
+        index_row = ir
+        
+        for ic in range(BLOCK_COL):
+            # index_col = index_cols[i]
+            # index_head = index_heads[i]
+            icol = (ic + pid_icol * BLOCK_COL + crow_start)
+            # icol = (ic * BLOCK_COL + pid_icol  + crow_start)
+            _index_col = tl.load(
+                COL_INDICES\
+                    + n*stride_col_n\
+                    + icol*stride_col_z,
+                mask=(icol<crow_end) & ir_mask,
+            )
+            index_col = _index_col % T_SRC
+            index_head = _index_col // T_SRC
             
-            a_vec = tl.load(
-                A\
-                    + n*stride_a_n\
-                    + index_head*stride_a_h\
-                    + index_row*stride_a_t\
-                    + index_hids*stride_a_d,
-                mask = index_hids_mask,
-                other = 0
+            accumulator = 0.0
+            for ih in range(0, tl.cdiv(HID, BLOCK_HID)):
+                index_hids = tl.arange(0, BLOCK_HID) + ih*BLOCK_HID
+                index_hids_mask = index_hids < HID
+                
+                a_vec = tl.load(
+                    A\
+                        + n*stride_a_n\
+                        + index_head*stride_a_h\
+                        + index_row*stride_a_t\
+                        + index_hids*stride_a_d,
+                    mask = index_hids_mask & ir_mask,
+                    other = 0
+                )
+                b_vec = tl.load(
+                    B\
+                        + n*stride_b_n\
+                        + index_head*stride_b_h\
+                        + index_col*stride_b_t\
+                        + index_hids*stride_b_d,
+                    mask = index_hids_mask & ir_mask,
+                    other = 0
+                )
+                t = tl.sum(a_vec * b_vec)
+                accumulator += t
+            
+            tl.store(
+                OUT_VALUES\
+                    + n*stride_out_n\
+                    + icol*stride_out_z,
+                accumulator,
+                mask=(icol < crow_end) & ir_mask
             )
-            b_vec = tl.load(
-                B\
-                    + n*stride_b_n\
-                    + index_head*stride_b_h\
-                    + index_col*stride_b_t\
-                    + index_hids*stride_b_d,
-                mask = index_hids_mask,
-                other = 0
-            )
-            t = tl.sum(a_vec * b_vec)
-            accumulator += t
-        
-        tl.store(
-            OUT_VALUES\
-                + n*stride_out_n\
-                + (ic + icrow * BLOCK_CROW + crow_start)*stride_out_z,
-            accumulator,
-            mask=(ic + icrow * BLOCK_CROW + crow_start) < crow_end
-        )
     
     # accumulator = accumulator.to(OUT_VALUES.dtype)
     
@@ -142,10 +151,12 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     if max_z_per_row is None:
         max_z_per_row = mask.crow_indices()
         max_z_per_row = (max_z_per_row[:,1:] - max_z_per_row[:,:-1]).max().item()
-
+    
+    BLOCK_ROW = 16
+    BLOCK_COL = 16
     BLOCK_HID = 64
-    BLOCK_CROW = 32
-    grid = (N, R, triton.cdiv(max_z_per_row, BLOCK_CROW))
+    grid = (N, triton.cdiv(R, BLOCK_ROW), triton.cdiv(max_z_per_row, BLOCK_COL))
+    # print(grid)
     __flatten_masked_bmm_csr_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
@@ -158,7 +169,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
         out_values,
         out_values.stride(0), out_values.stride(1),
         N, R, T_SRC, HID,
-        BLOCK_CROW, BLOCK_HID,
+        BLOCK_ROW, BLOCK_COL, BLOCK_HID,
     )
     
     return torch.sparse_csr_tensor(
@@ -287,8 +298,8 @@ def test_main():
         #                     print(i,j,k,m,err,score[i,j,k,m],score_sparse[i,j,k,m])
         #                     return
     
-    bench('sparse_bmm', bench_sparse, 0.5, 10)
-    bench('naive_bmm', bench_naive, 0.5, 10)
+    bench('sparse_bmm', bench_sparse, 0.5, 3)
+    bench('naive_bmm', bench_naive, 0.5, 3)
 
 if __name__ == '__main__':
     test_main()

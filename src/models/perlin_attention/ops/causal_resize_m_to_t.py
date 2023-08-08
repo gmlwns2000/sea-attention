@@ -410,7 +410,7 @@ def test_main():
     #     print('new')
     #     print(resized_mask_csr[0,i])
     
-    return
+    # return
     
     def bench_naive_convert():
         resized_mask = resize_from_m_to_t(
