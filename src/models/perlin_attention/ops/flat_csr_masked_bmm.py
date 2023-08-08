@@ -153,8 +153,10 @@ def flatten_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
         max_z_per_row = mask.crow_indices()
         max_z_per_row = (max_z_per_row[:,1:] - max_z_per_row[:,:-1]).max().item()
     
-    BLOCK_ROW = 16
-    BLOCK_COL = 16
+    #TODO improve following heuristics
+    n_warps = 1
+    BLOCK_ROW = 8
+    BLOCK_COL = 8
     BLOCK_HID = 64
     grid = (N, triton.cdiv(R, BLOCK_ROW), triton.cdiv(max_z_per_row, BLOCK_COL))
     # print(grid)
@@ -172,6 +174,7 @@ def flatten_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
         N, R, T_SRC, HID,
         grid[1], grid[2],
         BLOCK_ROW, BLOCK_COL, BLOCK_HID,
+        num_warps=n_warps,
     )
     
     return torch.sparse_csr_tensor(

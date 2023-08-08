@@ -91,7 +91,7 @@ def scan_col_py(x, original_width, target_width, max_col_z):
     return ncols, col_indices
 
 @triton.jit
-def __scan_col_compute(
+def __scan_col_compute_old(
     X,
     stride_xn, stride_xa, stride_xb,
     N, A, B: tl.constexpr, BLOCK_A: tl.constexpr,
@@ -105,6 +105,7 @@ def __scan_col_compute(
     MAX_INTERP: tl.constexpr,
     ORIGINAL_WIDTH: tl.constexpr,
     TARGET_WIDTH_MAX: tl.constexpr,
+    GRID_N, GRID_A,
 ):
     # for n in range(N): #prange
     #     for a in range(A): #prange
@@ -126,7 +127,8 @@ def __scan_col_compute(
     pid_a = tl.program_id(1)
     
     for ia in range(BLOCK_A):
-        a = pid_a * BLOCK_A + ia
+        # a = pid_a * BLOCK_A + ia
+        a = ia * GRID_A + pid_a
         # mask_a = (a < A) & (a < 19)
         mask_a = a < A
         
@@ -150,33 +152,75 @@ def __scan_col_compute(
             ).to(tl.int32)
             v_start = tl.math.round(b*scales_a)
             v_end = tl.math.round((b+1)*scales_a)
-            n_pixel = tl.math.ceil(v_end-v_start).to(tl.int32) * x_mask
+            n_pixel = (v_end-v_start).to(tl.int32) * x_mask
             tl.store(
                 COL_INDICES \
                     + n*stride_coln \
                     + a*stride_cola \
                     + (tl.arange(0, MAX_INTERP) + last_index.to(tl.int64)) * stride_colz,
-                # BLOCK_A,
-                # mask_a,
-                # x_mask,
-                # a,
-                # scales_a,
-                # pid_a,
-                # n,
-                # ia,
-                # n_pixel,
-                # TARGET_WIDTH_MAX,
-                # _b,
-                # tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
-                # v_start,
-                # tl.arange(0, MAX_INTERP),
-                # n_pixel,
                 tl.arange(0, MAX_INTERP) + v_start + tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
                 mask=(tl.arange(0, MAX_INTERP) < n_pixel) & mask_a,
             )
             last_index += n_pixel
         
         tl.store(NCOLS + n*stride_ncolsn + a*stride_ncolsa, last_index, mask=mask_a)
+
+@triton.jit
+def __scan_col_compute(
+    X,
+    stride_xn, stride_xa, stride_xb,
+    N, A, B: tl.constexpr, BLOCK_A: tl.constexpr,
+    SCALE,
+    stride_scale,
+    NCOLS,
+    stride_ncolsn, stride_ncolsa,
+    COL_INDICES,
+    stride_coln, stride_cola, stride_colz,
+    MAX_Z: tl.constexpr,
+    MAX_INTERP: tl.constexpr,
+    ORIGINAL_WIDTH: tl.constexpr,
+    TARGET_WIDTH_MAX: tl.constexpr,
+    GRID_N, GRID_A,
+):
+    n = tl.program_id(0)
+    pid_a = tl.program_id(1)
+    
+    # for ia in range(BLOCK_A):
+    index_as = pid_a * BLOCK_A + tl.arange(0, BLOCK_A)
+    mask_as = index_as < A
+    
+    scales_as = tl.load(
+        SCALE\
+            + index_as*stride_scale, 
+        mask=mask_as, 
+        other=0
+    )
+    
+    last_index = tl.zeros((BLOCK_A,), dtype=tl.int32)
+    for _b in range(B):
+        b = _b % ORIGINAL_WIDTH
+        x_mask = tl.load(
+            X \
+                + n*stride_xn \
+                + index_as*stride_xa \
+                + _b*stride_xb, 
+            mask=mask_as, 
+            other=0
+        ).to(tl.int32)
+        v_start = tl.math.round(b*scales_as)
+        v_end = tl.math.round((b+1)*scales_as)
+        n_pixel = (v_end-v_start).to(tl.int32) * x_mask
+        tl.store(
+            COL_INDICES \
+                + n*stride_coln \
+                + index_as[:, None]*stride_cola \
+                + (tl.arange(0, MAX_INTERP)[None,:] + last_index[:,None]) * stride_colz,
+            tl.arange(0, MAX_INTERP)[None,:] + v_start[:, None] + tl.math.floor(tl.math.floor(_b / ORIGINAL_WIDTH) * TARGET_WIDTH_MAX),
+            mask=(tl.arange(0, MAX_INTERP)[None,:] < n_pixel[:,None]) & mask_as[:, None],
+        )
+        last_index += n_pixel
+    
+    tl.store(NCOLS + n*stride_ncolsn + index_as*stride_ncolsa, last_index, mask=mask_as)
 
 def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target_width: torch.Tensor, max_col_z: int):
     N, A, B = x.shape
@@ -189,6 +233,8 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     # return truth
     
     BLOCK_A = 32 if A > 256 else 1
+    num_warps = 4
+    # BLOCK_A = 32
     grid = (N, triton.cdiv(A,BLOCK_A),)
     __scan_col_compute[grid](
         x, 
@@ -204,6 +250,8 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
         triton.next_power_of_2(int(math.ceil(target_width_max / original_width))),
         original_width,
         target_width_max,
+        grid[0], grid[1],
+        num_warps=num_warps
     )
     
     # print(ncols)
@@ -238,7 +286,7 @@ def __compact_cols_compute(
     # a = pid_a * BLOCK_A + tl.arange(BLOCK_A)
     
     #out_col_indices[n, ncols_cs[n, a]:ncols_cs[n, a+1]] = col_indices[n, a, :ncols_cs[n, a+1]-ncols_cs[n, a]]
-    for ia in tl.static_range(BLOCK_A):
+    for ia in range(BLOCK_A):
         a = pid_a * BLOCK_A + ia
         mask_a = a < A
         
@@ -268,7 +316,9 @@ def compact_cols(ncols, col_indices: torch.Tensor):
     out_col_indices = torch.zeros((N, z_per_batch), dtype=torch.long, device=ncols.device) # type: torch.Tensor
     
     # print()
-    BLOCK_A = 16 if A > 512 else 1
+    # BLOCK_A = 16 if A > 512 else 1
+    num_warps = 4
+    BLOCK_A = 16
     grid = (N, triton.cdiv(A,BLOCK_A))
     # print(triton.next_power_of_2(max(1, int(torch.max(ncols).item()))))
     __compact_cols_compute[grid](
@@ -281,6 +331,7 @@ def compact_cols(ncols, col_indices: torch.Tensor):
         out_col_indices.stride(0), out_col_indices.stride(1),
         triton.next_power_of_2(max(1, int(torch.max(ncols).item()))),
         BLOCK_A,
+        num_warps=num_warps,
     )
     
     return ncols_cs, out_col_indices
@@ -325,7 +376,7 @@ def test_main():
     seed()
     
     # N = 1
-    # H = 64
+    # H = 1
     # T = 8
     # T_DST = 8
     # T_M = 4
@@ -333,8 +384,8 @@ def test_main():
     
     N = 1
     H = 12
-    T = 300
-    T_DST = 300
+    T = 2048
+    T_DST = 2048
     T_M = 128
     K = 64
     
