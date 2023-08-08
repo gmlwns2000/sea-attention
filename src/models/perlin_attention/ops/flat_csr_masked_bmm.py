@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
-def __flatten_masked_bmm_csr_py(
+def __flatten_csr_masked_bmm_py(
     crow_indices,
     col_indices,
     a,
@@ -27,7 +27,7 @@ def __flatten_masked_bmm_csr_py(
                 out_values[n, ic] = torch.dot(a_vec, b_vec)
 
 @triton.jit
-def __flatten_masked_bmm_csr_compute(
+def __flatten_csr_masked_bmm_compute(
     CROW_INDICES,
     stride_crow_n, stride_crow_r1,
     COL_INDICES,
@@ -124,7 +124,7 @@ def __flatten_masked_bmm_csr_compute(
     #     mask=ics_mask
     # )
 
-def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor, max_z_per_row: int):
+def flatten_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor, max_z_per_row: int):
     assert mask.is_sparse_csr
     
     assert a.ndim == b.ndim
@@ -144,7 +144,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     _, Z = col_indices.shape
     assert out_values.shape == (N, Z)
     
-    # __flatten_masked_bmm_csr_py(
+    # __flatten_csr_masked_bmm_py(
     #     crow_indices, col_indices, a, b, out_values,
     #     N, R, T_SRC
     # )
@@ -158,7 +158,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     BLOCK_HID = 64
     grid = (N, triton.cdiv(R, BLOCK_ROW), triton.cdiv(max_z_per_row, BLOCK_COL))
     # print(grid)
-    __flatten_masked_bmm_csr_compute[grid](
+    __flatten_csr_masked_bmm_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
         col_indices,
@@ -182,7 +182,7 @@ def flatten_masked_bmm_csr(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor,
     )
                 
 
-def naive_flatten_masked_bmm_csr(a, b, mask):
+def naive_flatten_csr_masked_bmm(a, b, mask):
     # a: N*H, T_DST, HID
     # b: N*H, T_SRC, HID
     # mask: N*H, T_DST, T_SRC
@@ -267,7 +267,7 @@ def test_main():
     
     def bench_naive():
         with torch.no_grad():
-            return naive_flatten_masked_bmm_csr(
+            return naive_flatten_csr_masked_bmm(
                 query_layer, 
                 key_layer, 
                 torch.clamp_max(csr_mask.to_dense(), 1).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
@@ -275,7 +275,7 @@ def test_main():
     
     def bench_sparse():
         with torch.no_grad():
-            return flatten_masked_bmm_csr(query_layer, key_layer, csr_mask, None)
+            return flatten_csr_masked_bmm(query_layer, key_layer, csr_mask, None)
     
     score = bench_naive()
     score_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
