@@ -29,3 +29,8 @@ wandb/
 src/utils/secrets.*
 plots/
 debug/
+
+aclImdb/
+cifar-10-batches-py/
+lra_release/
+src/dataset/lra_benchmarks/lra_pytorch/datasets/
