@@ -168,6 +168,7 @@ def test_main():
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_masked_bmm import flatten_csr_masked_bmm
+    from .flat_csr_to_dense import flatten_csr_to_dense
 
     seed()
     
@@ -181,8 +182,8 @@ def test_main():
     
     N = 1
     H = 12
-    T = 2048
-    T_DST = 2048
+    T = 4096
+    T_DST = 4096
     T_M = 128
     K = 64
     HID = 64
@@ -218,18 +219,21 @@ def test_main():
         csr_mask, 
         None
     )
+    # csr_score_dense = csr_score.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    csr_score_dense = flatten_csr_to_dense(csr_score, T, H)
     
     def bench_naive():
         with torch.no_grad():
             return naive_flatten_csr_softmax(
-                csr_score.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+                csr_score_dense
             )
     
     def bench_sparse():
         with torch.no_grad():
             return flatten_csr_softmax(csr_score, H, T)
     
-    probs_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    # probs_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    probs_sparse = flatten_csr_to_dense(bench_sparse(), T, H)
     probs = bench_naive()
     
     # print(score[0,0])

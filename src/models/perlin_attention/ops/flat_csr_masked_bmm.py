@@ -199,21 +199,22 @@ def test_main():
     from ....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
+    from .flat_csr_to_dense import flatten_csr_to_dense
 
     seed()
     
     # N = 1
     # H = 1
-    # T = 300
-    # T_DST = 300
-    # T_M = 4
-    # K = 2
-    # HID = 64
+    # T = 30
+    # T_DST = 30
+    # T_M = 2
+    # K = 1
+    # HID = 4
     
     N = 1
     H = 12
-    T = 2048
-    T_DST = 2048
+    T = 4096
+    T_DST = 4096
     T_M = 128
     K = 64
     HID = 64
@@ -259,6 +260,8 @@ def test_main():
         compressed_mask, 0, K,
         target_width=causal_attention_mask.shape[-1]
     )
+    # csr_mask_dense = torch.clamp_max(csr_mask.to_dense(), 1).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    csr_mask_dense = torch.clamp_max(flatten_csr_to_dense(csr_mask, T, H), 1)
     
     # print(csr_mask.crow_indices())
     # print(csr_mask.col_indices())
@@ -273,7 +276,7 @@ def test_main():
             return naive_flatten_csr_masked_bmm(
                 query_layer, 
                 key_layer, 
-                torch.clamp_max(csr_mask.to_dense(), 1).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+                csr_mask_dense,
             )
     
     def bench_sparse():
@@ -281,12 +284,15 @@ def test_main():
             return flatten_csr_masked_bmm(query_layer, key_layer, csr_mask, None)
     
     score = bench_naive()
-    score_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
-    mask_dense = torch.clamp_max(csr_mask.to_dense(), 333).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    # score_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+    score_sparse = flatten_csr_to_dense(bench_sparse(), T, H)
+    mask_dense = flatten_csr_to_dense(csr_mask, T, H) #torch.clamp_max(csr_mask.to_dense(), 333).view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
     
-    # print(score[0,0])
-    # print(score_sparse[0,0,9,:])
-    # print(mask_dense[0,0])
+    idx_batch = 0
+    idx_head = 0
+    # print('score', score[idx_batch,idx_head])
+    # print('score_sparse', score_sparse[idx_batch,idx_head])
+    # print(mask_dense[idx_batch,idx_head])
     # print(0,0,8,4, score_sparse[0,0,8,4])
     # return
     
@@ -294,14 +300,14 @@ def test_main():
     print(max_error)
     if max_error > 1e-1:
         warnings.warn('max error exceed threshold')
-        # for i in range(N):
-        #     for j in range(H):
-        #         for k in range(T_DST):
-        #             for m in range(T):
-        #                 err = (score[i,j,k,m] - score_sparse[i,j,k,m]).abs().item()
-        #                 if err > 1e-1:
-        #                     print(i,j,k,m,err,score[i,j,k,m],score_sparse[i,j,k,m])
-        #                     return
+        for i in range(N):
+            for j in range(H):
+                for k in range(T_DST):
+                    for m in range(T):
+                        err = (score[i,j,k,m] - score_sparse[i,j,k,m]).abs().item()
+                        if err > 1e-1:
+                            print(i,j,k,m,err,score[i,j,k,m],score_sparse[i,j,k,m])
+                            return
     
     bench('sparse_bmm', bench_sparse, 0.5, 3)
     bench('naive_bmm', bench_naive, 0.5, 3)

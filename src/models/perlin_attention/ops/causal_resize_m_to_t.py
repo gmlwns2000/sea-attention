@@ -1,3 +1,5 @@
+from logging import warning
+import warnings
 import torch, math
 import os, tqdm, gc
 import torch.nn.functional as F
@@ -312,8 +314,11 @@ def compact_cols(ncols, col_indices: torch.Tensor):
     N, A = ncols.shape
     N, A, MZ = col_indices.shape
     ncols_cs = F.pad(ncols.view(1, 1, N, A), pad=(1, 0), mode='constant', value=0).view(N, A+1).cumsum(-1)
-    z_per_batch = ncols_cs[0,-1]
-    out_col_indices = torch.zeros((N, z_per_batch), dtype=torch.long, device=ncols.device) # type: torch.Tensor
+    z_per_batch = ncols_cs[:,-1].max()
+    # print(ncols_cs[:, -1], z_per_batch)
+    if not torch.all(z_per_batch == ncols_cs[:, -1]):
+        warnings.warn(f"all batch should have same number of elements {z_per_batch}=={ncols_cs[:, -1]}")
+    out_col_indices = torch.zeros((N, z_per_batch), dtype=torch.long, device=ncols.device).fill_(-1) # type: torch.Tensor
     
     # print()
     # BLOCK_A = 16 if A > 512 else 1
@@ -372,6 +377,7 @@ def test_main():
     from ....utils import seed
     from ....utils.bench import bench
     from .causal_topk_masking import causal_topk_masking
+    from .flat_csr_to_dense import flatten_csr_to_dense
 
     seed()
     
@@ -433,7 +439,8 @@ def test_main():
     )
     if t is not None:
         print(t.shape)
-        resized_mask_csr = t.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+        # resized_mask_csr = t.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
+        resized_mask_csr = flatten_csr_to_dense(t, T, H)
     
     # print(resized_mask_csr)
     # return
