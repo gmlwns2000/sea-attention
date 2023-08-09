@@ -37,13 +37,13 @@ if __name__ == "__main__":
     task = args.task
     path_dir = args.dir
     if task == "imdb":
-        path = download_url(task["imdb"]["url"], path_dir / "imdb.tar.gz")
+        path = download_url(datasets["imdb"]["url"], path_dir / "imdb.tar.gz")
         extract_tar(path)
     elif task == "cifar10":
-        path = download_url(task["cifar10"]["url"], path_dir / "cifar10.tar.gz")
+        path = download_url(datasets["cifar10"]["url"], path_dir / "cifar10.tar.gz")
         extract_tar(path)
     elif task == "listops":
-        path = download_url(task["lra_release"]["url"], path_dir / "lra_release.tar.gz")
+        path = download_url(datasets["lra_release"]["url"], path_dir / "lra_release.tar.gz")
         extract_tar(path, subdir="lra_release/listops-1000")
     else:
         assert False, f"no support for dataset named `{task}`"

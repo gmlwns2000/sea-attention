@@ -124,6 +124,7 @@ class Trainer:
         
         self.model = model_cls(task_desc['config'])
         self.model.to(self.device)
+        # TODO update optimizer
         self.optimizer = get_optimizer(self.model, lr=self.lr, weight_decay=self.wd)
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.amp_enabled)
         self.epoch = 0
@@ -281,7 +282,7 @@ class Trainer:
                 "epochs": self.epochs,
             }
         )
-        wandb.watch(self.model, log='all')
+        # wandb.watch(self.model, log='all')
         
         for epoch in range(self.epochs):
             self.epoch = epoch
