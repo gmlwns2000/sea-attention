@@ -1212,7 +1212,8 @@ class PerlinAttention(nn.Module):
                                     return col_t_alive_mask, per_item_col_real, per_item_condition_not_satisfied,\
                                             col_t_alive_mask_for_viz, col_t_alive_mask_t_for_viz, col_t_alive_mask_m_for_viz
 
-                                # TODO test script: test_perlin_col, and compare this with test_perlin_topk
+                                # TODO test script: test_perlin_col, and compare this with test_perlin_topk, final per_t_in_item_top_k
+                                # TODO test script: test_perlin_col, per_t_in_item_top_k per layer - check if it's performing reasonable decision
                                 col_t_alive_mask, per_item_col_real_1, per_item_condition_not_satisfied_1,\
                                 col_t_alive_mask_for_viz_1, col_t_alive_mask_t_for_viz_1, col_t_alive_mask_m_for_viz_1= colsel(inflated_top_k_elems_col, inflated_per_item_col)
                                 colsel_perform_cnt = 0 # for viz

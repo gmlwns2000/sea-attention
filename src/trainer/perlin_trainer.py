@@ -37,6 +37,8 @@ def add_perlin_model_options(parser):
     parser.add_argument('--colsel-mask-in-scores', action='store_true', default=False)
     parser.add_argument('--colsel-per-head-col', default = -1, type=int)
     parser.add_argument('--colsel-save', action='store_true', default=False)
+    parser.add_argument('--no-partial-scaler', action='store_true', default=False)
+
     return parser
 
 def parse_perlin_model_options(args):
@@ -60,7 +62,8 @@ def parse_perlin_model_options(args):
         "perlin_colsel_method": args.colsel_method,
         "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores,
         "perlin_colsel_per_head_col" : args.colsel_per_head_col,
-        "perlin_colsel_save" : args.colsel_save
+        "perlin_colsel_save" : args.colsel_save,
+        "perlin_partial_attention_scaler" : not args.no_partial_scaler
     }
     return kwargs
 
@@ -85,6 +88,7 @@ class BaseTrainer:
         perlin_colsel_mask_in_probs = True,
         perlin_colsel_per_head_col = -1,
         perlin_colsel_save = False,
+        perlin_partial_attention_scaler = True,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -108,6 +112,8 @@ class BaseTrainer:
         self.perlin_colsel_mask_in_probs = perlin_colsel_mask_in_probs
         self.perlin_colsel_per_head_col = perlin_colsel_per_head_col
         self.perlin_colsel_save = perlin_colsel_save
+
+        self.partial_attention_scaler = perlin_partial_attention_scaler
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
@@ -126,6 +132,7 @@ class BaseTrainer:
             colsel_mask_in_probs = perlin_colsel_mask_in_probs,
             colsel_per_head_cnt_limit = self.perlin_colsel_per_head_col,
             colsel_save = self.perlin_colsel_save,
+            partial_attention_scaler = self.partial_attention_scaler
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -170,10 +177,11 @@ class BaseTrainer:
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_colsel = f"_colsel_{self.perlin_colsel_method}_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
         name_colsel += f"_perhead{self.perlin_colsel_per_head_col}" if (self.perlin_colsel_per_head_col>-1) else ''
+        name_scaler = f"pscaler{bool2int(self.partial_attention_scaler)}" if not self.partial_attention_scaler else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_colsel}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_colsel}{name_scaler}'
 
         return name
 
