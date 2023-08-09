@@ -222,11 +222,11 @@ def flatten_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int,
     BLOCK_H = triton.next_power_of_2(H)
     BLOCK_HID = triton.next_power_of_2(HID)
     MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
-    num_warps = 1
+    num_warps = 2
     if BLOCK_H * BLOCK_HID < 1024:
-        num_warps = 1
-    elif BLOCK_H * BLOCK_HID < 2048:
         num_warps = 2
+    elif BLOCK_H * BLOCK_HID < 2048:
+        num_warps = 4
     elif BLOCK_H * BLOCK_HID < 4096:
         num_warps = 4
     elif BLOCK_H * BLOCK_HID  < 8192:
@@ -299,11 +299,11 @@ def test_main():
     
     N = 1
     H = 12
-    T = 4096
-    T_DST = 4096
+    T = 8192
+    T_DST = 8192
     T_M = 128
     K = 64
-    HID = 256
+    HID = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
