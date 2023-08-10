@@ -380,7 +380,7 @@ def test_main():
     from ....utils import seed
     from ....utils.bench import bench
     from .causal_topk_masking import causal_topk_masking
-    from .flat_csr_to_dense import flatten_csr_to_dense
+    from .flat_csr_to_dense import flat_csr_to_dense
 
     seed()
     
@@ -443,7 +443,7 @@ def test_main():
     if t is not None:
         print(t.shape)
         # resized_mask_csr = t.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
-        resized_mask_csr = flatten_csr_to_dense(t, T, H)
+        resized_mask_csr = flat_csr_to_dense(t, T, H)
     
     # print(resized_mask_csr)
     # return

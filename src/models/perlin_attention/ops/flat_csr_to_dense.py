@@ -1,6 +1,6 @@
 import torch
 
-def flatten_csr_to_dense(csr: torch.Tensor, T_SRC, H):
+def flat_csr_to_dense(csr: torch.Tensor, T_SRC, H):
     # flatten CSR allows different number of element per batch
     assert csr.is_sparse_csr
     N, T_DST, H_T = csr.shape

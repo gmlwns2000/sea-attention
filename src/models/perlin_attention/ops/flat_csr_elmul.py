@@ -3,7 +3,7 @@ import warnings
 import triton
 import triton.language as tl
 
-def __flatten_csr_elmul_py(
+def __flat_csr_elmul_py(
     crow_indices: torch.Tensor,
     col_indices: torch.Tensor,
     in_values: torch.Tensor,
@@ -28,7 +28,7 @@ def __flatten_csr_elmul_py(
                 out_values[n, crow_start+i] = values[i] * other[n, idx_head, ir, idx_col]
 
 @triton.jit
-def __flatten_csr_elmul_compute(
+def __flat_csr_elmul_compute(
     CROW_INDICES,
     stride_crow_n, stride_crow_r,
     COL_INDICES,
@@ -91,7 +91,7 @@ def __flatten_csr_elmul_compute(
         mask=tl.arange(0, MAX_ROW_Z) < (crow_end - crow_start)
     )
 
-def flatten_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:int=None):
+def flat_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:int=None):
     assert probs.is_sparse_csr
     N, T_DST, H_T = probs.shape
     _N, H, _T_DST, T = dense.shape
@@ -119,7 +119,7 @@ def flatten_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:in
     
     MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
     grid = (N, R)
-    __flatten_csr_elmul_compute[grid](
+    __flat_csr_elmul_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
         col_indices,
@@ -141,7 +141,7 @@ def flatten_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:in
         size=probs.shape
     )
 
-def naive_flatten_csr_elmul(probs, dense):
+def naive_flat_csr_elmul(probs, dense):
     return probs * dense
 
 def test_main():
@@ -149,9 +149,9 @@ def test_main():
     from ....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
-    from .flat_csr_masked_bmm import flatten_csr_masked_bmm
-    from .flat_csr_to_dense import flatten_csr_to_dense
-    from .flat_csr_softmax import flatten_csr_softmax
+    from .flat_csr_masked_bmm import flat_csr_masked_bmm
+    from .flat_csr_to_dense import flat_csr_to_dense
+    from .flat_csr_softmax import flat_csr_softmax
 
     seed()
     
@@ -196,30 +196,30 @@ def test_main():
     
     query_layer = torch.randn((N, H, T_DST, HID), device=device)
     key_layer = torch.randn((N, H, T, HID), device=device)
-    csr_score = flatten_csr_masked_bmm(
+    csr_score = flat_csr_masked_bmm(
         query_layer, 
         key_layer, 
         csr_mask, 
         None
     )
     
-    csr_probs = flatten_csr_softmax(
+    csr_probs = flat_csr_softmax(
         csr_score, H, T
     )
-    csr_probs_dense = flatten_csr_to_dense(csr_probs, T, H)
+    csr_probs_dense = flat_csr_to_dense(csr_probs, T, H)
     dense_scaler = torch.randn((N, H, T, 1), device=device).expand(N, H, T_DST, T)
     
     def bench_naive():
         with torch.no_grad():
-            return naive_flatten_csr_elmul(
+            return naive_flat_csr_elmul(
                 csr_probs_dense, dense_scaler
             )
     
     def bench_sparse():
         with torch.no_grad():
-            return flatten_csr_elmul(csr_probs, dense_scaler)
+            return flat_csr_elmul(csr_probs, dense_scaler)
     
-    scaled_sparse = flatten_csr_to_dense(bench_sparse(), T, H)
+    scaled_sparse = flat_csr_to_dense(bench_sparse(), T, H)
     scaled = bench_naive()
     idx_batch = 0
     idx_head = 0

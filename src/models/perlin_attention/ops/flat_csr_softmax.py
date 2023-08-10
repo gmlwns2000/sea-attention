@@ -3,13 +3,13 @@ import torch
 import triton
 import triton.language as tl
 
-def naive_flatten_csr_softmax(scores: torch.Tensor):
+def naive_flat_csr_softmax(scores: torch.Tensor):
     mask = scores == 0
     scores = scores.masked_fill(mask, torch.finfo(torch.float16).min * 0.5)
     probs = torch.softmax(scores, dim=-1).masked_fill_(mask, 0)
     return probs
 
-def __flatten_csr_softmax_py(
+def __flat_csr_softmax_py(
     crow_indices: torch.Tensor,
     col_indices: torch.Tensor,
     in_values: torch.Tensor,
@@ -43,7 +43,7 @@ def __flatten_csr_softmax_py(
             out_values[n, crow_start:crow_end] = output
 
 @triton.jit
-def __flatten_csr_softmax_compute(
+def __flat_csr_softmax_compute(
     CROW_INDICES,
     stride_crow_n, stride_crow_r,
     COL_INDICES,
@@ -114,7 +114,7 @@ def __flatten_csr_softmax_compute(
             mask=row_mask & ir_mask
         )
 
-def flatten_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:int=None):
+def flat_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:int=None):
     assert scores.is_sparse_csr
     crow_indices = scores.crow_indices()
     col_indices = scores.col_indices()
@@ -141,7 +141,7 @@ def flatten_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:in
         num_warps = 16
     BLOCK_R = 1
     grid = (N, triton.cdiv(R, BLOCK_R))
-    __flatten_csr_softmax_compute[grid](
+    __flat_csr_softmax_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
         col_indices,
@@ -167,8 +167,8 @@ def test_main():
     from ....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
-    from .flat_csr_masked_bmm import flatten_csr_masked_bmm
-    from .flat_csr_to_dense import flatten_csr_to_dense
+    from .flat_csr_masked_bmm import flat_csr_masked_bmm
+    from .flat_csr_to_dense import flat_csr_to_dense
 
     seed()
     
@@ -213,27 +213,27 @@ def test_main():
     
     query_layer = torch.randn((N, H, T_DST, HID), device=device)
     key_layer = torch.randn((N, H, T, HID), device=device)
-    csr_score = flatten_csr_masked_bmm(
+    csr_score = flat_csr_masked_bmm(
         query_layer, 
         key_layer, 
         csr_mask, 
         None
     )
     # csr_score_dense = csr_score.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
-    csr_score_dense = flatten_csr_to_dense(csr_score, T, H)
+    csr_score_dense = flat_csr_to_dense(csr_score, T, H)
     
     def bench_naive():
         with torch.no_grad():
-            return naive_flatten_csr_softmax(
+            return naive_flat_csr_softmax(
                 csr_score_dense
             )
     
     def bench_sparse():
         with torch.no_grad():
-            return flatten_csr_softmax(csr_score, H, T)
+            return flat_csr_softmax(csr_score, H, T)
     
     # probs_sparse = bench_sparse().to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
-    probs_sparse = flatten_csr_to_dense(bench_sparse(), T, H)
+    probs_sparse = flat_csr_to_dense(bench_sparse(), T, H)
     probs = bench_naive()
     
     # print(score[0,0])
