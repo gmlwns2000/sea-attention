@@ -38,7 +38,7 @@ def set_benchmark(model, v):
 N = 1
 H = model.config.num_attention_heads
 HID = 64
-SEQ_LEN = 256
+SEQ_LEN = 2048
 BENCH_PRECISION = torch.float32
 FP_MIN = torch.finfo(torch.float32).min
 
