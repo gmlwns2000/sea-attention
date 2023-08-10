@@ -21,6 +21,7 @@ def bench(name, fn, t_warmup, t_sample, timeunit='ms'):
         torch.cuda.synchronize()
         print('benchmarking', end = '', flush=True)
         elapsed = 0
+        t = time.time()
         last_report = time.time()
         while True:
             start = torch.cuda.Event(enable_timing=True)
