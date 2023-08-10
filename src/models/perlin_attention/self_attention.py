@@ -56,7 +56,7 @@ class PerlinSelfAttention(nn.Module):
         )
         if self.pconfig.compile:
             self._attention_unwrap = self.attention
-            self.attention = torch.compile(self.attention)
+            # self.attention = torch.compile(self.attention)
         
         self.gradient_checkpointing = False
 

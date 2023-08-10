@@ -291,6 +291,7 @@ class Trainer:
                     score = self.evaluate()
                     gc_cuda()
                     wandb_dict['eval/score'] = score
+                    self.save()
                     
                     self.model.train()
                     self.base_model.train()

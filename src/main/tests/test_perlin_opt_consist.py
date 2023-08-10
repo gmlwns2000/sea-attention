@@ -36,9 +36,9 @@ def set_benchmark(model, v):
             module.benchmarking = v
 
 N = 1
-H = 12
+H = model.config.num_attention_heads
 HID = 64
-SEQ_LEN = 2048
+SEQ_LEN = 256
 BENCH_PRECISION = torch.float32
 FP_MIN = torch.finfo(torch.float32).min
 
@@ -82,8 +82,8 @@ def samples(
         return sample
     
     samples = {
-        'output.partial_attention_mask': output.partial_attention_mask,
-        'output.partial_attention_probs': output.partial_attention_probs,
+        # 'output.partial_attention_mask': output.partial_attention_mask,
+        # 'output.partial_attention_probs': output.partial_attention_probs,
         'output.estimated_attention_probs_m': output.estimated_attention_probs_m,
         'output.context_layer': output.context_layer,
     }
@@ -99,8 +99,8 @@ def samples(
             keys.append(sample_key)
             samples[sample_key] = sample
     keys += [
-        'output.partial_attention_mask',
-        'output.partial_attention_probs',
+        # 'output.partial_attention_mask',
+        # 'output.partial_attention_probs',
         'output.estimated_attention_probs_m',
         'output.context_layer',
     ]
@@ -141,6 +141,10 @@ def exam(name, a, b, thresh=1e-5):
         a = a.to_dense()
     if b.is_sparse:
         b = b.to_dense()
+    if a.is_sparse_csr:
+        raise Exception(name)
+    if b.is_sparse_csr:
+        raise Exception(name)
 
     if a.shape != b.shape:
         print(f'  \033[93m[warn]\033[0m {name} : shape is mismatch {a.shape} != {b.shape}')
@@ -166,7 +170,9 @@ for key in keys:
 N_WARNUP = 30
 N_SAMPLE = 500
 get_bench().synchronize = True
+get_bench().activate_temp_buffers = False
 
+get_bench().reset_temp_buffers()
 get_bench().reset_trace()
 get_bench().reset_measures()
 set_benchmark(model, True)

@@ -124,7 +124,7 @@ def __flat_csr_masked_bmm_compute(
     #     mask=ics_mask
     # )
 
-def flat_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor, max_z_per_row: int):
+def flat_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor, max_z_per_row: int=None):
     assert mask.is_sparse_csr
     
     assert a.ndim == b.ndim
@@ -195,8 +195,8 @@ def naive_flat_csr_masked_bmm(a, b, mask):
     return score
 
 def test_main():
-    from ....utils import seed
-    from ....utils.bench import bench
+    from .....utils import seed
+    from .....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_to_dense import flat_csr_to_dense

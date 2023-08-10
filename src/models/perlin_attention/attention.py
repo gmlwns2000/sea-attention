@@ -765,25 +765,6 @@ class PerlinAttention(nn.Module):
                     estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
                     get_bench().register_temp_buffer('estimated_attention_score_dec_row', estimated_attention_score)
                     raise_if_nan(estimated_attention_score)
-                    # estimated_attention_score = self.attention_predictor_cnn(estimated_attention_score)
-                    # raise_if_nan(estimated_attention_score)
-                    # print('performer_value', strify(performer_value), q.shape[-2])
-                    # last_state, t_attention_predictor = PerlinAttentionState.stateful_row_op(
-                    #     last_state,
-                    #     "attention_predictor_enc->t_attention_predictor",
-                    #     self.attention_predictor_enc,
-                    #     performer_value,
-                    #     q.shape[-2],
-                    # )
-                    # # print('t_attention_predictor', strify(t_attention_predictor))
-                    # last_state, estimated_attention_score = PerlinAttentionState.stateful_row_op(
-                    #     last_state,
-                    #     "attention_predictor_dec_row->estimated_attention_score",
-                    #     self.attention_predictor_dec_row,
-                    #     t_attention_predictor,
-                    #     q.shape[-2],
-                    # )
-                    # print('estimated_attention_score', strify(estimated_attention_score))
                     
                     last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
                         last_state,
@@ -820,13 +801,6 @@ class PerlinAttention(nn.Module):
             with timer("mask_softmax"):
                 T_M = estimated_attention_score.shape[-1]
                 estimated_attention_probs = softmax_bf16(estimated_attention_score, -1)
-                # last_state, estimated_attention_probs = PerlinAttentionState.stateful_row_op(
-                #     last_state,
-                #     "softmax_bf16(estimated_attention_score)->estimated_attention_probs",
-                #     lambda x: softmax_bf16(x, -1),
-                #     estimated_attention_score,
-                #     q.shape[-2],
-                # )
                 assert estimated_attention_probs.shape[-2] == T_DST, f"{estimated_attention_probs.shape}, {T_DST}"
             
             # return DUMMY_OUTPUT #413
@@ -1216,13 +1190,22 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
                     else:
                         # TODO support causal sparse masking
-                        partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
+                        from .ops import resize_from_m_to_t_csr
+                        
+                        partial_attention_mask = resize_from_m_to_t_csr(
+                            partial_attention_mask, 0, k=self.pconfig.k, target_width=T_SRC
+                        )
+                        # partial_attention_mask = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
                 
                 raise_if_nan(partial_attention_mask)
             
             # return DUMMY_OUTPUT #1686
             
-            get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
+            if partial_attention_mask.is_sparse_csr:
+                from .ops import flat_csr_to_dense
+                get_bench().register_temp_buffer('partial_attention_mask', None, lazy=lambda: flat_csr_to_dense(partial_attention_mask, T_SRC, H))
+            else:
+                get_bench().register_temp_buffer('partial_attention_mask', partial_attention_mask)
             get_bench().register_temp_buffer('q_for_score', q_for_score)
             get_bench().register_temp_buffer('k_for_score', k_for_score)
             
@@ -1316,44 +1299,64 @@ class PerlinAttention(nn.Module):
                     N, H, T, HEAD_H = q_for_score.shape
                     # print((partial_attention_mask > -1).sum(), (partial_attention_mask > -1).sum() / partial_attention_mask.numel())
                     with mem("attention"):
-                        with timer("attention.coo"), mem("attention.coo"):
-                            if not partial_attention_mask.is_sparse:
-                                sparse_attention_mask = partial_attention_mask.float().view(N*H, T, T).to_sparse_coo()#.coalesce() 
-                            else:
-                                sparse_attention_mask = partial_attention_mask#.coalesce() 
-                        with timer("attention.sparse"), mem("attention.sparse"):
-                            assert sparse_attention_mask._nnz() > 0, sparse_attention_mask
-                            partial_attention_scores = sparse_attn(
-                                q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
-                                k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
-                                sparse_attention_mask
-                            ).coalesce()
-                            if not self.pconfig.causal:
-                                with timer("attention.sparse.score"):
-                                    partial_attention_scores = partial_attention_scores / math.sqrt(self.attention_head_size)
-                            get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
-                            del sparse_attention_mask
-                            # partial_attention_scores = partial_attention_scores.to_dense()[0].to_sparse_csr().to_sparse_bsr((1,1)).clone()
-                        with timer("attention.sparse_softmax"), mem("attention.sparse_softmax"):
-                            partial_attention_probs = torch.sparse.softmax(
-                                partial_attention_scores, dim=2
+                        if self.pconfig.causal:
+                            from .ops import (
+                                flat_csr_masked_bmm,
+                                flat_csr_softmax,
+                                flat_csr_elmul,
+                                flat_csr_sdbmm,
                             )
-                            # partial_attention_probs = torch.sparse._triton_ops.bsr_softmax(partial_attention_scores)
-                            # values = partial_attention_scores.values()
-                            # values.sub_(values.max())
-                            # values.exp_()
-                            # score_sum = partial_attention_scores.sum(dim=-1, keepdim=True)
-                            # partial_attention_probs = partial_attention_scores * score_sum.to_sparse_coo()
-                            # get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
-                            # del partial_attention_scores
-                        with timer('attention.sparse_scale'):
-                            # partial_attention_probs = partial_attention_probs.to_dense()
+                            assert partial_attention_mask.is_sparse_csr
+                            partial_attention_scores = flat_csr_masked_bmm(
+                                q_for_score, k_for_score, partial_attention_mask
+                            )
+                            partial_attention_probs = flat_csr_softmax(
+                                partial_attention_scores, H, T_SRC
+                            )
                             estimated_scales = self.attention_predictor_dec_scaler(t_attention_predictor)
                             if self.pconfig.partial_attention_scaler:
-                                partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scales[..., 0].view(N*H, T, 1))
-                        with timer("attention.bmm"), mem("attention.bmm"):
-                            partial_context_layer = torch.bmm(partial_attention_probs, v.reshape(N*H, T, HEAD_H))
-                            partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
+                                row_scaler = torch.sigmoid(estimated_scales[..., 0]).view(N, H, T_DST, 1).expand(N, H, T_DST, T_SRC)
+                                partial_attention_probs = flat_csr_elmul(partial_attention_probs, row_scaler)
+                            partial_context_layer = flat_csr_sdbmm(partial_attention_probs, v, T_M)
+                        else:
+                            with timer("attention.coo"), mem("attention.coo"):
+                                if not partial_attention_mask.is_sparse:
+                                    sparse_attention_mask = partial_attention_mask.float().view(N*H, T, T).to_sparse_coo()#.coalesce() 
+                                else:
+                                    sparse_attention_mask = partial_attention_mask#.coalesce() 
+                            with timer("attention.sparse"), mem("attention.sparse"):
+                                assert sparse_attention_mask._nnz() > 0, sparse_attention_mask
+                                partial_attention_scores = sparse_attn(
+                                    q_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                                    k_for_score.reshape(N*H, T, HEAD_H).contiguous(), 
+                                    sparse_attention_mask
+                                ).coalesce()
+                                if not self.pconfig.causal:
+                                    with timer("attention.sparse.score"):
+                                        partial_attention_scores = partial_attention_scores / math.sqrt(self.attention_head_size)
+                                get_bench().register_temp_buffer('partial_attention_scores', partial_attention_scores)
+                                del sparse_attention_mask
+                                # partial_attention_scores = partial_attention_scores.to_dense()[0].to_sparse_csr().to_sparse_bsr((1,1)).clone()
+                            with timer("attention.sparse_softmax"), mem("attention.sparse_softmax"):
+                                partial_attention_probs = torch.sparse.softmax(
+                                    partial_attention_scores, dim=2
+                                )
+                                # partial_attention_probs = torch.sparse._triton_ops.bsr_softmax(partial_attention_scores)
+                                # values = partial_attention_scores.values()
+                                # values.sub_(values.max())
+                                # values.exp_()
+                                # score_sum = partial_attention_scores.sum(dim=-1, keepdim=True)
+                                # partial_attention_probs = partial_attention_scores * score_sum.to_sparse_coo()
+                                # get_bench().register_temp_buffer('attention_matrix', partial_attention_probs)
+                                # del partial_attention_scores
+                            with timer('attention.sparse_scale'):
+                                # partial_attention_probs = partial_attention_probs.to_dense()
+                                estimated_scales = self.attention_predictor_dec_scaler(t_attention_predictor)
+                                if self.pconfig.partial_attention_scaler:
+                                    partial_attention_probs = partial_attention_probs * torch.sigmoid(estimated_scales[..., 0].view(N*H, T, 1))
+                            with timer("attention.bmm"), mem("attention.bmm"):
+                                partial_context_layer = torch.bmm(partial_attention_probs, v.reshape(N*H, T, HEAD_H))
+                                partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
                         
                 # return DUMMY_OUTPUT #2782
                 
