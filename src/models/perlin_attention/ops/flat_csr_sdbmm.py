@@ -1,3 +1,4 @@
+import random
 import warnings
 from cv2 import imreadmulti
 import torch
@@ -183,6 +184,9 @@ def __flatten_csr_sdbmm_compute(
                 # ih,
                 # ch_end,
                 # ir,
+                # (tl.arange(0, MAX_ROW_T) + ch_start + crow_start),
+                # row_values,
+                # MAX_ROW_T,
                 mask=((tl.arange(0, BLOCK_HID) + pid_hid * BLOCK_HID) < HID) & ir_mask,
                 # mask=((tl.arange(0, MAX_ROW_T) + pid_hid * MAX_ROW_T) < HID) & ir_mask,
                 # mask=((tl.arange(0, MAX_ROW_Z) + pid_hid * MAX_ROW_Z) < HID) & ir_mask,
@@ -216,13 +220,29 @@ def flatten_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int,
     # )
     
     # print(crow_indices[1])
-    # print(col_indices[1, 50:], col_indices.shape)
+    # print(T_SRC, crow_indices, col_indices, col_indices.shape, values)
     
-    BLOCK_R = 8
+    BLOCK_R = 1
+    if R < 256:
+        BLOCK_R = 1
+    elif R < 512:
+        BLOCK_R = 2
+    elif R < 1024:
+        BLOCK_R = 4
+    elif R < 2048:
+        BLOCK_R = 8
+    elif R < 4096:
+        BLOCK_R = 8
+    elif R < 8192:
+        BLOCK_R = 16
+    elif R < 16384:
+        BLOCK_R = 16
+    else:
+        BLOCK_R = 32
     BLOCK_H = triton.next_power_of_2(H)
     BLOCK_HID = triton.next_power_of_2(HID)
     MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
-    num_warps = 2
+    num_warps = 1
     if BLOCK_H * BLOCK_HID < 1024:
         num_warps = 2
     elif BLOCK_H * BLOCK_HID < 2048:
@@ -233,8 +253,13 @@ def flatten_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int,
         num_warps = 8
     else:
         num_warps = 8
-    # print(num_warps, BLOCK_H*BLOCK_HID * MAX_ROW_Z)
-    MAX_ROW_T = triton.next_power_of_2(max(triton.cdiv(max_z_per_row, H)*2+1, triton.cdiv(T_SRC, T_M)))
+    # print(num_warps, BLOCK_R, BLOCK_H*BLOCK_HID)
+    MAX_ROW_T = min(
+        MAX_ROW_Z,
+        triton.next_power_of_2(
+            max(triton.cdiv(max_z_per_row, H)*2+1, triton.cdiv(T_SRC, T_M))
+        ) * 2
+    )
     grid = (N, triton.cdiv(R, BLOCK_R), triton.cdiv(HID, BLOCK_HID))
     n_program = grid[0] * grid[1] * grid[2]
     
@@ -278,7 +303,7 @@ def flatten_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int,
 def naive_flatten_csr_sdbmm(scores, values):
     return torch.matmul(scores, values)
 
-def test_main():
+def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
     from ....utils import seed
     from ....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
@@ -286,24 +311,8 @@ def test_main():
     from .flat_csr_masked_bmm import flatten_csr_masked_bmm
     from .flat_csr_softmax import flatten_csr_softmax
     from .flat_csr_to_dense import flatten_csr_to_dense
-
+    
     seed()
-    
-    # N = 2
-    # H = 6
-    # T = 16
-    # T_DST = 16
-    # T_M = 3
-    # K = 1
-    # HID = 16
-    
-    N = 1
-    H = 12
-    T = 8192
-    T_DST = 8192
-    T_M = 128
-    K = 64
-    HID = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -325,8 +334,16 @@ def test_main():
     
     csr_mask = resize_from_m_to_t_csr(
         compressed_mask, 0, K,
-        target_width=causal_attention_mask.shape[-1]
+        target_width=causal_attention_mask.shape[-1],
+        need_assert=True
     )
+    
+    # print(csr_mask.crow_indices(), csr_mask.col_indices(), T, flatten_csr_to_dense(csr_mask, T, H))
+    t_assert = flatten_csr_to_dense(csr_mask, T, H).max() == 1
+    if run_benchmark:
+        assert t_assert
+    elif not t_assert:
+        return False
     
     query_layer = torch.randn((N, H, T_DST, HID), device=device)
     key_layer = torch.randn((N, H, T, HID), device=device)
@@ -358,25 +375,59 @@ def test_main():
     idx_batch = 0
     idx_head = 0
     # print(value_layer[idx_batch, idx_head])
-    # print(csr_probs_dense[idx_batch,idx_head])
-    # print(context[idx_batch,idx_head])
-    # print(context_sparse[idx_batch,idx_head])
+    # print(csr_probs_dense[idx_batch,idx_head, 146])
+    # print(context[idx_batch,idx_head, 146])
+    # print(context_sparse[idx_batch,idx_head, 146])
     
     max_error = (context - context_sparse).abs().max()
     print(max_error, context.shape, context_sparse.shape)
-    if max_error > 1e-1:
+    if max_error > 1e-3:
         warnings.warn('max error exceed threshold')
         for i in range(N):
+            # return False
             for j in range(H):
                 for k in range(T_DST):
                     for m in range(HID):
                         err = (context[i,j,k,m] - context_sparse[i,j,k,m]).abs().item()
-                        if err > 1e-1:
+                        if err > 1e-3:
                             print(i,j,k,m,err,context[i,j,k,m],context_sparse[i,j,k,m])
-                            return
+                            return False
     
-    bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms')
-    bench('naive_sdbmm', bench_naive, 0.5, 3, 'ms')
+    if run_benchmark:
+        bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms')
+        bench('naive_sdbmm', bench_naive, 0.5, 3, 'ms')
+    
+    return True
+
+def test_main():
+    # N = 2
+    # H = 6
+    # T = 16
+    # T_DST = 16
+    # T_M = 3
+    # K = 1
+    # HID = 16
+    
+    N = 1
+    H = 12
+    T = 8000
+    T_DST = T
+    T_M = 128
+    K = 64
+    HID = 64
+    
+    # test_config(
+    #     N, H, T, T_DST, T_M, K, HID
+    #     # 1, 4, 148, 148, 13, 12, 256,
+    # )
+    
+    failed = []
+    for i in range(1, 16000):
+        if not test_config(3, 12, i, i, 128, 64, 64, False):
+            failed.append(i)
+            break
+            
+    print(failed)
 
 if __name__ == '__main__':
     test_main()

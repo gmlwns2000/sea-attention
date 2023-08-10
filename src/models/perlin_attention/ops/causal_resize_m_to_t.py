@@ -341,7 +341,9 @@ def compact_cols(ncols, col_indices: torch.Tensor):
     
     return ncols_cs, out_col_indices
 
-def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=False):
+def resize_from_m_to_t_csr(
+    x, masked_fill_value, k, target_width=None, training=False, need_assert=False,
+):
     assert not training
     assert masked_fill_value == 0
     N, H, T_DST, T_M = x.shape
@@ -352,7 +354,7 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
     
     x = x.transpose(1, 2).reshape(N, T_DST, H*T_M)
     
-    max_col_z = H*k*max(1, math.ceil(T_SRC / T_M))
+    max_col_z = H*(k*(max(1, math.ceil(T_SRC / T_M)) + 1))
     ncols, _col_indices = scan_col(
         x,
         original_width=T_M, 
@@ -360,7 +362,8 @@ def resize_from_m_to_t_csr(x, masked_fill_value, k, target_width=None, training=
         target_width=(torch.arange(1, T_SRC+1, device=x.device)[-T_DST:]), 
         max_col_z=max_col_z
     )
-    # assert ncols.max() < max_col_z, f"{max_col_z}, {H}, {k}, {ncols.max()}"
+    if need_assert:
+        assert ncols.max() < max_col_z, f"{max_col_z}, {H}, {k}, {ncols.max()}"
     # print(ncols, _col_indices)
     # print(ncols.shape, _col_indices.shape)
     crows_indices, col_indices = compact_cols(ncols, _col_indices)
