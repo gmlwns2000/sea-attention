@@ -180,6 +180,7 @@ class Trainer:
         self._istep = 0
         self.step = 0
         self.epoch = 0
+        self.backward_performed = 0
         
         self.optimizer = self.get_optimizer(
             model=self.model, 
@@ -229,9 +230,14 @@ class Trainer:
         
         loss = loss_model + loss_kd + loss_special
         
-        self.scaler.scale(loss / self.config.gradient_accumulation_steps).backward()
+        if not torch.isnan(loss).item():
+            self.scaler.scale(loss / self.config.gradient_accumulation_steps).backward()
+            self.backward_performed += 1
         
         if ((self._istep + 1) % self.config.gradient_accumulation_steps) == 0:
+            assert self.backward_performed > 0, self.backward_performed
+            self.backward_performed = 0
+            
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)

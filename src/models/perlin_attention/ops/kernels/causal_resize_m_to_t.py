@@ -231,8 +231,10 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     col_indices = torch.zeros((N, A, max_col_z), device=x.device, dtype=torch.long)
     scales = target_width / original_width
     
-    # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
-    # return truth
+    print(scales)
+    
+    truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
+    return truth
     
     BLOCK_A = 32 if A > 256 else 1
     num_warps = 4
@@ -377,26 +379,26 @@ def resize_from_m_to_t_csr(
     )
 
 def test_main():
-    from ....utils import seed
-    from ....utils.bench import bench
+    from .....utils import seed
+    from .....utils.bench import bench
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_to_dense import flat_csr_to_dense
 
     seed()
     
-    # N = 1
-    # H = 1
-    # T = 8
-    # T_DST = 8
-    # T_M = 4
-    # K = 4
-    
     N = 1
-    H = 12
-    T = 2048
-    T_DST = 2048
-    T_M = 128
-    K = 64
+    H = 1
+    T = 32
+    T_DST = 32
+    T_M = 16
+    K = 4
+    
+    # N = 1
+    # H = 12
+    # T = 2048
+    # T_DST = 2048
+    # T_M = 128
+    # K = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -456,6 +458,7 @@ def test_main():
     
     os.makedirs('./saves/tests/ops/causal_resize_m_to_t', exist_ok=True)
     torch.save({
+        'tm': compressed_mask,
         'csr': resized_mask_csr,
         'dense': resized_mask,
     }, './saves/tests/ops/causal_resize_m_to_t/state.pth')
@@ -471,7 +474,7 @@ def test_main():
     #     print('new')
     #     print(resized_mask_csr[0,i])
     
-    # return
+    return
     
     def bench_naive_convert():
         resized_mask = resize_from_m_to_t(

@@ -4,6 +4,7 @@ default = lambda x, y: x if x is not None else y
 
 import torch
 from torch import nn
+# torch.autograd.set_detect_anomaly(True)
 
 from ..models import perlin_attention
 from ..models import perlin_bert
