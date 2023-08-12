@@ -1126,7 +1126,7 @@ class PerlinAttention(nn.Module):
                                 if self.pconfig.colsel_per_head_cnt_limit > -1:
                                     assert self.pconfig.colsel_per_head_cnt_limit <= self.pconfig.k
                                     per_item_col_cnt_limit = torch.floor(self.pconfig.colsel_per_head_cnt_limit*self.num_attention_heads * T_M / token_length)
-                                    assert per_item_col_cnt_limit <= per_t_in_item_top_k
+                                    assert (per_item_col_cnt_limit > per_t_in_item_top_k).sum().item() == 0
                                     warnings.warn(f'colsel_per_head_cnt_limit {self.pconfig.colsel_per_head_cnt_limit}')
                                     # NOTE col makes thing same for each T; inflated_per_item_col based on H*T_M or T_M
                                     # N, 1
