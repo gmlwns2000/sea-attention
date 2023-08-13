@@ -1,5 +1,6 @@
 from datasets import load_dataset, load_metric
 import random, torch
+import os
 
 TASK_TO_VALID = {
     "cola": "validation",
@@ -30,7 +31,7 @@ def get_dataloader(subset, tokenizer, batch_size, split='train', encode_batch_si
     if subset == 'bert':
         subset = "cola" #return dummy set
     
-    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
+    dataset = load_dataset('glue', subset, split=split, cache_dir=os.environ.get('HF_DATASETS_CACHE', './cache/datasets'))
     
     sentence1_key, sentence2_key = TASK_TO_KEYS[subset]
 

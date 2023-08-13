@@ -46,10 +46,10 @@ def main(
             dense_attn = module.last_perlin_dense_probs
             partial_attn = module.last_perlin_partial_probs
             attentions.append({
-                'teacher_attn': teacher_attn,
-                'estimated_attn': estimated_attn,
-                'dense_attn': dense_attn,
-                'partial_attn': partial_attn,
+                'teacher_attn': teacher_attn.cpu(),
+                'estimated_attn': estimated_attn.cpu(),
+                'dense_attn': dense_attn.cpu(),
+                'partial_attn': partial_attn.cpu(),
             })
     
     os.makedirs(f"./plots/visualize_glue", exist_ok=True)

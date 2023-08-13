@@ -41,10 +41,11 @@ def resize_from_m_to_t(
             mask_cs.max(dim=-1, keepdim=True)[1]
         )
     token_index_x = torch.floor(((mask_cs - 1) + 0.5) / token_length * T_M - 1e-4).to(torch.long) + ((1 - mask) * T_M).to(torch.long)
-    token_index_x = torch.clamp_max(token_index_x, T_M)
+    token_index_x = torch.clamp(token_index_x, 0, T_M)
     token_index_x = token_index_x.expand(N, H, T1, T2)
     
     grid_input = F.pad(x, pad=(0, 1), value=masked_fill_value)
+    assert grid_input.shape[-1] == (T_M + 1)
     output = grid_input.gather(dim=-1, index=token_index_x)
     return output
 
