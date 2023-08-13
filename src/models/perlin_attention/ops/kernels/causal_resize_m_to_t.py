@@ -332,12 +332,12 @@ def test_main():
     T_M = 16
     K = 4
     
-    # N = 1
-    # H = 12
-    # T = 128
-    # T_DST = 128
-    # T_M = 128
-    # K = 64
+    N = 1
+    H = 12
+    T = 512
+    T_DST = 512
+    T_M = 128
+    K = 64
     
     FP_MIN = torch.finfo(torch.float16).min * 0.5
     device = 0
@@ -391,7 +391,7 @@ def test_main():
     
     resized_mask = resize_from_m_to_t(
         compressed_mask, 0, 
-        causal_attention_mask=causal_attention_mask,
+        attention_mask=causal_attention_mask,
         target_width=causal_attention_mask.shape[-1],
     )
     
