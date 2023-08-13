@@ -8,7 +8,11 @@ trainer, model, tokenizer = init(skip_init_loaders=True, checkpoint_path='asdf')
 device = trainer.device
 
 layer = model.model.decoder.layers[0] # type: perlin_opt.OPTDecoderLayer
-layer = layer.self_attn.perlin_self_attention._attention_unwrap # type: perlin_attention.PerlinAttention
+layer_self = layer.self_attn.perlin_self_attention
+if hasattr(layer_self, '_attention_unwrap') and layer_self._attention_unwrap != None:
+    layer = layer_self._attention_unwrap # type: perlin_attention.PerlinAttention
+else:
+    layer = layer_self.attention # type: perlin_attention.PerlinAttention
 
 seq_len = 2048
 q = torch.randn((1, 12, seq_len, 64), device=device)
@@ -33,4 +37,4 @@ def measure():
     mem = torch.cuda.max_memory_allocated() - start_mem
     return y, mem / 1024 / 1024
 y, mem = measure()
-print(mem)
+print('mem took', mem)

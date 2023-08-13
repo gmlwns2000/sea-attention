@@ -1095,7 +1095,7 @@ class PerlinAttention(nn.Module):
             # return DUMMY_OUTPUT #3110
             
             estimated_attention_probs_for_output = estimated_attention_probs if self.benchmarking else estimated_attention_probs_resized
-            get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
+            # get_bench().register_temp_buffer('estimated_attention_probs_for_output', estimated_attention_probs_for_output)
             get_bench().register_temp_buffer('partial_context_layer', partial_context_layer)
             
             assert partial_context_layer.shape[-2] == q.shape[-2]
