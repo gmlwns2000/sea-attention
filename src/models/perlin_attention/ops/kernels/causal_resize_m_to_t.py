@@ -7,68 +7,6 @@ import time
 import triton
 import triton.language as tl
 
-def grid_sample_bf16(input, grid, mode='nearest', align_corners=False, padding_mode='zeros', output_dtype=None):
-    input_dtype = input.dtype
-    op_dtype = torch.float32 if torch.get_autocast_gpu_dtype() == torch.bfloat16 else input_dtype
-    if op_dtype != input_dtype:
-        input = input.to(op_dtype)
-        grid = grid.to(op_dtype)
-    y = F.grid_sample(
-        input=input,
-        grid=grid,
-        mode=mode,
-        align_corners=align_corners,
-        padding_mode='zeros',
-    )
-    if output_dtype is not None:
-        input_dtype = output_dtype
-    if y.dtype != input_dtype:
-        y = y.to(input_dtype)
-    return y
-
-def resize_from_m_to_t(x, masked_fill_value, causal_attention_mask, target_width=None, output_dtype=None, training=False):
-    N, H, T1, T_M = x.shape
-    if target_width is not None:
-        T2 = target_width
-    else:
-        T2 = T1
-    
-    assert masked_fill_value is not None
-    mask = (causal_attention_mask > -1).float()
-    _N, _H, _TQ, _TK = mask.shape
-    mask_cs = mask.cumsum(-1)
-    token_length = (mask_cs[:, :, :, -1].unsqueeze(-1) - 1) + 3 * math.floor(_TK/T_M)
-    if training:
-        mask_cs = torch.clamp(mask_cs + (torch.rand_like(mask_cs) * 4 - 2), torch.min(mask_cs), torch.max(mask_cs))
-    token_index_x = torch.clamp((((mask_cs - 1) + (1 - mask) * (5000)) / (token_length + 1e-8)) * 2 - 1, -1, 1)
-    assert _H == 1
-    token_index_x = token_index_x[:,0,:,:].expand(N, T1, T2)
-    token_index_y = (
-        torch.arange(T1, dtype=torch.long, device=token_index_x.device)\
-            .view(1, T1, 1) / (T1 - 1) * 2 - 1)\
-            .expand(N, T1, T2) #type: torch.Tensor
-    
-    token_index = torch.cat([
-        token_index_x.unsqueeze(-1),
-        token_index_y.unsqueeze(-1)
-    ], dim=-1)
-        
-    grid_input = F.pad(F.pad(x, pad=(0, 2), value=0), pad=(0, 1), value=masked_fill_value) if masked_fill_value is not None else x
-
-    if grid_input.dtype != x.dtype:
-        grid_input = grid_input.to(x.dtype)
-    if token_index.dtype != x.dtype:
-        token_index = token_index.to(x.dtype)
-    
-    return grid_sample_bf16(
-        input=grid_input,
-        grid=token_index,
-        mode='nearest',
-        align_corners=True,
-        padding_mode='border',
-        output_dtype=output_dtype,
-    )
-
 def scan_col_py(x, original_width, target_width, max_col_z):
     N, A, B = x.shape
     assert target_width.shape == (A,)
@@ -231,10 +169,10 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     col_indices = torch.zeros((N, A, max_col_z), device=x.device, dtype=torch.long)
     scales = target_width / original_width
     
-    print(scales)
+    # print(scales)
     
-    truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
-    return truth
+    # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
+    # return truth
     
     BLOCK_A = 32 if A > 256 else 1
     num_warps = 4
@@ -383,6 +321,7 @@ def test_main():
     from .....utils.bench import bench
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_to_dense import flat_csr_to_dense
+    from .resize_m_to_t import resize_from_m_to_t
 
     seed()
     
@@ -395,8 +334,8 @@ def test_main():
     
     # N = 1
     # H = 12
-    # T = 2048
-    # T_DST = 2048
+    # T = 128
+    # T_DST = 128
     # T_M = 128
     # K = 64
     
