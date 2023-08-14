@@ -5,7 +5,7 @@ import os
 from datasets import load_dataset
 import tqdm
 
-class Wikitext2Dataset(Dataset):
+class Wikitext2Dataset(Dataset): # WHY I think stride should be max_seq_len//2, with max_seq_len%2==0
     def __init__(self, subset, tokenizer, stride=2048, max_length=None, strided_indexing=None):
         super().__init__()
         
@@ -28,14 +28,14 @@ class Wikitext2Dataset(Dataset):
         if self.strided_indexing:
             return math.ceil(self.seq_len / self.stride)
         else:
-            return self.seq_len - self.stride * 2
+            return self.seq_len - self.stride
     
     def __getitem__(self, idx):
         max_length = self.max_length
         assert max_length > 0
         
         if not self.strided_indexing:
-            idx = idx + self.stride
+            # idx = idx + self.stride # WHY
             begin_loc = idx
         else:
             begin_loc = idx * self.stride
@@ -44,7 +44,7 @@ class Wikitext2Dataset(Dataset):
         trg_len = end_loc - min(begin_loc - self.stride + max_length, self.seq_len)
         input_ids = self.encodings.input_ids[:, begin_loc:end_loc]
         target_ids = input_ids.clone()
-        target_ids[:, :-trg_len] = -100
+        target_ids[:, :-trg_len] = -100 # WHY not working properly
         
         if self.check_last_shape:
             if self.last_shape is not None:
