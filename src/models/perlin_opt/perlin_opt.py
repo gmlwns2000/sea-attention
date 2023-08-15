@@ -193,7 +193,7 @@ class OPTAttention(nn.Module):
         self.teacher_attention_scores = None
         self.teacher_context_layer = None
         self.perlin_self_attention = PerlinSelfAttention(
-            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads),
+            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads), # WHY
             perlin_config=self.pconfig,
         )
         self.last_loss = None

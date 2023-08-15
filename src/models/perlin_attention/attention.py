@@ -1,5 +1,6 @@
 import copy
 import math
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -266,22 +267,24 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
         last_state: PerlinAttentionState = None,
     ):
-        warnings.warn("attention saving start")
-        torch.save({
-            'q' : q,
-            'k' : k,
-            'v' : v,
-            'q_for_atten' : q_for_atten,
-            'k_for_atten' : k_for_atten,
-            'v_for_atten' : v_for_atten,
-            'q_for_score' : q_for_score,
-            'k_for_score' : k_for_score,
-            'attention_mask' : attention_mask,
-            'attention_scores_truth' : attention_scores_truth,
-            'context_layer_truth' : context_layer_truth,
-            'last_state' : last_state
-        })
-        warnings.warn("attention all saved")
+        # warnings.warn("attention saving start")
+        # os.makedirs('./debug/opt/', exist_ok=True)
+        # path = './debug/opt/attn_params.pth'
+        # torch.save({
+        #     'q' : q,
+        #     'k' : k,
+        #     'v' : v,
+        #     'q_for_atten' : q_for_atten,
+        #     'k_for_atten' : k_for_atten,
+        #     'v_for_atten' : v_for_atten,
+        #     'q_for_score' : q_for_score,
+        #     'k_for_score' : k_for_score,
+        #     'attention_mask' : attention_mask,
+        #     'attention_scores_truth' : attention_scores_truth,
+        #     'context_layer_truth' : context_layer_truth,
+        #     'last_state' : last_state
+        # }, path)
+        # warnings.warn("attention all saved")
         if context_layer_truth is not None and context_layer_truth.device != q.device:
             context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
             attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
