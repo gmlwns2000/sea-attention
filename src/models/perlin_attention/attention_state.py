@@ -72,6 +72,8 @@ class StatefulCausalPerformer:
     def _causal_linear_attention_noncuda_stateful(
         self, q, k, v, chunk_size = None, eps = 1e-6
     ):
+        # return k
+        
         last_k_cumsum = 0
         last_context_cumsum = 0
         outs = []
@@ -163,7 +165,6 @@ class StatefulCausalCNN:
         self.parent = parent
         self.max_seq_len = self.parent.max_seq_length
         self.window_size = 24
-        self.window_align = 4
         self.xs = []
         self.xs_len = 0
         

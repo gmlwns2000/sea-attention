@@ -7,7 +7,8 @@ def causal_topk_masking(
     dst_attention_mask, 
     causal_attention_mask, 
     not_padded=True, 
-    k_flatten_dim='causal_batch'
+    k_flatten_dim='causal_batch',
+    is_causal=True,
 ):
     # attention_mask is always for src
     assert k_flatten_dim == 'causal_batch'
@@ -18,7 +19,7 @@ def causal_topk_masking(
     
     top_k_elems = None
     per_item_top_k = None
-    assert k_flatten_dim in ['head', 'batch', 'causal_batch']
+    # assert k_flatten_dim in ['head', 'batch', 'causal_batch']
         
     masked_estimated_attention_probs = (probs * (dst_attention_mask > -1))
     
@@ -26,7 +27,11 @@ def causal_topk_masking(
     
     t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T_DST, H*T_M)
     # NOTE consider causal token length
-    per_item_top_k = torch.clamp((H * torch.floor(k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
+    if is_causal:
+        per_item_top_k = torch.clamp((H * torch.floor(k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
+    else:
+        token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
+        per_item_top_k = (H * torch.round(k * T_M / token_length)).view(N, 1, 1)
     
     # NOTE to prevent 0 top-k when large T and small T_m
     per_item_top_k = torch.clamp_min(per_item_top_k, 1)

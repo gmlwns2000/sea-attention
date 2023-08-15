@@ -30,14 +30,9 @@ class BenchConfig:
     k: int = 64
     nbf: float = 1
 
-def bench(name, fn, config: BenchConfig):
+def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
     try:
-        torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        start_mem = torch.cuda.max_memory_allocated()
         torch.cuda.synchronize()
         print(f'[{name}] warmup... ', end = '', flush=True)
         t = time.time()
@@ -46,10 +41,18 @@ def bench(name, fn, config: BenchConfig):
                 fn()
             if time.time() - t > config.t_warmup:
                 break
+        if on_warmup is not None:
+            on_warmup()
+        torch.cuda.synchronize()
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        start_mem = torch.cuda.max_memory_allocated()
         torch.cuda.synchronize()
         print('benchmarking', end = '', flush=True)
         elapsed = 0
         last_report = time.time()
+        t = time.time()
         while True:
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
@@ -141,6 +144,26 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         layer(hidden_states=hidden_states, attention_mask=attention_mask_expand)
     
     layer.to(device)
+    
+    get_bench().disabled = False
+    get_bench().synchronize = True
+    get_bench().reset_temp_buffers()
+    get_bench().reset_trace()
+    get_bench().reset_measures()
+    
+    def on_warmup():
+        get_bench().reset_temp_buffers()
+        get_bench().reset_trace()
+        get_bench().reset_measures()
+    
+    if method == 'perlin':
+        bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""} (trace)', test_layer, bench_config, on_warmup=on_warmup)
+        msg = get_bench().format_tracetree()
+        if len(msg) > 0: print(msg)
+    
+    get_bench().disabled = True
+    get_bench().synchronize = False
+    
     result = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}', test_layer, bench_config)
     if return_queue is not None:
         return_queue.put(result)
@@ -164,8 +187,9 @@ def measure_and_dump():
     precision = torch.float32
     
     baseline_methods = BASELINES
-    ts = [2**x for x in range(8, 16)]
+    ts = [2**x for x in range(10, 16)]
     ks = [2**x for x in range(3, 8)]
+    ks = [32,64,128,]
     # ts = [2048]
     # ks = [8]
     # ts = [2**x for x in range(13, 13)]

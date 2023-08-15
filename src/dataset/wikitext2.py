@@ -28,14 +28,15 @@ class Wikitext2Dataset(Dataset):
         if self.strided_indexing:
             return math.ceil(self.seq_len / self.stride)
         else:
-            return self.seq_len - self.stride * 2
+            # return self.seq_len - self.stride * 2
+            return self.seq_len - self.stride
     
     def __getitem__(self, idx):
         max_length = self.max_length
         assert max_length > 0
         
         if not self.strided_indexing:
-            idx = idx + self.stride
+            # idx = idx + self.stride
             begin_loc = idx
         else:
             begin_loc = idx * self.stride

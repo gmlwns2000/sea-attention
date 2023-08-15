@@ -30,6 +30,16 @@ def __flat_csr_sdbmm_py(
                 
                 # too complicate in python
 
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['BLOCK_H', 'BLOCK_HID', 'MAX_ROW_Z', 'MAX_ROW_T']
+)
 @triton.jit
 def __flat_csr_sdbmm_compute(
     CROW_INDICES,
@@ -49,10 +59,12 @@ def __flat_csr_sdbmm_compute(
 ):
     n = tl.program_id(0)
     pid_ir = tl.program_id(1)
+    grid_ir = tl.num_programs(1)
     pid_hid = tl.program_id(2)
     
     for _ir in range(BLOCK_R):
-        ir = pid_ir * BLOCK_R + _ir
+        # ir = pid_ir * BLOCK_R + _ir
+        ir = _ir * grid_ir + pid_ir
         ir_mask = ir < R
         
         crow_start = tl.load(
@@ -87,7 +99,7 @@ def __flat_csr_sdbmm_compute(
         tl.store(
             TEMP_COUNT_HEAD\
                 + n*stride_tch_n\
-                + ir*stride_tch_r\
+                + pid_ir*stride_tch_r\
                 + tl.arange(0, BLOCK_H)*stride_tch_h,
             value=count_heads_cumsum,
             mask=(tl.arange(0, BLOCK_H) < H) & ir_mask
@@ -102,7 +114,7 @@ def __flat_csr_sdbmm_compute(
             ch_start = tl.load(
                 TEMP_COUNT_HEAD\
                     + n*stride_tch_n\
-                    + ir*stride_tch_r\
+                    + pid_ir*stride_tch_r\
                     + (ih-1)*stride_tch_h,
                 mask=((ih-1) >= 0) & ((ih-1) < H) & ir_mask,
                 other=0
@@ -110,20 +122,14 @@ def __flat_csr_sdbmm_compute(
             ch_end = tl.load(
                 TEMP_COUNT_HEAD\
                     + n*stride_tch_n\
-                    + ir*stride_tch_r\
+                    + pid_ir*stride_tch_r\
                     + ih*stride_tch_h,
                 mask=(ih < H) & ir_mask,
                 other=-1
             )
-            ch_end2 = tl.load(
-                TEMP_COUNT_HEAD\
-                    + n*stride_tch_n\
-                    + ir*stride_tch_r\
-                    + (ih+1)*stride_tch_h,
-                mask=((ih+1) < H) & ir_mask,
-                other=-1
-            )
             ch_len = ch_end - ch_start
+            
+            # assert ch_len < MAX_ROW_T
             
             per_head_col_indices_mask = tl.arange(0, MAX_ROW_T) < ch_len
             per_head_col_indices = tl.load(
@@ -146,9 +152,9 @@ def __flat_csr_sdbmm_compute(
             hid_mask = hid_range < HID
             
             other_mask = ((per_head_col_indices_mask[:, None]) & (hid_mask[None, :]) & ir_mask)
-            other_ptr = \
-                per_head_col_indices[:,None]*stride_other_t\
-                + hid_range[None,:]*stride_other_d
+            # other_ptr = \
+            #     per_head_col_indices[:,None]*stride_other_t\
+            #     + hid_range[None,:]*stride_other_d
             # tl.debug_barrier()
             other = tl.load(
                 OTHER\
@@ -193,119 +199,112 @@ def __flat_csr_sdbmm_compute(
             )
         
 
-def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, max_z_per_row:int=None):
-    assert scores.is_sparse_csr
-    crow_indices = scores.crow_indices()
-    col_indices = scores.col_indices()
-    values = scores.values()
-    other = value_layer
-    assert values.device == other.device
-    N, R_1 = crow_indices.shape
-    R = R_1 - 1
-    N, Z = col_indices.shape
-    
-    _N, H, T_SRC, HID = other.shape
-    assert N == _N
-    _N, T_DST, HT_SRC = scores.shape
-    assert N == _N
-    assert HT_SRC == (H*T_SRC)
-    output = torch.zeros((N, H, T_DST, HID), device=values.device)
-    
-    if max_z_per_row is None:
-        max_z_per_row = (crow_indices[:,1:] - crow_indices[:,:-1]).max().item()
-    
-    # __flatten_csr_sdbmm_py(
-    #     crow_indices, col_indices, values, other, output,
-    #     N, R, Z, H, T_DST, T_SRC, HID
-    # )
-    
-    # print(crow_indices[1])
-    # print(T_SRC, crow_indices, col_indices, col_indices.shape, values)
-    
-    BLOCK_R = 1
-    if R < 256:
-        BLOCK_R = 1
-    elif R < 512:
-        BLOCK_R = 2
-    elif R < 1024:
-        BLOCK_R = 4
-    elif R < 2048:
-        BLOCK_R = 8
-    elif R < 4096:
-        BLOCK_R = 8
-    elif R < 8192:
-        BLOCK_R = 16
-    elif R < 16384:
-        BLOCK_R = 16
+from .....utils import get_bench
+from contextlib import contextmanager
+
+@contextmanager
+def nullcontext(enter_result=None):
+    yield enter_result
+
+def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, max_z_per_row:int=None, benchmarking:bool=False):
+    if benchmarking:
+        timer = lambda name: get_bench().region(name)
     else:
-        BLOCK_R = 32
-    BLOCK_H = triton.next_power_of_2(H)
-    BLOCK_HID = triton.next_power_of_2(HID)
-    MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
-    num_warps = 1
-    if BLOCK_H * BLOCK_HID < 1024:
-        num_warps = 2
-    elif BLOCK_H * BLOCK_HID < 2048:
-        num_warps = 4
-    elif BLOCK_H * BLOCK_HID < 4096:
-        num_warps = 4
-    elif BLOCK_H * BLOCK_HID  < 8192:
-        num_warps = 8
-    else:
-        num_warps = 8
-    # print(num_warps, BLOCK_R, BLOCK_H*BLOCK_HID)
-    MAX_ROW_T = min(
-        MAX_ROW_Z,
-        triton.next_power_of_2(
-            max(triton.cdiv(max_z_per_row, H)*2+1, triton.cdiv(T_SRC, T_M))
-        ) * 2
-    )
-    grid = (N, triton.cdiv(R, BLOCK_R), triton.cdiv(HID, BLOCK_HID))
-    n_program = grid[0] * grid[1] * grid[2]
+        timer = lambda name: nullcontext()
     
-    # TODO this canbe reduced by reducing number of program in R dim
-    temp_count_head = torch.zeros((N, R, H), dtype=torch.int32, device=values.device).fill_(42)
-    # print(temp_count_head.shape)
-    
-    # print(n_program)
-    # if n_program < 32:
-    #     num_warps = 1
-    # elif n_program < 64:
-    #     num_warps = 2
-    # else:
-    #     num_warps = 2
-    # print(grid, max_z_per_row)
-    # print(grid)
-    __flat_csr_sdbmm_compute[grid](
-        crow_indices,
-        crow_indices.stride(0),crow_indices.stride(1),
-        col_indices,
-        col_indices.stride(0), col_indices.stride(1),
-        values,
-        values.stride(0), values.stride(1),
-        other,
-        other.stride(0), other.stride(1), other.stride(2), other.stride(3),
-        output,
-        output.stride(0), output.stride(1), output.stride(2), output.stride(3),
-        temp_count_head,
-        temp_count_head.stride(0), temp_count_head.stride(1), temp_count_head.stride(2),
-        N, R, Z, H, T_DST, T_SRC, HID,
-        MAX_ROW_Z, MAX_ROW_T, BLOCK_HID, BLOCK_H, BLOCK_R,
-        num_warps=num_warps,
-        # num_stages=,
-    )
-    
-    # print('tch', temp_count_head[1])
-    del temp_count_head
-    
-    return output
+    with timer("flat_csr_sdbmm"):
+        with timer("flat_csr_sdbmm.setup"):
+            assert scores.is_sparse_csr
+            crow_indices = scores.crow_indices()
+            col_indices = scores.col_indices()
+            values = scores.values()
+            other = value_layer
+            assert values.device == other.device
+            N, R_1 = crow_indices.shape
+            R = R_1 - 1
+            N, Z = col_indices.shape
+            
+            _N, H, T_SRC, HID = other.shape
+            assert N == _N
+            _N, T_DST, HT_SRC = scores.shape
+            assert N == _N
+            assert HT_SRC == (H*T_SRC)
+            output = torch.zeros((N, H, T_DST, HID), device=values.device)
+            
+            if max_z_per_row is None:
+                max_z_per_row = (crow_indices[:,1:] - crow_indices[:,:-1]).max().item()
+            
+            # __flatten_csr_sdbmm_py(
+            #     crow_indices, col_indices, values, other, output,
+            #     N, R, Z, H, T_DST, T_SRC, HID
+            # )
+            
+            # print(crow_indices[1])
+            # print(T_SRC, crow_indices, col_indices, col_indices.shape, values)
+            
+            # to prevent too many programs
+            BLOCK_R = 1
+            if R < 256:
+                BLOCK_R = 1
+            elif R < 512:
+                BLOCK_R = 1
+            elif R < 1024:
+                BLOCK_R = 1
+            elif R < 2048:
+                BLOCK_R = 2
+            elif R < 4096:
+                BLOCK_R = 2
+            elif R < 8192:
+                BLOCK_R = 4
+            elif R < 16384:
+                BLOCK_R = 4
+            else:
+                BLOCK_R = 8
+            BLOCK_H = triton.next_power_of_2(H)
+            # BLOCK_HID = 64
+            BLOCK_HID = triton.next_power_of_2(HID)
+            MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
+            MAX_ROW_T = min(
+                MAX_ROW_Z,
+                triton.next_power_of_2(
+                    # max(triton.cdiv(max_z_per_row, H)*2+1, triton.cdiv(T_SRC, T_M))
+                    triton.cdiv(max_z_per_row, H) + triton.cdiv(T_SRC, T_M)
+                )*2
+            )
+            grid = (N, triton.cdiv(R, BLOCK_R), triton.cdiv(HID, BLOCK_HID))
+            
+            # TODO this canbe reduced by reducing number of program in R dim
+            # temp_count_head = torch.zeros((N, R, H), dtype=torch.int32, device=values.device)
+            temp_count_head = torch.zeros((N, triton.cdiv(R, BLOCK_R), H), dtype=torch.int32, device=values.device)
+        
+        with timer("flat_csr_sdbmm.compute"):
+            __flat_csr_sdbmm_compute[grid](
+                crow_indices,
+                crow_indices.stride(0),crow_indices.stride(1),
+                col_indices,
+                col_indices.stride(0), col_indices.stride(1),
+                values,
+                values.stride(0), values.stride(1),
+                other,
+                other.stride(0), other.stride(1), other.stride(2), other.stride(3),
+                output,
+                output.stride(0), output.stride(1), output.stride(2), output.stride(3),
+                temp_count_head,
+                temp_count_head.stride(0), temp_count_head.stride(1), temp_count_head.stride(2),
+                N, R, Z, H, T_DST, T_SRC, HID,
+                MAX_ROW_Z, MAX_ROW_T, BLOCK_HID, BLOCK_H, BLOCK_R,
+            )
+        
+        del temp_count_head
+        
+        return output
 
 def naive_flat_csr_sdbmm(scores, values):
     return torch.matmul(scores, values)
 
 def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
-    from ....utils import seed
-    from ....utils.bench import bench
+    from .....utils import seed
+    from .....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_masked_bmm import flat_csr_masked_bmm
@@ -368,7 +367,7 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
     
     def bench_sparse():
         with torch.no_grad():
-            return flat_csr_sdbmm(csr_probs, value_layer, T_M)
+            return flat_csr_sdbmm(csr_probs, value_layer, T_M, benchmarking=True)
     
     context = bench_naive()
     context_sparse = bench_sparse()
@@ -394,7 +393,8 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
                             return False
     
     if run_benchmark:
-        bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms')
+        bench('sparse_sdbmm (trace)', bench_sparse, 0.5, 3, 'ms', True)
+        bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms', False)
         bench('naive_sdbmm', bench_naive, 0.5, 3, 'ms')
     
     return True
@@ -410,19 +410,20 @@ def test_main():
     
     N = 1
     H = 12
-    T = 8000
+    T = 8192
     T_DST = T
-    T_M = 128
-    K = 64
+    T_M = 512
+    K = 128
     HID = 64
     
-    # test_config(
-    #     N, H, T, T_DST, T_M, K, HID
-    #     # 1, 4, 148, 148, 13, 12, 256,
-    # )
+    test_config(
+        N, H, T, T_DST, T_M, K, HID
+        # 1, 4, 148, 148, 13, 12, 256,
+    )
     
     failed = []
-    for i in range(1, 16000):
+    for i in range(1, 16000, 32):
+        i = i + random.randint(0, 32)
         if not test_config(3, 12, i, i, 128, 64, 64, False):
             failed.append(i)
             break

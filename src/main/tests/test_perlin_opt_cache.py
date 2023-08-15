@@ -69,6 +69,7 @@ MAX_SEQ_LEN = 128
 def main():
     use_cache = True
     bench = get_bench()
+    bench.disabled = False
     bench.activate_temp_buffers = True
     
     # trainer, model, tokenizer = init(skip_init_loaders=True, checkpoint_path='./saves/trainer/opt_trainer/opt-125m_wikitext2_kf1_lw0_perlin_k64_full_copy/checkpoint.pth')
@@ -87,7 +88,8 @@ def main():
     buffers_truth = {}
     for name in TRACKING_BUFFERS:
         # sample only first layer
-        buffers_truth[name] = bench.get_temp_buffer(name, index=INDEX_LAYER)
+        if name in bench.buffers:
+            buffers_truth[name] = bench.get_temp_buffer(name, index=INDEX_LAYER)
     buffers_truth['logits'] = output.logits
     bench.reset_temp_buffers()
     
@@ -100,7 +102,7 @@ def main():
     output_ids = []
     perlin_attention.get_default_config().use_cache = use_cache
     buffers = {}
-    for i in range(input_ids.shape[-1]):
+    for i in tqdm.tqdm(range(input_ids.shape[-1])):
         if use_cache:
             ids_slice = input_ids[:, i:i+1]
             with torch.no_grad():
@@ -113,18 +115,19 @@ def main():
             token_id = torch.argmax(output.logits, dim=-1).item()
             
             for name in TRACKING_BUFFERS:
-                buf = bench.get_temp_buffer(name, index=INDEX_LAYER)
-                if not name in buffers:
-                    buffers[name] = buf
-                else:
-                    if name in BUFFER_ACCUMULATE:
-                        if name in DST_SOURCE_BUFFER:
-                            buffers[name] = F.pad(buffers[name], pad=(0, buf.shape[-1] - buffers[name].shape[-1]), mode='constant', value=-32000)
-                        assert buffers[name].shape[-1] == buf.shape[-1], f"{name}: {buffers[name].shape}, {buf.shape}"
-                        assert buffers[name].shape[:-2] == buf.shape[:-2], f"{name}: {buffers[name].shape}, {buf.shape}"
-                        buffers[name] = torch.cat([buffers[name], buf], dim=-2)
-                    else:
+                if name in bench.buffers:
+                    buf = bench.get_temp_buffer(name, index=INDEX_LAYER)
+                    if not name in buffers:
                         buffers[name] = buf
+                    else:
+                        if name in BUFFER_ACCUMULATE:
+                            if name in DST_SOURCE_BUFFER:
+                                buffers[name] = F.pad(buffers[name], pad=(0, buf.shape[-1] - buffers[name].shape[-1]), mode='constant', value=-32000)
+                            assert buffers[name].shape[-1] == buf.shape[-1], f"{name}: {buffers[name].shape}, {buf.shape}"
+                            assert buffers[name].shape[:-2] == buf.shape[:-2], f"{name}: {buffers[name].shape}, {buf.shape}"
+                            buffers[name] = torch.cat([buffers[name], buf], dim=-2)
+                        else:
+                            buffers[name] = buf
             
             buf = output.logits
             if not 'logits' in buffers:
@@ -146,17 +149,18 @@ def main():
             token_id = torch.argmax(output.logits[:,-1,:], dim=-1).item()
             
             for name in TRACKING_BUFFERS:
-                buf = bench.get_temp_buffer(name, index=INDEX_LAYER)
-                # buffers[name] = buf
-                if name in BUFFER_ACCUMULATE:
-                    buf = buf[...,-1:,:]
-                if not name in buffers:
-                    buffers[name] = buf
-                else:
+                if name in bench.buffers:
+                    buf = bench.get_temp_buffer(name, index=INDEX_LAYER)
+                    # buffers[name] = buf
                     if name in BUFFER_ACCUMULATE:
-                        buffers[name] = torch.cat([buffers[name], buf], dim=-2)
-                    else:
+                        buf = buf[...,-1:,:]
+                    if not name in buffers:
                         buffers[name] = buf
+                    else:
+                        if name in BUFFER_ACCUMULATE:
+                            buffers[name] = torch.cat([buffers[name], buf], dim=-2)
+                        else:
+                            buffers[name] = buf
             
             # buffers['logits'] = output.logits
             buf = output.logits[...,-1:,:]
@@ -194,21 +198,22 @@ def main():
     JUST_WIDTH = 12
     print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
     for name in TRACKING_BUFFERS + ['logits']:
-        truth = buffers_truth[name]
-        mine = buffers[name]
-        losses = []
-        for idx in CHECK_INDEX:
-            def error(x, y):
-                x = x.to(torch.float64)
-                y = y.to(torch.float64)
-                return (x - y).abs().sum().log10()
-            loss = error(truth[...,idx,:], mine[...,idx,:]).item()
-            losses.append(loss)
-        def deco_error(str, e):
-            if e < -3:
-                return f"\033[92m{str}\033[0m"
-            return f"\033[91m{str}\033[0m"
-        print(f' - {name.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
+        if name in buffers_truth and name in buffers:
+            truth = buffers_truth[name]
+            mine = buffers[name]
+            losses = []
+            for idx in CHECK_INDEX:
+                def error(x, y):
+                    x = x.to(torch.float64)
+                    y = y.to(torch.float64)
+                    return (x - y).abs().sum().log10()
+                loss = error(truth[...,idx,:], mine[...,idx,:]).item()
+                losses.append(loss)
+            def deco_error(str, e):
+                if e < -3:
+                    return f"\033[92m{str}\033[0m"
+                return f"\033[91m{str}\033[0m"
+            print(f' - {name.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
 
 if __name__ == '__main__':
     main()

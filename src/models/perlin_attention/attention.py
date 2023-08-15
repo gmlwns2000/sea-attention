@@ -173,18 +173,20 @@ class PerlinAttention(nn.Module):
         N_H = self.num_attention_heads
         if not self.pconfig.causal:
             self.attention_predictor_cnn = nn.Sequential(
-                (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity()),
                 KeepRes(
-                    CausalConv2d(N_H, 4*N_H, 3, padding=1, stride=2, causal=self.pconfig.causal),
+                    nn.Conv2d(N_H, 4*N_H, 3, padding=1, stride=2),
                     nn.ReLU(),
-                    ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
-                    CausalConv2d(4*N_H, 4*N_H, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
-                    ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
+                    # ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
+                    # CausalConv2d(4*N_H, 4*N_H, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
+                    # ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
+                    nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+                    nn.ReLU(),
+                    nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+                    nn.ReLU(),
                     UpsampleFP32(2, torch.float16),
-                    CausalConv2d(4*N_H, N_H, 3, padding=1, causal=self.pconfig.causal),
+                    # CausalConv2d(4*N_H, N_H, 3, padding=1, causal=self.pconfig.causal),
+                    nn.Conv2d(4*N_H, N_H, 3, padding=1),
                 ),
-                # this prevent model explode within causal setting...
-                (nn.LayerNorm(self.pconfig.attention_predictor_length) if self.pconfig.causal else nn.Identity())
             )
         else:
             is_causal = self.pconfig.causal
@@ -629,6 +631,12 @@ class PerlinAttention(nn.Module):
                 k_flatten = self.pconfig.k_flatten
                 if not k_flatten:
                     with timer("mask.topk"):
+                        # _, indices = torch.sort(
+                        #     estimated_attention_probs,
+                        #     dim=-1,
+                        #     descending=True,
+                        #     stable=False,
+                        # )
                         _, indices = torch.topk(
                             estimated_attention_probs, # estimation gradient is cut here
                             k=top_k, 
@@ -688,12 +696,21 @@ class PerlinAttention(nn.Module):
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
                         get_bench().register_temp_buffer('top_k_elems', None, lazy=lambda: torch.tensor(top_k_elems, dtype=torch.float64))
                     with timer("mask.topk"):
-                        _, indices = torch.topk(
-                            input=t,
-                            k=top_k_elems, 
-                            dim=-1, 
-                            sorted=True #sorted true is important
-                        )
+                        if top_k_elems < t.shape[-1] * 0.9:
+                            _, indices = torch.topk(
+                                input=t,
+                                k=top_k_elems, 
+                                dim=-1, 
+                                sorted=True #sorted true is important
+                            )
+                        else:
+                            _, indices = torch.sort(
+                                t,
+                                dim=-1,
+                                descending=True,
+                                stable=False,
+                            )
+                            indices = indices[...,:top_k_elems]
                         get_bench().register_temp_buffer('topk_indices', indices.double())
                     with timer("mask.empty"):
                         partial_attention_mask = torch.empty(
@@ -809,15 +826,25 @@ class PerlinAttention(nn.Module):
                         # partial_attention_mask_original = resize_from_m_to_t(partial_attention_mask, FP_MIN if not self.benchmarking else 0).view(N*H, T, T).to_sparse_coo()
                         
                         # optimized
-                        partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
-                        partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
+                        SPARSITY_TYPE = 'flat_csr'
+                        if SPARSITY_TYPE == 'flat_csr':
+                            with timer("interp.csr"):
+                                from .ops import resize_from_m_to_t_csr
+                                partial_attention_mask = resize_from_m_to_t_csr(
+                                    partial_attention_mask, 0, k=self.pconfig.k, target_width=T_SRC, is_causal=False, benchmarking=True
+                                )
+                        elif SPARSITY_TYPE == 'coo':
+                            with timer("interp.coo"):
+                                partial_attention_mask = partial_attention_mask.reshape(N*H, T, T_M).to_sparse_coo()
+                                partial_attention_mask = resize_width(partial_attention_mask, T/T_M)
+                        else:
+                            raise Exception()
                     else:
                         # TODO support causal sparse masking
-                        from .ops import resize_from_m_to_t_csr
-                        
                         SPARSITY_TYPE = 'flat_csr'
                         
                         if SPARSITY_TYPE == 'flat_csr':
+                            from .ops import resize_from_m_to_t_csr
                             partial_attention_mask = resize_from_m_to_t_csr(
                                 partial_attention_mask, 0, k=self.pconfig.k, target_width=T_SRC
                             )
