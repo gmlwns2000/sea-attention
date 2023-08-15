@@ -60,18 +60,19 @@ def samples(
 ):
     get_bench().activate_temp_buffers = sample_from_benchmark
     with torch.no_grad():
-        output = attention(
-            query=None,
-            key=None,
-            value=None,
-            hidden_states=context_layer_truth,
-            query_layer=q,
-            key_layer=k,
-            value_layer=v,
-            attention_mask=attention_mask,
-            attention_scores_truth=attention_scores_truth,
-            context_layer_truth=context_layer_truth,
-        ) # type: PerlinAttentionOutput
+        with get_bench().region("sample"):
+            output = attention(
+                query=None,
+                key=None,
+                value=None,
+                hidden_states=context_layer_truth,
+                query_layer=q,
+                key_layer=k,
+                value_layer=v,
+                attention_mask=attention_mask,
+                attention_scores_truth=attention_scores_truth,
+                context_layer_truth=context_layer_truth,
+            ) # type: PerlinAttentionOutput
     get_bench().activate_temp_buffers = False
     
     def postproc(key, sample):
@@ -184,13 +185,5 @@ for _ in tqdm.tqdm(range(N_SAMPLE)):
 data = get_bench().todict()
 # print(data)
 
-root = get_bench().traced_callstack
-total_time = data[root.name]
-def format_tree_percent(self, indent=0):
-    spaces = "--" * indent
-    messages =  [f"{spaces}> {self.name} ({data[self.name]*1000:.2f} ms, {data[self.name] / total_time * 100:.2f}%)"]
-    for child in self.children:
-        messages.append(format_tree_percent(child, indent+1))
-    return "\n".join(messages)
-tree = format_tree_percent(root)
+tree = get_bench().format_tracetree()
 print(tree)

@@ -478,6 +478,24 @@ class Benchmark:
     
     def reset_temp_buffers(self):
         self.buffers = {}
+    
+    def format_tracetree(self):
+        data = self.todict()
+        root = self.traced_callstack
+        if root is None: return ""
+        
+        total_time = data[root.name]
+        def format_tree_percent(item, indent=0):
+            spaces = ""
+            if indent == 1:
+                spaces = "╰─"
+            elif indent > 1:
+                spaces = "  " * (indent - 1) + "╰─"
+            messages =  [f"{spaces}> {item.name} ({data[item.name]*1000:.2f} ms, {data[item.name] / total_time * 100:.2f}%)"]
+            for child in item.children:
+                messages.append(format_tree_percent(child, indent+1))
+            return "\n".join(messages)
+        return format_tree_percent(root)
 
 BENCHMARK = Benchmark()
 

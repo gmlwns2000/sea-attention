@@ -28,6 +28,7 @@ class Wikitext2Dataset(Dataset): # WHY I think stride should be max_seq_len//2, 
         if self.strided_indexing:
             return math.ceil(self.seq_len / self.stride)
         else:
+            # return self.seq_len - self.stride * 2
             return self.seq_len - self.stride
     
     def __getitem__(self, idx):
@@ -35,7 +36,7 @@ class Wikitext2Dataset(Dataset): # WHY I think stride should be max_seq_len//2, 
         assert max_length > 0
         
         if not self.strided_indexing:
-            # idx = idx + self.stride # WHY
+            # idx = idx + self.stride
             begin_loc = idx
         else:
             begin_loc = idx * self.stride

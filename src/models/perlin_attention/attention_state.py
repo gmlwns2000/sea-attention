@@ -55,9 +55,9 @@ class StatefulCausalPerformer:
         qs = torch.cat(self.qs, dim=-2)
         
         #TODO: fix this!!
-        qs = F.pad(qs, pad=(0,0,0,256-qs.shape[-2]), mode='constant', value=0)
-        k = F.pad(k, pad=(0,0,0,256-k.shape[-2]), mode='constant', value=0)
-        v = F.pad(v, pad=(0,0,0,256-v.shape[-2]), mode='constant', value=0)
+        # qs = F.pad(qs, pad=(0,0,0,256-qs.shape[-2]), mode='constant', value=0)
+        # k = F.pad(k, pad=(0,0,0,256-k.shape[-2]), mode='constant', value=0)
+        # v = F.pad(v, pad=(0,0,0,256-v.shape[-2]), mode='constant', value=0)
         
         original_causal_fn = self.performer.causal_linear_fn
         self.performer.causal_linear_fn = self._causal_linear_attention_noncuda_stateful
@@ -72,6 +72,8 @@ class StatefulCausalPerformer:
     def _causal_linear_attention_noncuda_stateful(
         self, q, k, v, chunk_size = None, eps = 1e-6
     ):
+        # return k
+        
         last_k_cumsum = 0
         last_context_cumsum = 0
         outs = []
@@ -91,55 +93,6 @@ class StatefulCausalPerformer:
             outs.append(out)
 
         return torch.cat(outs, dim = -2)
-
-    # def causal_linear_attention_noncuda_stateful(
-    #     self, q_chunk, k_all, v_all, chunk_size = 1, eps=1e-20,
-    # ):
-    #     assert chunk_size == 1
-    #     N, H, T_NEW, HID = q_chunk.shape
-    #     N, H, T_ALL, HID = k_all.shape
-        
-    #     outs = []
-    #     for iq in range(T_NEW):
-    #         q = q_chunk[...,iq:iq+1,:]
-    #         k = k_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
-    #         v = v_all[...,self.seq_index+iq:self.seq_index+iq+1,:]
-            
-    #         k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2, dtype=torch.float64)
-    #         # k_cumsum = self.last_k_cumsum + k.to(torch.float64)
-
-    #         D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
-    #         context = torch.einsum('...nd,...ne->...nde', k, v)
-    #         context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3, dtype=torch.float64)
-    #         out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum.type_as(q), q, D_inv)
-
-    #         self.last_k_cumsum = k_cumsum[..., -1:, :]
-    #         self.last_context_cumsum = context_cumsum[..., -1:, :]
-    #         outs.append(out)
-        
-    #     self.seq_index += T_NEW
-    #     assert self.seq_index == T_ALL, f"{self.seq_index}({len(outs)}) == {T_ALL}"
-        
-    #     return torch.cat(outs, dim=-2)
-    
-    # def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-    #     # q:    N, H, T_NEW, HID
-    #     # k, v: N, H, T_ALL, HID
-    #     # assert last_out == N, H, T_ALL-T_NEW, HID
-    #     # out:  N, H, T_ALL, HID
-        
-    #     N, H, T_NEW, HID = q.shape
-    #     assert k.shape[:-1] == v.shape[:-1], f"{k.shape} == {v.shape}"
-    #     N, H, T_ALL, HID = k.shape
-        
-    #     original_causal_fn = self.performer.causal_linear_fn
-    #     self.performer.causal_linear_fn = self.causal_linear_attention_noncuda_stateful
-    #     context_layer = self.performer(q,k,v)
-    #     self.performer.causal_linear_fn = original_causal_fn
-        
-    #     assert context_layer.shape[:-1] == (N, H, T_NEW)
-        
-    #     return context_layer
     
     def strify(self):
         return f"StatePerformer({self.seq_index}, {strify(self.last_k_cumsum)}, {strify(self.last_context_cumsum)})"
@@ -163,12 +116,12 @@ class StatefulCausalCNN:
         self.parent = parent
         self.max_seq_len = self.parent.max_seq_length
         self.window_size = 24
-        self.window_align = 4
+        self.window_align = 1
         self.xs = []
         self.xs_len = 0
         
     def __call__(self, cnn: torch.nn.Module, x: torch.Tensor, x_len: int):
-        assert x.shape[-2] == x_len
+        assert x.shape[-2] == x_len, f"{x.shape} == {x_len}"
         # x = x[...,-x_len:,:]
         
         self.xs.append(x)
@@ -251,42 +204,6 @@ class PerlinAttentionState:
     ):
         state = self.get_state(name, lambda: StatefulCausalCNN(self))
         return state(func, x, x_len)
-    
-    # @staticmethod
-    # def stateful_row_op(
-    #     state: "PerlinAttentionState",
-    #     name: str,
-    #     func: nn.Module,
-    #     x: torch.Tensor,
-    #     x_len: int,
-    # ):
-    #     if state is None:
-    #         return None, func(x)
-    #     else:
-    #         state = copy.deepcopy(state)
-    #         return state, state.forward_row_op(name=name, func=func, x=x, x_len=x_len)
-    
-    # def forward_row_op(
-    #     self,
-    #     name: str,
-    #     func: nn.Module,
-    #     x: torch.Tensor,
-    #     x_len: int,
-    # ):
-    #     x = x[...,-x_len:,:]
-    #     y = func(x)
-    #     max_shape = list(y.shape)
-    #     max_shape[-2] = self.max_seq_length
-    #     state = self.get_state(
-    #         name, 
-    #         lambda: {
-    #             'len':0, 
-    #             'buf': torch.zeros(max_shape, device=y.device, dtype=y.dtype)
-    #         }
-    #     )
-    #     state['buf'][...,state['len']:state['len']+y.shape[2],:] = y
-    #     state['len'] += y.shape[-2]
-    #     return state['buf'][...,:state['len'],:]
     
     @staticmethod
     def stateful_performer(
