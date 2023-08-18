@@ -246,6 +246,7 @@ def measure_and_dump():
             'latencies_perlin': latencies_perlin,
             'vram_baseline': vram_baseline,
             'vram_perlin': vram_perlin,
+            'baseline_methods': baseline_methods,
             'ts': ts,
             'ks': ks,
         }, f)

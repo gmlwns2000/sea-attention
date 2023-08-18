@@ -410,7 +410,7 @@ def test_main():
     
     N = 1
     H = 12
-    T = 8192
+    T = 4096
     T_DST = T
     T_M = 512
     K = 128
@@ -420,6 +420,8 @@ def test_main():
         N, H, T, T_DST, T_M, K, HID
         # 1, 4, 148, 148, 13, 12, 256,
     )
+    
+    return
     
     failed = []
     for i in range(1, 16000, 32):

@@ -163,8 +163,8 @@ def flat_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:int=N
     )
 
 def test_main():
-    from ....utils import seed
-    from ....utils.bench import bench
+    from .....utils import seed
+    from .....utils.bench import bench
     from .causal_resize_m_to_t import resize_from_m_to_t_csr
     from .causal_topk_masking import causal_topk_masking
     from .flat_csr_masked_bmm import flat_csr_masked_bmm
