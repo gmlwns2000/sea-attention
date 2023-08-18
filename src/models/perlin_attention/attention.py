@@ -1208,7 +1208,13 @@ class PerlinAttention(nn.Module):
                                     per_item_col_real = sum_last_dim[:,0:1] # N, 1
                                     # warnings.warn(f"per_t_in_item_top_k {per_t_in_item_top_k}")
                                     # warnings.warn(f"per_item_col_real {per_item_col_real}")
-                                    per_item_condition_not_satisfied = per_item_col_real > per_t_in_item_top_k
+                                    # print('col real', per_item_col_real)
+                                    # print('col limit', per_item_col_cnt_limit)
+                                    # print('t_in_topk', per_t_in_item_top_k)
+                                    if self.pconfig.colsel_per_head_cnt_limit > -1:
+                                        per_item_condition_not_satisfied = per_item_col_real > torch.min(per_t_in_item_top_k, per_item_col_cnt_limit)
+                                    else:
+                                        per_item_condition_not_satisfied = per_item_col_real > per_t_in_item_top_k
                                     return col_t_alive_mask, per_item_col_real, per_item_condition_not_satisfied,\
                                             col_t_alive_mask_for_viz, col_t_alive_mask_t_for_viz, col_t_alive_mask_m_for_viz
 
@@ -1231,8 +1237,13 @@ class PerlinAttention(nn.Module):
                                     col_t_alive_mask_t_for_viz_1_for2 = col_t_alive_mask_t_for_viz_1.clone()
                                     col_t_alive_mask_m_for_viz_1_for2 = col_t_alive_mask_m_for_viz_1.clone()
                                     per_item_condition_not_satisfied_1_for2 = per_item_condition_not_satisfied_1.clone()
-                                    per_item_new_col = torch.min(per_item_col_real_1, per_t_in_item_top_k)
+
+                                    if self.pconfig.colsel_per_head_cnt_limit > -1:
+                                        per_item_new_col = torch.min(per_item_col_real_1, torch.min(per_t_in_item_top_k, per_item_col_cnt_limit))
+                                    else:
+                                        per_item_new_col = torch.min(per_item_col_real_1, per_t_in_item_top_k)
                                     top_k_elems_new_col = int(max(per_item_new_col))
+                                    # TODO don't do colsel twice, but update col_t_alive_mask with top_k_elems_new_col
                                     col_t_alive_mask, per_item_col_real_2, per_item_condition_not_satisfied_2,\
                                     col_t_alive_mask_for_viz_2, col_t_alive_mask_t_for_viz_2, col_t_alive_mask_m_for_viz_2= colsel(top_k_elems_new_col, per_item_new_col)
                                     
@@ -1260,7 +1271,8 @@ class PerlinAttention(nn.Module):
                                         # NOTE or just select topk with per_t_in_item_top_k? : but interpolation might delete out some values
                                         # warnings.warn(f'colsel_m exceeds k_m :\n {per_t_in_item_top_k}')
                                         # fill 0 in indices that exceed required k_m
-                                        per_t_in_item_top_k = per_t_in_item_top_k * (1-per_item_condition_not_satisfied_2.float()) # TODO check averge k + is using float okay?
+                                        per_t_in_item_top_k.masked_fill_(per_t_in_item_top_k<0, 0.0) # NOTE not satisfied bc per_head case; skipping this slight affect (due to interpolation)
+                                        # per_t_in_item_top_k = per_t_in_item_top_k * (1-per_item_condition_not_satisfied_2.float()) # TODO check averge k + is using float okay?
                                     per_t_in_item_top_k_for2 = per_t_in_item_top_k.clone()
                                     get_bench().register_temp_buffer('per_t_in_item_top_k_for2', per_t_in_item_top_k_for2)
                                 else:

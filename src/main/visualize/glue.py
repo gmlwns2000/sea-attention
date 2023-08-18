@@ -32,9 +32,9 @@ def main(
     teacher = trainer.base_model
     bert = trainer.model
     
-    if 'benchmark_for_sparse' in kwargs:
+    if 'benchmark_for_sparse' in kwargs or kwargs["perlin_colsel"]:
         for module in bert.modules():
-            if hasattr(module, 'benchmarking'):
+            if 'benchmark_for_sparse' in kwargs and hasattr(module, 'benchmarking'):
                 module.benchmarking = kwargs['benchmark_for_sparse']
             if hasattr(module, 'layer_id'):
                 global LAYER_ID
@@ -67,9 +67,10 @@ def main(
     r = bool2int(kwargs['perlin_colsel'])
     m = kwargs['perlin_colsel_method']
     p = bool2int(kwargs['perlin_colsel_mask_in_probs'])
+    h = kwargs['perlin_colsel_per_head_col']
     root = f"./plots/visualize_glue/colsel{r}/"
     if kwargs['perlin_colsel']:
-        root += f'{m}_mprobs{p}'
+        root += f'{m}_mprobs{p}_perhead{h}' if h>-1 else f'{m}_mprobs{p}'
     os.makedirs(root, exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
