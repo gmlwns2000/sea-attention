@@ -813,13 +813,13 @@ def test_main():
     
     N = 1
     H = 12
-    T = 8192*2
+    T = 4096
     T_DST = T
-    T_M = 512
+    T_M = 128
     K = 64
     
     test_config(
-        IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=True
+        IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=False
     )
     
     # for t in [2048, 4096, 8192]:
