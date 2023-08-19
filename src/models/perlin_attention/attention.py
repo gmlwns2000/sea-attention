@@ -250,7 +250,7 @@ class PerlinAttention(nn.Module):
         )
         
         self.v_eye_learned_causal = nn.Parameter(
-            data=torch.randn((1, 1, 2048, self.attention_head_size)), # JIN 2048 should be the max len that the model can handle
+            data=torch.randn((1, 1, 2048, self.attention_head_size)), # JIN 2048 should be the max_len that the model can handle
             requires_grad=True
         )
     
@@ -321,9 +321,9 @@ class PerlinAttention(nn.Module):
                 assert T_DST == T_SRC
                 assert H == 1
                 causal_attention_mask = attention_mask
-                attention_mask = attention_mask[:, :, :, :1].transpose(-1, -2) # WHY this will be always 0
+                attention_mask = attention_mask[:, :, :, :1].transpose(-1, -2) # WHY not use same method with use_cache
             else:
-                N, H, T_DST, T_SRC = attention_mask.shape
+                N, H, T_DST, T_SRC = attention_mask.shape # JJ it's not H but 1
                 _N, _H, _T_DST, _HID_Q = q.shape
                 _N, _H, _T_SRC, _HID_K = k.shape
                 assert k.shape[:-2] == v.shape[:-2]
@@ -331,8 +331,8 @@ class PerlinAttention(nn.Module):
                 assert T_SRC == _T_SRC
                 assert _HID_Q == _HID_K
                 
-                causal_attention_mask = attention_mask
-                attention_mask = causal_attention_mask[:, :, -1:, :] # WHY this will consider padding, tho it makes no difference i.c.o wikitext2
+                causal_attention_mask = attention_mask # JJ check shape, values
+                attention_mask = causal_attention_mask[:, :, -1:, :]
                 
                 assert attention_mask.shape == (1, 1, 1, T_SRC)
                 assert causal_attention_mask.shape == (1, 1, T_DST, T_SRC)
@@ -341,12 +341,12 @@ class PerlinAttention(nn.Module):
         
         dst_attention_mask = attention_mask.transpose(-1, -2)
         if self.pconfig.causal:
-            dst_attention_mask = causal_attention_mask[:,:,:,:1]
+            dst_attention_mask = causal_attention_mask[:,:,:,:1] # JJ check for use_cache case
         
         not_padded = (attention_mask > -1).float().sum() == attention_mask.numel()
         
         if use_cache and last_state is None:
-            last_state = PerlinAttentionState(self)
+            last_state = PerlinAttentionState(self) # JJ last state!!
         if not use_cache:
             last_state = None
         
