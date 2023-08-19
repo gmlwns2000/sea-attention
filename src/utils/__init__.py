@@ -2,7 +2,7 @@ import copy
 import gc
 import os
 import threading
-from typing import Dict, TextIO
+from typing import Dict, List, TextIO, Tuple
 import numpy as np
 import torch
 import random
@@ -66,8 +66,12 @@ def tensor_buffer_to(v, device):
         return list([tensor_buffer_to(i, device) for i in v])
     elif isinstance(v, dict):
         return dict({k:tensor_buffer_to(vv, device) for k,vv in v.items()})
+    elif isinstance(v, (float, int, str)):
+        return v
+    elif v is None:
+        return v
     else:
-        raise Exception()
+        raise Exception(type(v))
 
 def batch_to(batch, device):
     if isinstance(batch, dict):
@@ -82,8 +86,10 @@ def batch_to(batch, device):
         if isinstance(batch, tuple):
             new_batch = tuple(new_batch)
         return new_batch
+    elif isinstance(batch, torch.Tensor):
+        return tensor_buffer_to(batch, device)
     else:
-        raise Exception()
+        raise Exception(type(batch))
 
 def get_device_name(device):
     name = torch.cuda.get_device_name(device=device)
@@ -502,3 +508,23 @@ BENCHMARK = Benchmark()
 def get_bench() -> Benchmark:
     global BENCHMARK
     return BENCHMARK
+
+def trace_referrers(obj, live_count=2):
+    if live_count <= 0:
+        return str(type(obj))
+    parent = gc.get_referrers(obj)
+    return f"[{[trace_referrers(p, live_count=live_count-1) for p in parent]}]({type(obj)})"
+
+def get_all_allocated_tensors() -> List[Tuple[torch.Tensor, list]]:
+    tensors = []
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.Tensor) and (not isinstance(obj, torch.nn.Parameter)) and (torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data))):
+                if obj.device != torch.device('cpu'):
+                    obj = obj #type: torch.Tensor
+                    # referrers = gc.get_referrers(obj)
+                    referrers = trace_referrers(obj)
+                    tensors.append((obj, referrers))
+        except OSError:
+            pass
+    return tensors

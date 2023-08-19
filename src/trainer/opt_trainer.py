@@ -14,6 +14,7 @@ import os
 from ..dataset.wikitext2 import get_dataloader
 import gc
 import torch.nn.functional as F
+from ..utils import strify
 
 default = lambda x, y: x if x is not None else y
 
@@ -195,14 +196,55 @@ class Trainer:
         del batch['trg_len']
         batch.update({
             'output_hidden_states': True,
-            'output_attentions': True,
+            'output_attentions': False,
         })
         
-        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+        swap_in_device = self.device
+        swap_out_device = swap_in_device
+        swap_out_device = torch.device('cpu')
+        
+        for m in self.base_model.modules():
+            if hasattr(m, 'swap_out_device'):
+                m.swap_out_device = swap_out_device
+        
+        for m in self.model.modules():
+            if hasattr(m, 'swap_out_device'):
+                m.swap_out_device = swap_out_device
+            if hasattr(m, 'swap_in_device'):
+                m.swap_in_device = swap_in_device
+        
+        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
+            print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            # self.base_model.to(self.device)
             output_teacher = self.base_model(**batch)
+            # self.base_model.to('cpu')
+            # self.model.to('cpu')
+            # del output_teacher
+            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
+            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
+            output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
+        # torch.cuda.synchronize()
+        # gc.collect()
+        # torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.reset_peak_memory_stats()
+        # print(torch.cuda.memory_summary())
+        # for obj in gc.get_objects():
+        #     try:
+        #         if isinstance(obj, (torch.Tensor, torch.nn.Parameter)) and (torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data))):
+        #             if obj.device != torch.device('cpu'):
+        #                 obj = obj #type: torch.Tensor
+        #                 print('obj', type(obj), obj.size(), obj.device, obj.element_size() * obj.numel())
+        #                 referrers = gc.get_referrers(obj)
+        #                 print('ref', len(referrers), [type(r) for r in referrers])
+        #     except OSError:
+        #         pass
+        print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
         with torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             batch['teacher'] = self.base_model
+            print('*'*20, 'model', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_student = self.model(**batch)
+            print('*'*20, 'model2', torch.cuda.max_memory_allocated() // 1024 // 1024)
         
         if self.config.using_loss:
             if self.config.using_kd:
@@ -214,13 +256,17 @@ class Trainer:
         
         loss_kd = 0
         if self.config.using_kd:
-            for ilayer in range(len(output_teacher.hidden_states)):
-                loss_kd += F.mse_loss(output_teacher.hidden_states[ilayer], output_student.hidden_states[ilayer])
+            for ilayer, teacher_value in enumerate(output_teacher.hidden_states):
+                teacher_value = batch_to(teacher_value, self.device)
+                student_value = batch_to(output_student.hidden_states[ilayer], self.device)
+                loss_kd += F.mse_loss(teacher_value, student_value)
             loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
             assert len(output_teacher.hidden_states) > 0
+            teacher_logit = batch_to(output_teacher.logits, self.device).view(-1, output_student.logits.shape[-1])
+            student_logit = batch_to(output_student.logits, self.device).view(-1, output_student.logits.shape[-1])
             loss_kd = loss_kd + F.kl_div(
-                F.log_softmax(output_student.logits.view(-1, output_student.logits.shape[-1]), dim=-1), 
-                F.softmax(output_teacher.logits.view(-1, output_student.logits.shape[-1]), dim=-1),
+                F.log_softmax(student_logit, dim=-1), 
+                F.softmax(teacher_logit, dim=-1),
                 reduction='batchmean',
             ) * 0.1
         
@@ -270,9 +316,22 @@ class Trainer:
                 wandb_dict = {}
                 try:
                     loss, loss_details = self.train_step(batch)
-                except torch.cuda.OutOfMemoryError: # type: ignore
-                    gc_cuda()
-                    loss, loss_details = self.train_step(batch) # tried GC
+                except torch.cuda.OutOfMemoryError as ex: # type: ignore
+                    torch.cuda.synchronize()
+                    torch.cuda.empty_cache()
+                    torch.cuda.reset_peak_memory_stats()
+                    print(torch.cuda.memory_summary())
+                    for obj in gc.get_objects():
+                        try:
+                            if isinstance(obj, torch.Tensor) and (not isinstance(obj, torch.nn.Parameter)) and (torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data))):
+                                if obj.device != torch.device('cpu'):
+                                    obj = obj #type: torch.Tensor
+                                    print('obj', type(obj), obj.size(), obj.device, obj.element_size() * obj.numel())
+                                    referrers = gc.get_referrers(obj)
+                                    print('ref', len(referrers), [type(r) for r in referrers])
+                        except OSError:
+                            pass
+                    raise ex
                 wandb_dict['train/loss'] = loss
                 wandb_dict['train/epoch'] = self.epoch + istep / train_loader_len
                 wandb_dict.update({

@@ -294,7 +294,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         self.apply_model_options(self.model)
 
-OPT_MODELS = ['opt', 'opt-125m', 'opt-350m']
+OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b']
 
 if __name__ == '__main__':
     import argparse
