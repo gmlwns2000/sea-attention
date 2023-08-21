@@ -3,7 +3,8 @@ import math
 import traceback
 
 import tqdm
-from ..utils import seed, batch_to, Metric
+from ..utils import raise_if_nan, seed, batch_to, Metric
+raise_if_nan = lambda x: x
 from ..models import hf_opt as opt
 from typing import List, Dict, Tuple
 import torch
@@ -63,17 +64,18 @@ def gc_cuda():
 import deepspeed
 
 class KDWrapperModel(nn.Module):
-    def __init__(self, config, device, model, base_model):
+    def __init__(self, config, device, swap_out_device, model, base_model):
         super().__init__()
         
         self.config = config
         self.device = device
+        self.swap_out_device = swap_out_device
         self.model = model
         self.base_model = base_model
     
     def forward(self, batch):
         swap_in_device = self.device
-        swap_out_device = swap_in_device
+        swap_out_device = self.swap_out_device
         # swap_out_device = torch.device('cpu')
         
         for m in self.base_model.modules():
@@ -111,17 +113,25 @@ class KDWrapperModel(nn.Module):
         if self.config.using_kd:
             for ilayer, teacher_value in enumerate(output_teacher.hidden_states):
                 teacher_value = batch_to(teacher_value, self.device)
+                raise_if_nan(teacher_value)
                 student_value = batch_to(output_student.hidden_states[ilayer], self.device)
-                loss_kd += F.mse_loss(teacher_value, student_value)
+                raise_if_nan(student_value)
+                _loss_kd_layer = F.mse_loss(batch_to(teacher_value, torch.float32), batch_to(student_value, torch.float32))
+                loss_kd += _loss_kd_layer
+                raise_if_nan(loss_kd)
             loss_kd = loss_kd / len(output_teacher.hidden_states) * 5
+            raise_if_nan(loss_kd)
             assert len(output_teacher.hidden_states) > 0
             teacher_logit = batch_to(output_teacher.logits, self.device).view(-1, output_student.logits.shape[-1])
+            raise_if_nan(teacher_logit)
             student_logit = batch_to(output_student.logits, self.device).view(-1, output_student.logits.shape[-1])
+            raise_if_nan(student_logit)
             loss_kd = loss_kd + F.kl_div(
-                F.log_softmax(student_logit, dim=-1), 
-                F.softmax(teacher_logit, dim=-1),
+                F.log_softmax(student_logit, dim=-1, dtype=torch.float32), 
+                F.softmax(teacher_logit, dim=-1, dtype=torch.float32),
                 reduction='batchmean',
             ) * 0.2
+            raise_if_nan(loss_kd)
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
@@ -145,7 +155,8 @@ class Trainer:
         seed()
         
         self.config = config if config is not None else TrainerConfig()
-        self.device = 0
+        self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
+        self.swap_out_device = torch.device('cpu')
         self.deepspeed = deepspeed
         self.cmd_args = cmd_args
         
@@ -185,12 +196,15 @@ class Trainer:
                     m.gradient_checkpointing = True
                     if hasattr(m, "config"):
                         m.config.use_cache = False
+                if hasattr(m, 'use_deepspeed'):
+                    m.use_deepspeed = self.deepspeed
         
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
         
         self.kd_model = KDWrapperModel(
             self.config, 
             self.device, 
+            self.swap_out_device,
             student, 
             teacher,
         )
@@ -260,7 +274,10 @@ class Trainer:
         }
         
         if optimizer_type == 'AdamW':
-            optim_cls = torch.optim.AdamW
+            if self.deepspeed:
+                optim_cls = deepspeed.ops.adam.DeepSpeedCPUAdam
+            else:
+                optim_cls = torch.optim.AdamW
         elif optimizer_type == 'Adam':
             optim_cls = torch.optim.Adam
         else: raise Exception()

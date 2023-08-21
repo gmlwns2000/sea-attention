@@ -764,6 +764,7 @@ class OPTDecoder(OPTPreTrainedModel):
         
         self.swap_in_device = None
         self.swap_out_device = None
+        self.use_deepspeed = False
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -956,16 +957,28 @@ class OPTDecoder(OPTPreTrainedModel):
                 
                 decoder_layer.self_attn.swap_out_device = swap_out_device
                 
-                layer_outputs = checkpoint.checkpoint(
-                    create_custom_forward(decoder_layer),
-                    hidden_states,
-                    causal_attention_mask,
-                    head_mask[idx] if head_mask is not None else None,
-                    None,
-                    use_reentrant=False,
-                    swap_out_device=swap_out_device,
-                    swap_in_device=swap_in_device,
-                )
+                USE_DS = self.use_deepspeed
+                if USE_DS:
+                    import deepspeed
+                    layer_outputs = deepspeed.checkpointing.checkpoint(
+                        create_custom_forward(decoder_layer),
+                        hidden_states,
+                        causal_attention_mask,
+                        head_mask[idx] if head_mask is not None else None,
+                        None,
+                        # use_reentrant=False,
+                    )
+                else:
+                    layer_outputs = checkpoint.checkpoint(
+                        create_custom_forward(decoder_layer),
+                        hidden_states,
+                        causal_attention_mask,
+                        head_mask[idx] if head_mask is not None else None,
+                        None,
+                        use_reentrant=False,
+                        swap_out_device=swap_out_device,
+                        swap_in_device=swap_in_device,
+                    )
                 
                 assert isinstance(layer_outputs, (tuple, list))
                 layer_outputs = batch_to(layer_outputs, swap_out_device)

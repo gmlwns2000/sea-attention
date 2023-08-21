@@ -80,8 +80,10 @@ def safe_to(t, d):
         return t.to(d)
     return t
 
-@dataclass
-class PerlinAttentionOutput:
+from typing import NamedTuple
+
+# @dataclass
+class PerlinAttentionOutput(NamedTuple):
     loss: torch.Tensor
     context_layer: torch.Tensor
     partial_attention_probs: torch.Tensor
