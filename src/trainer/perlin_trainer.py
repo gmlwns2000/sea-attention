@@ -299,8 +299,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             eval_steps = {
                 'opt-125m': 500,
                 'opt-350m': 250,
-                'opt-1.3b': 250,
-                'opt-2.7b': 200,
+                'opt-1.3b': 150,
+                'opt-2.7b': 100,
             }[model]
         if wandb_steps is None:
             wandb_steps = {
