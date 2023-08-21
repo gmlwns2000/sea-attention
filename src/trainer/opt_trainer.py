@@ -29,6 +29,7 @@ class TrainerConfig:
     # optimization flags
     # TODO grad checkpointing is not correct...
     gradient_checkpointing: bool = False
+    kd_checkpointing: bool = False
     gradient_accumulation_steps: int = 8
     amp_enabled: bool = True
     
@@ -156,7 +157,11 @@ class Trainer:
         
         self.config = config if config is not None else TrainerConfig()
         self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
-        self.swap_out_device = torch.device('cpu')
+        if self.config.kd_checkpointing:
+            self.swap_out_device = torch.device('cpu')
+        else:
+            self.swap_out_device = self.device
+        
         self.deepspeed = deepspeed
         self.cmd_args = cmd_args
         
