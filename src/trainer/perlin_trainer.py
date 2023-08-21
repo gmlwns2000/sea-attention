@@ -271,6 +271,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         wandb_steps: int = None,
         cmd_args: object = None,
         deepspeed: bool = False,
+        kd_checkpointing: bool = False,
         **kwargs
     ):
         BaseTrainer.__init__(self, compile=not disable_compile, **kwargs)
@@ -288,6 +289,9 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             },
             'opt-1.3b': {
                 'wikitext2': 'lnair/opt-1.3b-wikitext2'
+            },
+            'opt-2.7b': {
+                'wikitext2': 'lnair/opt-2.7b-wikitext2'
             }
         }[model][subset]
         
@@ -296,12 +300,14 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'opt-125m': 500,
                 'opt-350m': 250,
                 'opt-1.3b': 250,
+                'opt-2.7b': 200,
             }[model]
         if wandb_steps is None:
             wandb_steps = {
                 'opt-125m': 10,
                 'opt-350m': 5,
                 'opt-1.3b': 2,
+                'opt-2.7b': 2,
             }[model]
         
         BaseOptTrainer.__init__(self, 
@@ -319,6 +325,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 additional_config=perlin_attention.get_default_config().to_json(),
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
+                kd_checkpointing=kd_checkpointing,
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,
@@ -327,7 +334,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         self.apply_model_options(self.model)
 
-OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b']
+OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b']
 
 if __name__ == '__main__':
     import argparse
@@ -349,6 +356,7 @@ if __name__ == '__main__':
     parser.add_argument('--disable-compile', action='store_true', default=False)
     parser.add_argument('--eval-steps', default=None, type=int)
     parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--kd-checkpointing', action='store_true', default=False)
     
     add_perlin_model_options(parser)
     
@@ -390,6 +398,7 @@ if __name__ == '__main__':
         'max_seq_len': args.max_seq_len,
         'eval_steps': args.eval_steps,
         'deepspeed': args.deepspeed_enable,
+        'kd_checkpointing': args.kd_checkpointing,
     }
     kwargs.update(parse_perlin_model_options(args))
     
