@@ -37,6 +37,8 @@ from transformers.utils import (
 )
 from transformers.models.opt.configuration_opt import OPTConfig
 
+from ..utils import batch_to
+
 
 logger = logging.get_logger(__name__)
 
@@ -151,6 +153,7 @@ class OPTAttention(nn.Module):
         
         self.last_attention_scores = None
         self.last_context_layer = None
+        self.swap_out_device = 'cpu'
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -227,7 +230,7 @@ class OPTAttention(nn.Module):
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
             )
-            self.last_attention_scores = attn_weights.to('cpu', non_blocking=True)
+            self.last_attention_scores = batch_to(attn_weights, self.swap_out_device)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
@@ -259,7 +262,7 @@ class OPTAttention(nn.Module):
 
         attn_output = torch.bmm(attn_probs, value_states)
         
-        self.last_context_layer = attn_output.to('cpu', non_blocking=True)
+        self.last_context_layer = batch_to(attn_output, self.swap_out_device)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(

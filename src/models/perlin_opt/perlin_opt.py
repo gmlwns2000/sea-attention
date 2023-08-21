@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch OPT model."""
+import gc
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
 from .. import hf_opt
-from ...utils import get_bench
+from ...utils import batch_to, get_bench, get_all_allocated_tensors
 
 from typing import List, Optional, Tuple, Union
 
@@ -197,7 +198,9 @@ class OPTAttention(nn.Module):
             perlin_config=self.pconfig,
         )
         self.last_loss = None
+        self.checkout_perlin_output = False
         self.last_perlin_output = None
+        self.swap_out_device = None
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -392,8 +395,12 @@ class OPTAttention(nn.Module):
                 last_state = last_state,
             ) #type: PerlinAttentionOutput
             self.last_loss = output.loss
-            if not self.benchmarking:
-                self.last_perlin_output = output
+            if not self.benchmarking and self.checkout_perlin_output:
+                if self.swap_out_device is None:
+                    self.last_perlin_output = output
+                else:
+                    self.last_perlin_output = output.to(self.swap_out_device)
+                    print('OptAtten: swap out')
             
             return output.context_layer, output.partial_attention_probs, output.state
         else:
@@ -502,7 +509,8 @@ class OPTDecoderLayer(nn.Module):
         self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim, bias=config.enable_bias)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine)
         
-        self.gradient_checkpointing = False
+        self._gradient_checkpointing = False
+        self.last_loss = None
 
     def forward(
         self,
@@ -528,6 +536,10 @@ class OPTDecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+        
+        device = attention_mask.device
+        if device != hidden_states.device:
+            hidden_states = batch_to(hidden_states, device)
 
         residual = hidden_states
 
@@ -537,7 +549,7 @@ class OPTDecoderLayer(nn.Module):
                 hidden_states = self.self_attn_layer_norm(hidden_states)
                 return hidden_states
             
-            if self.gradient_checkpointing and self.training:
+            if self._gradient_checkpointing and self.training:
                 hidden_states = checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
@@ -583,7 +595,7 @@ class OPTDecoderLayer(nn.Module):
                 
             return hidden_states
         
-        if self.gradient_checkpointing and self.training:
+        if self._gradient_checkpointing and self.training:
             hidden_states = checkpoint.checkpoint(after_self_atten, residual, hidden_states, preserve_rng_state=True)
         else:
             hidden_states = after_self_atten(residual, hidden_states)
@@ -748,6 +760,9 @@ class OPTDecoder(OPTPreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
+        
+        self.swap_in_device = None
+        self.swap_out_device = None
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -907,8 +922,12 @@ class OPTDecoder(OPTPreTrainedModel):
                         f" {head_mask.size()[0]}."
                     )
 
+        swap_in_device = self.swap_in_device
+        swap_out_device = self.swap_out_device
+        
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+            decoder_layer = decoder_layer # type: OPTDecoderLayer
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
@@ -919,22 +938,55 @@ class OPTDecoder(OPTPreTrainedModel):
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
-            if self.gradient_checkpointing and self.training and False:
-
-                def create_custom_forward(module):
+            if self.gradient_checkpointing and self.training:
+                # start_set = set([id(t) for t, r in get_all_allocated_tensors()])
+                start_mem = torch.cuda.max_memory_allocated()
+                # print('processing layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024)
+                
+                def create_custom_forward(module: OPTDecoderLayer):
                     def custom_forward(*inputs):
                         # None for past_key_value
-                        return module(*inputs, output_attentions, None)
+                        states = module(*inputs, output_attentions, None)
+                        loss = module.self_attn.last_loss
+                        assert loss is not None
+                        return states + (loss,)
 
                     return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
+                
+                decoder_layer.self_attn.swap_out_device = swap_out_device
+                
+                layer_outputs = checkpoint.checkpoint(
                     create_custom_forward(decoder_layer),
                     hidden_states,
                     causal_attention_mask,
                     head_mask[idx] if head_mask is not None else None,
                     None,
+                    use_reentrant=False,
+                    swap_out_device=swap_out_device,
+                    swap_in_device=swap_in_device,
                 )
+                
+                assert isinstance(layer_outputs, (tuple, list))
+                layer_outputs = batch_to(layer_outputs, swap_out_device)
+                
+                layer_outputs, layer_loss = layer_outputs[:-1], layer_outputs[-1]
+                decoder_layer.self_attn.last_loss = None
+                decoder_layer.last_loss = layer_loss
+                
+                # print('processed layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024, (torch.cuda.max_memory_allocated() - start_mem) // 1024 // 1024)
+                
+                # torch.cuda.synchronize()
+                # gc.collect()
+                # torch.cuda.empty_cache()
+                # torch.cuda.reset_peak_memory_stats()
+                
+                # tensors = get_all_allocated_tensors()
+                # end_set = set([id(t) for t, r in tensors])
+                # leak_set = end_set - start_set
+                # for t, r in tensors:
+                #     if id(t) in leak_set:
+                #         print('leak obj', strify(t), t.element_size()*t.numel())
+                #         print('refs', [type(i) for i in r])
             else:
                 layer_outputs = decoder_layer(
                     hidden_states,
@@ -948,11 +1000,15 @@ class OPTDecoder(OPTPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if use_cache:
+                assert not self.gradient_checkpointing
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
+        if hidden_states.device != swap_in_device:
+            hidden_states = batch_to(hidden_states, swap_in_device)
+        
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
 
@@ -1081,9 +1137,23 @@ class OPTForCausalLM(OPTPreTrainedModel):
     def calc_loss_special(self):
         loss = 0
         weights = 0
+        # print('hmm?')
         for m in self.modules():
-            if isinstance(m, OPTAttention):
-                if m.last_loss is not None:
+            if isinstance(m, OPTDecoderLayer) and m.last_loss is not None:
+                # print('good')
+                loss += m.last_loss
+                weights += 1
+                m.last_loss = None
+        for m in self.modules():
+            if isinstance(m, OPTAttention) and m.last_loss is not None:
+                # print('hello')
+                if weights > 0:
+                    warnings.warn(
+                        "OPTAttention.last_loss is ignored, because gradient checkpointing activated! "
+                        "If you see this message when not grad. chkpt is not activated, please report."
+                    )
+                else:
+                    # print('no')
                     loss += m.last_loss
                     weights += 1
                     m.last_loss = None
