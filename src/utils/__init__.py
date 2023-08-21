@@ -329,22 +329,38 @@ def query_available_devices() -> list[int]:
     return available_devices
 
 class Metric:
-    def __init__(self):
+    def __init__(self, method='moving_average', window_size=50):
+        self.method = method
+        self.window_size = window_size
+        
         self.sum = {}
         self.count = {}
+        self.buf = {}
         
     def update(self, x, name='', weight=1):
         if isinstance(x, torch.Tensor):
             x = x.item()
-        if not name in self.sum:
-            self.sum[name] = 0
-            self.count[name] = 0
-        self.sum[name] += x * weight
-        self.count[name] += weight
-        return self.sum[name] / self.count[name]
+        
+        if self.method == 'mean':
+            if not name in self.sum:
+                self.sum[name] = 0
+                self.count[name] = 0
+            self.sum[name] += x * weight
+            self.count[name] += weight
+        elif self.method == 'moving_average':
+            buf = self.buf.get(name, [])
+            buf.append(x)
+            if len(buf) > self.window_size:
+                buf.pop(0)
+            self.buf[name] = buf
+        return self.get(name)
 
     def get(self, name=''):
-        return self.sum[name] / self.count[name]
+        if self.method == 'mean':
+            return self.sum[name] / self.count[name]
+        elif self.method == 'moving_average':
+            return sum(self.buf[name]) / len(self.buf[name])
+        raise Exception(self.method)
 
     def to_dict(self):
         r = {}

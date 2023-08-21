@@ -214,7 +214,7 @@ class Trainer:
                 m.swap_in_device = swap_in_device
         
         with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
-            print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             # self.base_model.to(self.device)
             output_teacher = self.base_model(**batch)
             # self.base_model.to('cpu')
@@ -239,12 +239,12 @@ class Trainer:
         #                 print('ref', len(referrers), [type(r) for r in referrers])
         #     except OSError:
         #         pass
-        print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
+        # print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
         with torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             batch['teacher'] = self.base_model
-            print('*'*20, 'model', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            # print('*'*20, 'model', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_student = self.model(**batch)
-            print('*'*20, 'model2', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            # print('*'*20, 'model2', torch.cuda.max_memory_allocated() // 1024 // 1024)
         
         if self.config.using_loss:
             if self.config.using_kd:
