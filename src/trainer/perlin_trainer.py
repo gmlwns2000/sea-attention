@@ -16,6 +16,7 @@ from .glue_trainer import task_to_batch_size
 from .lra_trainer import Trainer as BaseLraTrainer
 from .opt_trainer import Trainer as BaseOptTrainer
 from .opt_trainer import TrainerConfig as OptTrainerConfig
+import deepspeed
 
 bool2int = lambda x: 1 if x else 0
 
@@ -256,6 +257,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         max_seq_len: int = None,
         eval_steps: int = None,
         wandb_steps: int = None,
+        cmd_args: object = None,
+        deepspeed: bool = False,
         **kwargs
     ):
         BaseTrainer.__init__(self, compile=not disable_compile, **kwargs)
@@ -289,21 +292,26 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'opt-1.3b': 2,
             }[model]
         
-        BaseOptTrainer.__init__(self, OptTrainerConfig(
-            experiment_name=self.format_exp(f'{model}_{subset}'),
-            model_cls=perlin_opt.OPTForCausalLM,
-            model_config=model_config,
-            amp_enabled=not disable_amp,
-            num_steps=100000,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            gradient_checkpointing=gradient_checkpointing,
-            max_seq_len=max_seq_len,
-            lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
-            lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
-            additional_config=perlin_attention.get_default_config().to_json(),
-            eval_steps=eval_steps,
-            wandb_steps=wandb_steps,
-        ), skip_init_loaders=kwargs.get('skip_init_loaders', False))
+        BaseOptTrainer.__init__(self, 
+            OptTrainerConfig(
+                experiment_name=self.format_exp(f'{model}_{subset}'),
+                model_cls=perlin_opt.OPTForCausalLM,
+                model_config=model_config,
+                amp_enabled=not disable_amp,
+                num_steps=100000,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                max_seq_len=max_seq_len,
+                lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
+                lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
+                additional_config=perlin_attention.get_default_config().to_json(),
+                eval_steps=eval_steps,
+                wandb_steps=wandb_steps,
+            ), 
+            skip_init_loaders=kwargs.get('skip_init_loaders', False), 
+            deepspeed=deepspeed,
+            cmd_args=cmd_args,
+        )
         
         self.apply_model_options(self.model)
 
@@ -322,6 +330,7 @@ if __name__ == '__main__':
     parser.add_argument('--load-checkpoint', default=None, type=str)
     parser.add_argument('--load-only-additionals', action='store_true')
     
+    parser.add_argument('--deepspeed-enable', action='store_true', default=False)
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=None, type=int)
     parser.add_argument('--disable-amp', action='store_true', default=False)
@@ -329,6 +338,8 @@ if __name__ == '__main__':
     parser.add_argument('--eval-steps', default=None, type=int)
     
     add_perlin_model_options(parser)
+    
+    parser = deepspeed.add_config_arguments(parser)
     
     args = parser.parse_args()
     
@@ -365,6 +376,7 @@ if __name__ == '__main__':
         'disable_compile': args.disable_compile,
         'max_seq_len': args.max_seq_len,
         'eval_steps': args.eval_steps,
+        'deepspeed': args.deepspeed_enable,
     }
     kwargs.update(parse_perlin_model_options(args))
     
@@ -377,6 +389,7 @@ if __name__ == '__main__':
     elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
         assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
+        kwargs['cmd_args'] = args
         trainer = OptTrainer(**kwargs)
     else:
         raise Exception()

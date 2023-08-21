@@ -59,13 +59,95 @@ def gc_cuda():
     torch.cuda.empty_cache()
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
+    
+# import deepspeed
+
+class KDWrapperModel(nn.Module):
+    def __init__(self, config, device, model, base_model):
+        super().__init__()
+        
+        self.config = config
+        self.device = device
+        self.model = model
+        self.base_model = base_model
+    
+    def forward(self, batch):
+        swap_in_device = self.device
+        swap_out_device = swap_in_device
+        # swap_out_device = torch.device('cpu')
+        
+        for m in self.base_model.modules():
+            if hasattr(m, 'swap_out_device'):
+                m.swap_out_device = swap_out_device
+        
+        for m in self.model.modules():
+            if hasattr(m, 'swap_out_device'):
+                m.swap_out_device = swap_out_device
+            if hasattr(m, 'swap_in_device'):
+                m.swap_in_device = swap_in_device
+        
+        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
+            # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            output_teacher = self.base_model(**batch)
+            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
+            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
+            output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
+        # print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
+        with torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+            batch['teacher'] = self.base_model
+            # print('*'*20, 'model', torch.cuda.max_memory_allocated() // 1024 // 1024)
+            output_student = self.model(**batch)
+            # print('*'*20, 'model2', torch.cuda.max_memory_allocated() // 1024 // 1024)
+        
+        if self.config.using_loss:
+            if self.config.using_kd:
+                loss_model = output_student.loss * 0.1
+            else:
+                loss_model = output_student.loss
+        else:
+            loss_model = 0.0
+        
+        loss_kd = 0
+        if self.config.using_kd:
+            for ilayer, teacher_value in enumerate(output_teacher.hidden_states):
+                teacher_value = batch_to(teacher_value, self.device)
+                student_value = batch_to(output_student.hidden_states[ilayer], self.device)
+                loss_kd += F.mse_loss(teacher_value, student_value)
+            loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
+            assert len(output_teacher.hidden_states) > 0
+            teacher_logit = batch_to(output_teacher.logits, self.device).view(-1, output_student.logits.shape[-1])
+            student_logit = batch_to(output_student.logits, self.device).view(-1, output_student.logits.shape[-1])
+            loss_kd = loss_kd + F.kl_div(
+                F.log_softmax(student_logit, dim=-1), 
+                F.softmax(teacher_logit, dim=-1),
+                reduction='batchmean',
+            ) * 0.1
+        
+        loss_special = 0
+        if hasattr(self.model, 'calc_loss_special'):
+            loss_special = self.model.calc_loss_special()
+        assert loss_special.requires_grad, loss_special.requires_grad
+        
+        loss = loss_model + loss_kd + loss_special
+        
+        loss_py = loss.item()
+        loss_details = {
+            'loss': loss_py,
+            'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
+            'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
+            'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
+        }
+        
+        return loss, loss_py, loss_details
 
 class Trainer:
-    def __init__(self, config: TrainerConfig = None, skip_init_loaders = False) -> None:
+    def __init__(self, config: TrainerConfig = None, skip_init_loaders = False, deepspeed=False, cmd_args=None) -> None:
         seed()
         
         self.config = config if config is not None else TrainerConfig()
         self.device = 0
+        self.deepspeed = deepspeed
+        self.cmd_args = cmd_args
         
         self.init_model()
         if not skip_init_loaders: self.init_loader()
@@ -88,18 +170,15 @@ class Trainer:
         except Exception as ex:
             print(ex)
         
-        self.base_model = teacher.to(self.device)
-        self.model = student.to(self.device)
-        
         # compatible with GPT2
-        if hasattr(self.model.config, 'n_positions'):
-            max_length = self.model.config.n_positions
+        if hasattr(student.config, 'n_positions'):
+            max_length = student.config.n_positions
         else:
-            max_length = self.model.config.max_position_embeddings
+            max_length = student.config.max_position_embeddings
         self.max_seq_len = min(default(self.config.max_seq_len, 32000), max_length)
         
         if self.config.gradient_checkpointing:
-            for m in self.model.modules():
+            for m in student.modules():
                 if hasattr(m, 'gradient_checkpointing'):
                     print(f'patch gradient checkpointing {type(m)}')
                     m.gradient_checkpointing = True
@@ -107,6 +186,16 @@ class Trainer:
                         m.config.use_cache = False
         
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
+        
+        self.kd_model = KDWrapperModel(
+            self.config, 
+            self.device, 
+            student, 
+            teacher,
+        )
+        self.kd_model = self.kd_model.to(self.device)
+        self.base_model = self.kd_model.base_model
+        self.model = self.kd_model.model
     
     def init_loader(self):
         if self.config.dataset == 'wikitext2':
@@ -199,83 +288,7 @@ class Trainer:
             'output_attentions': False,
         })
         
-        swap_in_device = self.device
-        swap_out_device = swap_in_device
-        # swap_out_device = torch.device('cpu')
-        
-        for m in self.base_model.modules():
-            if hasattr(m, 'swap_out_device'):
-                m.swap_out_device = swap_out_device
-        
-        for m in self.model.modules():
-            if hasattr(m, 'swap_out_device'):
-                m.swap_out_device = swap_out_device
-            if hasattr(m, 'swap_in_device'):
-                m.swap_in_device = swap_in_device
-        
-        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
-            # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
-            # self.base_model.to(self.device)
-            output_teacher = self.base_model(**batch)
-            # self.base_model.to('cpu')
-            # self.model.to('cpu')
-            # del output_teacher
-            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
-            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
-            output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
-        # torch.cuda.synchronize()
-        # gc.collect()
-        # torch.cuda.empty_cache()
-        # gc.collect()
-        # torch.cuda.reset_peak_memory_stats()
-        # print(torch.cuda.memory_summary())
-        # for obj in gc.get_objects():
-        #     try:
-        #         if isinstance(obj, (torch.Tensor, torch.nn.Parameter)) and (torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data))):
-        #             if obj.device != torch.device('cpu'):
-        #                 obj = obj #type: torch.Tensor
-        #                 print('obj', type(obj), obj.size(), obj.device, obj.element_size() * obj.numel())
-        #                 referrers = gc.get_referrers(obj)
-        #                 print('ref', len(referrers), [type(r) for r in referrers])
-        #     except OSError:
-        #         pass
-        # print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
-        with torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-            batch['teacher'] = self.base_model
-            # print('*'*20, 'model', torch.cuda.max_memory_allocated() // 1024 // 1024)
-            output_student = self.model(**batch)
-            # print('*'*20, 'model2', torch.cuda.max_memory_allocated() // 1024 // 1024)
-        
-        if self.config.using_loss:
-            if self.config.using_kd:
-                loss_model = output_student.loss * 0.1
-            else:
-                loss_model = output_student.loss
-        else:
-            loss_model = 0.0
-        
-        loss_kd = 0
-        if self.config.using_kd:
-            for ilayer, teacher_value in enumerate(output_teacher.hidden_states):
-                teacher_value = batch_to(teacher_value, self.device)
-                student_value = batch_to(output_student.hidden_states[ilayer], self.device)
-                loss_kd += F.mse_loss(teacher_value, student_value)
-            loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
-            assert len(output_teacher.hidden_states) > 0
-            teacher_logit = batch_to(output_teacher.logits, self.device).view(-1, output_student.logits.shape[-1])
-            student_logit = batch_to(output_student.logits, self.device).view(-1, output_student.logits.shape[-1])
-            loss_kd = loss_kd + F.kl_div(
-                F.log_softmax(student_logit, dim=-1), 
-                F.softmax(teacher_logit, dim=-1),
-                reduction='batchmean',
-            ) * 0.1
-        
-        loss_special = 0
-        if hasattr(self.model, 'calc_loss_special'):
-            loss_special = self.model.calc_loss_special()
-        assert loss_special.requires_grad, loss_special.requires_grad
-        
-        loss = loss_model + loss_kd + loss_special
+        loss, loss_py, loss_details = self.kd_model(batch)
         
         if not torch.isnan(loss).item():
             self.scaler.scale(loss / self.config.gradient_accumulation_steps).backward()
@@ -295,15 +308,7 @@ class Trainer:
                 if hasattr(module, 'redraw_projections'):
                     module.redraw_projections(self.device)
         
-        loss = loss.item()
-        loss_details = {
-            'loss': loss,
-            'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
-            'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
-            'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
-        }
-        
-        return loss, loss_details
+        return loss_py, loss_details
     
     def train_epoch(self):
         self.model.train()
