@@ -6,16 +6,28 @@ import torch
 from torch import nn
 # torch.autograd.set_detect_anomaly(True)
 
-from ..models import perlin_attention
-from ..models import perlin_bert
-from ..models import perlin_opt
-from ..models.perlin_bert.compat import migrate_state_dict
-from ..utils import seed
-from .glue_trainer import Trainer as BaseGlueTrainer
-from .glue_trainer import task_to_batch_size
-from .lra_trainer import Trainer as BaseLraTrainer
-from .opt_trainer import Trainer as BaseOptTrainer
-from .opt_trainer import TrainerConfig as OptTrainerConfig
+# from ..models import perlin_attention
+# from ..models import perlin_bert
+# from ..models import perlin_opt
+# from ..models.perlin_bert.compat import migrate_state_dict
+# from ..utils import seed
+# from .glue_trainer import Trainer as BaseGlueTrainer
+# from .glue_trainer import task_to_batch_size
+# from .lra_trainer import Trainer as BaseLraTrainer
+# from .opt_trainer import Trainer as BaseOptTrainer
+# from .opt_trainer import TrainerConfig as OptTrainerConfig
+
+from src.models import perlin_attention
+from src.models import perlin_bert
+from src.models import perlin_opt
+from src.models.perlin_bert.compat import migrate_state_dict
+from src.utils import seed
+from src.trainer.glue_trainer import Trainer as BaseGlueTrainer
+from src.trainer.glue_trainer import task_to_batch_size
+from src.trainer.lra_trainer import Trainer as BaseLraTrainer
+from src.trainer.opt_trainer import Trainer as BaseOptTrainer
+from src.trainer.opt_trainer import TrainerConfig as OptTrainerConfig
+
 import deepspeed
 
 bool2int = lambda x: 1 if x else 0
@@ -336,6 +348,7 @@ if __name__ == '__main__':
     parser.add_argument('--disable-amp', action='store_true', default=False)
     parser.add_argument('--disable-compile', action='store_true', default=False)
     parser.add_argument('--eval-steps', default=None, type=int)
+    parser.add_argument('--local_rank', default=-1, type=int)
     
     add_perlin_model_options(parser)
     

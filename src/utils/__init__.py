@@ -48,20 +48,31 @@ def register_copy_lock(lock):
 
 def tensor_buffer_to(v, device):
     if isinstance(v, torch.Tensor):
-        if v.device == torch.device(device):
-            return v
+        if not isinstance(device, torch.device) and not isinstance(device, torch.dtype):
+            device = torch.device(device)
+        op_type = 'device' if isinstance(device, torch.device) else 'dtype'
+        
+        if op_type == 'device':
+            if v.device == device:
+                return v
 
-        acquired = False
-        if cuda_copy_lock is not None:
-            cuda_copy_lock.acquire()
-            acquired = True
-        
-        new_v = v.to(device, non_blocking=True)
-        
-        if acquired:
-            cuda_copy_lock.release()
-        
-        return new_v
+            acquired = False
+            if cuda_copy_lock is not None:
+                cuda_copy_lock.acquire()
+                acquired = True
+            
+            new_v = v.to(device, non_blocking=True)
+            
+            if acquired:
+                cuda_copy_lock.release()
+            
+            return new_v
+        elif op_type == 'dtype':
+            if v.dtype == device:
+                return v
+            return v.to(device)
+        else:
+            raise Exception()
     elif isinstance(v, list):
         return list([tensor_buffer_to(i, device) for i in v])
     elif isinstance(v, dict):

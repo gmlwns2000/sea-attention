@@ -60,7 +60,7 @@ def gc_cuda():
     torch.cuda.synchronize()
     torch.cuda.reset_peak_memory_stats()
     
-# import deepspeed
+import deepspeed
 
 class KDWrapperModel(nn.Module):
     def __init__(self, config, device, model, base_model):
@@ -113,7 +113,7 @@ class KDWrapperModel(nn.Module):
                 teacher_value = batch_to(teacher_value, self.device)
                 student_value = batch_to(output_student.hidden_states[ilayer], self.device)
                 loss_kd += F.mse_loss(teacher_value, student_value)
-            loss_kd = loss_kd / len(output_teacher.hidden_states) * 10
+            loss_kd = loss_kd / len(output_teacher.hidden_states) * 5
             assert len(output_teacher.hidden_states) > 0
             teacher_logit = batch_to(output_teacher.logits, self.device).view(-1, output_student.logits.shape[-1])
             student_logit = batch_to(output_student.logits, self.device).view(-1, output_student.logits.shape[-1])
@@ -121,7 +121,7 @@ class KDWrapperModel(nn.Module):
                 F.log_softmax(student_logit, dim=-1), 
                 F.softmax(teacher_logit, dim=-1),
                 reduction='batchmean',
-            ) * 0.1
+            ) * 0.2
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
@@ -152,6 +152,7 @@ class Trainer:
         self.init_model()
         if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
+        self.init_deepspeed()
     
     def init_model(self):
         teacher = self.config.teacher_model_cls.from_pretrained(
@@ -193,7 +194,7 @@ class Trainer:
             student, 
             teacher,
         )
-        self.kd_model = self.kd_model.to(self.device)
+        # self.kd_model = self.kd_model.to(self.device)
         self.base_model = self.kd_model.base_model
         self.model = self.kd_model.model
     
@@ -280,6 +281,19 @@ class Trainer:
         self.scaler = torch.cuda.amp.GradScaler(enabled=self.config.amp_enabled)
         self.optimizer.zero_grad()
     
+    def init_deepspeed(self):
+        if self.deepspeed:
+            engine, optimizer, _, _ = deepspeed.initialize(
+                args=self.cmd_args,
+                model=self.kd_model,
+                optimizer=self.optimizer,
+            )
+            
+            self.ds_engine = engine
+            self.ds_optimizer = optimizer
+        else:
+            self.kd_model.to(self.device)
+    
     def train_step(self, batch) -> Tuple[float, Dict[str, float]]:
         batch = batch_to(batch, self.device)
         del batch['trg_len']
@@ -288,25 +302,31 @@ class Trainer:
             'output_attentions': False,
         })
         
-        loss, loss_py, loss_details = self.kd_model(batch)
-        
-        if not torch.isnan(loss).item():
-            self.scaler.scale(loss / self.config.gradient_accumulation_steps).backward()
-            self.backward_performed += 1
-        
-        if ((self._istep + 1) % self.config.gradient_accumulation_steps) == 0:
-            assert self.backward_performed > 0, self.backward_performed
-            self.backward_performed = 0
+        if not self.deepspeed:
+            loss, loss_py, loss_details = self.kd_model(batch)
             
-            self.scaler.unscale_(self.optimizer)
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            self.optimizer.zero_grad()
+            if not torch.isnan(loss).item():
+                self.scaler.scale(loss / self.config.gradient_accumulation_steps).backward()
+                self.backward_performed += 1
             
-            for module in self.model.modules():
-                if hasattr(module, 'redraw_projections'):
-                    module.redraw_projections(self.device)
+            if ((self._istep + 1) % self.config.gradient_accumulation_steps) == 0:
+                assert self.backward_performed > 0, self.backward_performed
+                self.backward_performed = 0
+                
+                self.scaler.unscale_(self.optimizer)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.optimizer.zero_grad()
+                
+                for module in self.model.modules():
+                    if hasattr(module, 'redraw_projections'):
+                        module.redraw_projections(self.device)
+        else:
+            self.ds_engine.train()
+            loss, loss_py, loss_details = self.ds_engine(batch)
+            self.ds_engine.backward(loss)
+            self.ds_engine.step()
         
         return loss_py, loss_details
     

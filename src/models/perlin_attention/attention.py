@@ -15,7 +15,7 @@ from torch import nn, optim
 #     scaled_dot_product_attention
 # )
 
-from ...utils import get_bench, Metric
+from ...utils import batch_to, get_bench, Metric
 from ..common.kl_div_for_atten import kl_div_attention
 from ..common.lora import (
     LoraLinear, 
@@ -436,9 +436,9 @@ class PerlinAttention(nn.Module):
                             last_state,
                             "performer->performer_context_layer",
                             self.performer,
-                            q_for_atten, 
-                            k_for_atten, 
-                            v_for_atten,
+                            batch_to(q_for_atten, PRECISION_PERF), 
+                            batch_to(k_for_atten, PRECISION_PERF), 
+                            batch_to(v_for_atten, PRECISION_PERF),
                         )
                     if q_type != performer_context_layer.dtype:
                         performer_context_layer = performer_context_layer.to(q_type)
