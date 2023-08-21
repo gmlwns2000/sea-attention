@@ -116,6 +116,16 @@ class ModuleBenchmark(nn.Module):
         with timer(self.name):
             return self.module(x)
 
+class ChannelSplit(nn.Module):
+    def __init__(self, split):
+        super().__init__()
+        
+        self.split = split
+    
+    def forward(self, x):
+        N, C, H, W = x.shape
+        return x.view(N, C, H, self.split, W // self.split).permute(0, 1, 3, 2, 4).reshape(N, C*self.split, H, W//self.split)
+
 class PerlinAttention(nn.Module):
     def __init__(
         self,
@@ -160,69 +170,47 @@ class PerlinAttention(nn.Module):
             nn.LayerNorm(self.attention_head_size*2),
             nn.GELU(),
         )
-        self.attention_predictor_dec_row = nn.Sequential(
-            nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
-        )
-        padding_mode = 'reflect'
-        # self.attention_predictor_cnn = KeepRes(
-        #     # NOTE if we use pixelshuffle outch should be 48
-        #     nn.Conv2d(12, 48, 3, padding=1, stride=2, padding_mode=padding_mode),
-        #     nn.ReLU(),
-        #     Residual(
-        #         ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2, padding_mode=padding_mode),
-        #         Residual(KeepRes(
-        #             nn.Conv2d(48, 96, 3, padding=1, stride=2, padding_mode=padding_mode),
-        #             nn.ReLU(),
-        #             ResBlock(96, padding=1, lnorm_size=self.pconfig.attention_predictor_length//4, padding_mode=padding_mode),
-        #             nn.Conv2d(96, 48*4, 1, padding=0, stride=1, padding_mode=padding_mode),
-        #             nn.PixelShuffle(2),
-        #         )),
-        #         ResBlock(48, padding=1, lnorm_size=self.pconfig.attention_predictor_length//2, padding_mode=padding_mode),
-        #     ),
-        #     nn.Conv2d(48, 12*4, 1, padding=0, stride=1, padding_mode=padding_mode),
-        #     nn.PixelShuffle(2),
-        #     # nn.UpsamplingNearest2d(scale_factor=2),
-        #     # UpsampleFP32(2),
-        #     # nn.ConvTranspose2d(48, 12, 3, stride=2, padding=1, padding_mode='zeros', output_padding=1),
-        #     # nn.ReLU(),
-        #     nn.Conv2d(12, 12, 3, padding=1, padding_mode=padding_mode),
-        #     nn.LayerNorm(self.pconfig.attention_predictor_length),
-        # )
         N_H = self.num_attention_heads
         if not self.pconfig.causal:
+            self.attention_predictor_dec_row_down_scale = 2
+            self.attention_predictor_dec_row_splits = 4
+            self.attention_predictor_dec_row_out_ch = (self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale) * self.attention_predictor_dec_row_splits
+            self.attention_predictor_dec_row = nn.Sequential(
+                nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
+                ChannelSplit(self.attention_predictor_dec_row_splits),
+            )
             self.attention_predictor_cnn = nn.Sequential(
                 KeepRes(
-                    nn.Conv2d(N_H, 4*N_H, 3, padding=1, stride=2),
-                    nn.ReLU(),
-                    # ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
-                    # CausalConv2d(4*N_H, 4*N_H, kernel_size=3, padding=1, causal=self.pconfig.causal) if self.pconfig.causal else nn.Identity(),
-                    # ResBlock(4*N_H, causal=self.pconfig.causal, padding=1, dilation=1),
-                    nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+                    nn.Conv2d(self.attention_predictor_dec_row_splits*N_H, 4*N_H, 3, padding=1, stride=(2, 1)),
+                    # nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
                     nn.ReLU(),
                     nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
                     nn.ReLU(),
                     UpsampleFP32(2, torch.float16),
-                    # CausalConv2d(4*N_H, N_H, 3, padding=1, causal=self.pconfig.causal),
                     nn.Conv2d(4*N_H, N_H, 3, padding=1),
+                    output_width=self.pconfig.attention_predictor_length
                 ),
             )
         else:
             is_causal = self.pconfig.causal
             inner_ch = 2
+            self.attention_predictor_dec_row_down_scale = 4
+            self.attention_predictor_dec_row_splits = inner_ch
+            self.attention_predictor_dec_row_out_ch = (self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale) * self.attention_predictor_dec_row_splits
+            self.attention_predictor_dec_row = nn.Sequential(
+                nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
+                ChannelSplit(self.attention_predictor_dec_row_splits),
+            )
             self.attention_predictor_cnn = nn.Sequential(
-                ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length)),
+                ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
                 ModuleBenchmark('cnn.keepres', KeepRes(
-                    ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
-                    nn.ReLU(),
+                    # ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
+                    # nn.ReLU(),
                     ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
                     nn.ReLU(),
-                    # ModuleBenchmark('cnn.keepres.conv3', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
-                    # nn.ReLU(),
-                    # ModuleBenchmark('cnn.keepres.resb1', ResBlock(inner_ch*N_H, causal=is_causal, padding=2, dilation=2)),
-                    # nn.ReLU(),
-                    # ModuleBenchmark('cnn.keepres.resb2', ResBlock(inner_ch*N_H, causal=is_causal, padding=2, dilation=2)),
                     ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
                     ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal)),
+                    output_width=self.pconfig.attention_predictor_length
                 )),
                 # this prevent model explode within causal setting...
                 ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length))
@@ -477,24 +465,27 @@ class PerlinAttention(nn.Module):
             # estimate attention scores
             with timer("predictor"):
                 if self.pconfig.attention_predictor_method == 'mlp':
-                    raise_if_nan(performer_value)
-                    t_attention_predictor = self.attention_predictor_enc(performer_value)
-                    raise_if_nan(t_attention_predictor)
-                    estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
-                    get_bench().register_temp_buffer('estimated_attention_score_dec_row', estimated_attention_score)
-                    raise_if_nan(estimated_attention_score)
+                    with timer("predictor.enc"):
+                        raise_if_nan(performer_value)
+                        t_attention_predictor = self.attention_predictor_enc(performer_value)
+                    with timer("predictor.dec_row"):
+                        raise_if_nan(t_attention_predictor)
+                        estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
+                        get_bench().register_temp_buffer('estimated_attention_score_dec_row', estimated_attention_score)
+                        raise_if_nan(estimated_attention_score)
                     
-                    last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
-                        last_state,
-                        "attention_predictor_cnn->estimated_attention_score",
-                        self.attention_predictor_cnn,
-                        estimated_attention_score,
-                        q.shape[-2],
-                    )
-                    
-                    # print('cnnd', strify(last_state), q.shape, strify(estimated_attention_score))
-                    assert estimated_attention_score.shape[-2] == T_DST
-                    # print('estimated_attention_score', strify(estimated_attention_score))
+                    with timer("predictor.cnn"):
+                        last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
+                            last_state,
+                            "attention_predictor_cnn->estimated_attention_score",
+                            self.attention_predictor_cnn,
+                            estimated_attention_score,
+                            q.shape[-2],
+                        )
+                        
+                        # print('cnnd', strify(last_state), q.shape, strify(estimated_attention_score))
+                        assert estimated_attention_score.shape[-2] == T_DST
+                        # print('estimated_attention_score', strify(estimated_attention_score))
                 elif self.pconfig.attention_predictor_method == 'comp':
                     assert not use_cache
                     warnings.warn('attention prediction method is compressed one.')

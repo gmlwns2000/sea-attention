@@ -41,7 +41,7 @@ class TrainerConfig:
     lr_high_scale: float = 10.0
     lr_low_scale: float = 1.0
     wd: float = 1e-2
-    epochs: int = 100
+    num_steps: int = 100000
     batch_size: int = 1
     load_ignore_keys: List[str] = field(default_factory=lambda: ['perlin'])
     high_lr_names: List[str] = field(default_factory=lambda: ['perlin'])
@@ -201,7 +201,7 @@ class Trainer:
         
         swap_in_device = self.device
         swap_out_device = swap_in_device
-        swap_out_device = torch.device('cpu')
+        # swap_out_device = torch.device('cpu')
         
         for m in self.base_model.modules():
             if hasattr(m, 'swap_out_device'):
@@ -273,6 +273,7 @@ class Trainer:
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
             loss_special = self.model.calc_loss_special()
+        assert loss_special.requires_grad, loss_special.requires_grad
         
         loss = loss_model + loss_kd + loss_special
         
@@ -310,8 +311,9 @@ class Trainer:
         
         m = Metric()
         
+        done = len(self.train_loader) > (self.config.num_steps * self.config.gradient_accumulation_steps + 1)
         train_loader_len = len(self.train_loader)
-        with tqdm.tqdm(self.train_loader, dynamic_ncols=True) as pbar:
+        with tqdm.tqdm(self.train_loader, dynamic_ncols=True, total=min(len(self.train_loader), self.config.num_steps * self.config.gradient_accumulation_steps + 1)) as pbar:
             for istep, batch in enumerate(pbar):
                 wandb_dict = {}
                 try:
@@ -339,7 +341,6 @@ class Trainer:
                 })
                 
                 pbar.set_description(
-                    f'[{self.epoch}/{self.config.epochs}] '\
                     f'L:{m.update(loss, "l"):.4f} '\
                     f'Lsp:{m.update(loss_details["loss_sp"], "sp"):.4f} '\
                     f'Lkd:{m.update(loss_details["loss_kd"], "kd"):.4f} '\
@@ -365,6 +366,12 @@ class Trainer:
                 
                 if ((self.step % self.config.wandb_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0) or reported:
                     wandb.log(wandb_dict, step=self.step)
+                
+                if self.step > self.config.num_steps:
+                    done = True
+                    break
+        
+        return done
     
     def evaluate(self, on_step=None, quite=False):
         gc.collect()
@@ -381,7 +388,7 @@ class Trainer:
             del batch['trg_len']
             batch.update({
                 'output_hidden_states': True,
-                'output_attentions': True,
+                # 'output_attentions': True,
             })
             with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
                 self.base_model(**batch)
@@ -396,7 +403,7 @@ class Trainer:
             if on_step is not None: on_step()
         
         ppl = math.exp(nll_sum / self.valid_loader.dataset.seq_len)
-        if not quite: print(f'[{self.epoch}/{self.config.epochs}] PPL:', ppl)
+        if not quite: print(f'[{self.step}/{self.config.num_steps}] PPL:', ppl)
         return ppl
     
     def checkpoint_path(self):
@@ -445,14 +452,20 @@ class Trainer:
             config=asdict(self.config)
         )
         
-        for epoch in range(self.config.epochs):
+        epoch = 0
+        while True:
             self.epoch = epoch
-            self.train_epoch()
+            
+            done = self.train_epoch()
+            
             gc_cuda()
             score = self.evaluate()
             gc_cuda()
+            
             wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
             self.save()
+            
+            if done: break
 
 if __name__ == '__main__':
     t = Trainer()

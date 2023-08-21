@@ -98,11 +98,15 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     config = AutoConfig.from_pretrained('bert-base-uncased')
     config.max_position_embeddings = SEQ_LEN
 
-    pred_len = 128
-    if bench_config.seq_len >= 4096:
+    pred_len = 128  
+    if bench_config.seq_len >= 2048:
+        pred_len = 256
+    elif bench_config.seq_len >= 4096:
         pred_len = 256
     elif bench_config.seq_len >= 8192:
         pred_len = 512
+    elif bench_config.seq_len >= 16384:
+        pred_len = 1024
 
     register_default_config(PerlinAttentionConfig(
         performer_nb_factor=bench_config.nbf if method == 'perlin' else 1,

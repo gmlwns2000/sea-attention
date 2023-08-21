@@ -511,6 +511,7 @@ class OPTDecoderLayer(nn.Module):
         self.final_layer_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine)
         
         self._gradient_checkpointing = False
+        self.last_loss = None
 
     def forward(
         self,
@@ -943,10 +944,13 @@ class OPTDecoder(OPTPreTrainedModel):
                 start_mem = torch.cuda.max_memory_allocated()
                 # print('processing layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024)
                 
-                def create_custom_forward(module):
+                def create_custom_forward(module: OPTDecoderLayer):
                     def custom_forward(*inputs):
                         # None for past_key_value
-                        return module(*inputs, output_attentions, None)
+                        states = module(*inputs, output_attentions, None)
+                        loss = module.self_attn.last_loss
+                        assert loss is not None
+                        return states + (loss,)
 
                     return custom_forward
                 
@@ -965,6 +969,10 @@ class OPTDecoder(OPTPreTrainedModel):
                 
                 assert isinstance(layer_outputs, (tuple, list))
                 layer_outputs = batch_to(layer_outputs, swap_out_device)
+                
+                layer_outputs, layer_loss = layer_outputs[:-1], layer_outputs[-1]
+                decoder_layer.self_attn.last_loss = None
+                decoder_layer.last_loss = layer_loss
                 
                 # print('processed layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024, (torch.cuda.max_memory_allocated() - start_mem) // 1024 // 1024)
                 
@@ -1130,9 +1138,23 @@ class OPTForCausalLM(OPTPreTrainedModel):
     def calc_loss_special(self):
         loss = 0
         weights = 0
+        # print('hmm?')
         for m in self.modules():
-            if isinstance(m, OPTAttention):
-                if m.last_loss is not None:
+            if isinstance(m, OPTDecoderLayer) and m.last_loss is not None:
+                # print('good')
+                loss += m.last_loss
+                weights += 1
+                m.last_loss = None
+        for m in self.modules():
+            if isinstance(m, OPTAttention) and m.last_loss is not None:
+                # print('hello')
+                if weights > 0:
+                    warnings.warn(
+                        "OPTAttention.last_loss is ignored, because gradient checkpointing activated! "
+                        "If you see this message when not grad. chkpt is not activated, please report."
+                    )
+                else:
+                    # print('no')
                     loss += m.last_loss
                     weights += 1
                     m.last_loss = None

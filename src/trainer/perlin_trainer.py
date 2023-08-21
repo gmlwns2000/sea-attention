@@ -33,6 +33,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
+    parser.add_argument('--predictor-length', default=128, type=int)
     return parser
 
 def parse_perlin_model_options(args):
@@ -52,6 +53,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
+        'perlin_predictor_length': args.predictor_length
     }
     return kwargs
 
@@ -71,6 +73,7 @@ class BaseTrainer:
         perlin_token_merging = False,
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
+        perlin_predictor_length = 128,
         compile = False,
         **kwargs,
     ) -> None:
@@ -89,6 +92,7 @@ class BaseTrainer:
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
+        self.perlin_predictor_length = perlin_predictor_length
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
@@ -99,6 +103,7 @@ class BaseTrainer:
             random_lookup = perlin_random_lookup,
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
+            attention_predictor_length=perlin_predictor_length,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
             compile = compile,
@@ -250,6 +255,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         epochs: int = None,
         max_seq_len: int = None,
         eval_steps: int = None,
+        wandb_steps: int = None,
         **kwargs
     ):
         BaseTrainer.__init__(self, compile=not disable_compile, **kwargs)
@@ -276,13 +282,19 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'opt-350m': 500,
                 'opt-1.3b': 250,
             }[model]
+        if wandb_steps is None:
+            wandb_steps = {
+                'opt-125m': 10,
+                'opt-350m': 5,
+                'opt-1.3b': 2,
+            }[model]
         
         BaseOptTrainer.__init__(self, OptTrainerConfig(
             experiment_name=self.format_exp(f'{model}_{subset}'),
             model_cls=perlin_opt.OPTForCausalLM,
             model_config=model_config,
             amp_enabled=not disable_amp,
-            epochs=epochs if epochs is not None else 10,
+            num_steps=100000,
             gradient_accumulation_steps=gradient_accumulation_steps,
             gradient_checkpointing=gradient_checkpointing,
             max_seq_len=max_seq_len,
@@ -290,6 +302,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
             additional_config=perlin_attention.get_default_config().to_json(),
             eval_steps=eval_steps,
+            wandb_steps=wandb_steps,
         ), skip_init_loaders=kwargs.get('skip_init_loaders', False))
         
         self.apply_model_options(self.model)

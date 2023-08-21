@@ -428,6 +428,7 @@ def _checkpoint_without_reentrant(function, preserve_rng_state=True, swap_in_dev
         swap_out_args = batch_to(args, swap_out_device)
     else:
         swap_out_args = args
+    #TODO! memory seems leaking!
     assert len(kwargs) == 0
     
     # Custom class to be able to take weak references
