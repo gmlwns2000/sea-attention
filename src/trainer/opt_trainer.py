@@ -460,16 +460,21 @@ class Trainer:
     
     def save(self, path=None):
         if path is None: path = self.checkpoint_path()
-        torch.save({
-            'step': self.step,
-            '_istep': self._istep,
-            'epoch': self.epoch,
-            'model': self.model.state_dict(),
-            'base_model': self.base_model.state_dict(),
-            'scaler': self.scaler.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'config': asdict(self.config),
-        }, path)
+        if not self.deepspeed:
+            torch.save({
+                'step': self.step,
+                '_istep': self._istep,
+                'epoch': self.epoch,
+                'model': self.model.state_dict(),
+                'base_model': self.base_model.state_dict(),
+                'scaler': self.scaler.state_dict(),
+                'optimizer': self.optimizer.state_dict(),
+                'config': asdict(self.config),
+            }, path)
+        else:
+            path = path[:4]
+            os.makedirs(path, exist_ok=True)
+            self.ds_engine.save_checkpoint(path)
         print('saved', path)
     
     def load(self, path=None):
