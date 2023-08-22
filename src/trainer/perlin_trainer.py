@@ -266,6 +266,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         epochs: int = None,
+        num_steps: int = None,
         max_seq_len: int = None,
         eval_steps: int = None,
         wandb_steps: int = None,
@@ -309,6 +310,10 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'opt-1.3b': 2,
                 'opt-2.7b': 2,
             }[model]
+        if num_steps is None:
+            num_steps = {
+                'wikitext2': 100000,
+            }[subset]
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
@@ -316,7 +321,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 model_cls=perlin_opt.OPTForCausalLM,
                 model_config=model_config,
                 amp_enabled=not disable_amp,
-                num_steps=100000,
+                num_steps=num_steps,
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 max_seq_len=max_seq_len,
@@ -345,6 +350,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='bert', type=str)
     parser.add_argument('--subset', default=None, type=str)
     parser.add_argument('--epochs', default=None, type=int)
+    parser.add_argument('--num-steps', default=None, type=int)
     parser.add_argument('--max-seq-len', default=32000, type=int)
     parser.add_argument('--load-checkpoint', default=None, type=str)
     parser.add_argument('--load-only-additionals', action='store_true')
@@ -391,6 +397,7 @@ if __name__ == '__main__':
         'model': args.model,
         'subset':args.subset,
         'epochs': args.epochs,
+        'num_steps': args.num_steps,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,
