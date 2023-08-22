@@ -298,21 +298,22 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         if eval_steps is None:
             eval_steps = {
-                'opt-125m': 500,
-                'opt-350m': 250,
-                'opt-1.3b': 150,
+                'opt-125m': 250,
+                'opt-350m': 150,
+                'opt-1.3b': 100,
                 'opt-2.7b': 100,
             }[model]
         if wandb_steps is None:
+            # NOTE: freqenct wandb step is okay, because we use 32 batchsize on deepspeed
             wandb_steps = {
-                'opt-125m': 10,
-                'opt-350m': 5,
-                'opt-1.3b': 2,
-                'opt-2.7b': 2,
+                'opt-125m': 1,
+                'opt-350m': 1,
+                'opt-1.3b': 1,
+                'opt-2.7b': 1,
             }[model]
         if num_steps is None:
             num_steps = {
-                'wikitext2': 100000,
+                'wikitext2': 20000,
             }[subset]
         
         BaseOptTrainer.__init__(self, 
@@ -326,7 +327,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 gradient_checkpointing=gradient_checkpointing,
                 max_seq_len=max_seq_len,
                 lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
-                lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
+                lr_low_scale=0.2 if self.attention_method == 'perlin' else 1.0,
                 additional_config=perlin_attention.get_default_config().to_json(),
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,

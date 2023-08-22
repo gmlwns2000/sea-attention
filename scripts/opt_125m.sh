@@ -1,3 +1,5 @@
+# fits on 12GB
+
 export PYTHONPATH='./' 
 deepspeed src/trainer/perlin_trainer.py \
     --model opt-125m \
@@ -8,4 +10,5 @@ deepspeed src/trainer/perlin_trainer.py \
     --performer-nb-feature-factor 8 \
     --deepspeed-enable \
     --deepspeed \
-    --deepspeed_config ./config/ds_opt_125.json
+    --deepspeed_config ./config/ds_opt_125.json \
+    --kd-checkpointing

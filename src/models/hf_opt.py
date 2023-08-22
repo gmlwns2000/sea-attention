@@ -328,6 +328,15 @@ class OPTDecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+        
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.fc1.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         residual = hidden_states
 

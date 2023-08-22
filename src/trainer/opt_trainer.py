@@ -67,7 +67,7 @@ def gc_cuda():
 import deepspeed
 
 class KDWrapperModel(nn.Module):
-    def __init__(self, config, device, swap_out_device, model, base_model):
+    def __init__(self, config, device, swap_out_device, model, base_model, using_deepspeed):
         super().__init__()
         
         self.config = config
@@ -75,6 +75,7 @@ class KDWrapperModel(nn.Module):
         self.swap_out_device = swap_out_device
         self.model = model
         self.base_model = base_model
+        self.using_deepspeed = using_deepspeed
     
     def forward(self, batch):
         swap_in_device = self.device
@@ -83,7 +84,10 @@ class KDWrapperModel(nn.Module):
         
         for m in self.base_model.modules():
             if hasattr(m, 'swap_out_device'):
-                m.swap_out_device = swap_out_device
+                if self.using_deepspeed:
+                    m.swap_out_device = torch.device('cpu')
+                else:
+                    m.swap_out_device = swap_out_device
         
         for m in self.model.modules():
             if hasattr(m, 'swap_out_device'):
@@ -163,7 +167,9 @@ class Trainer:
         torch.cuda.set_device(self.device)
         seed(42 + self.local_rank)
         
-        if deepspeed: ds.init_distributed()
+        if deepspeed: 
+            print('deepspeed enabeld, start dist server')
+            ds.init_distributed()
         if torch.distributed.is_initialized():
             self.world_size = torch.distributed.get_world_size()
         else:
@@ -233,6 +239,7 @@ class Trainer:
             self.swap_out_device,
             student, 
             teacher,
+            self.deepspeed,
         )
         # self.kd_model = self.kd_model.to(self.device)
         self.base_model = self.kd_model.base_model
@@ -306,10 +313,11 @@ class Trainer:
         if optimizer_type == 'AdamW':
             if self.deepspeed:
                 config = deepspeed.DeepSpeedConfig(self.cmd_args.deepspeed_config, None)
-                if config.zero_enabled and config.zero_config.cpu_offload:
+                if config.zero_enabled and config.zero_config.stage == 3:
                     optim_cls = deepspeed.ops.adam.DeepSpeedCPUAdam
                 else:
                     optim_cls = torch.optim.AdamW
+                print(f'selected optim cls {optim_cls}')
             else:
                 optim_cls = torch.optim.AdamW
         elif optimizer_type == 'Adam':
@@ -388,7 +396,7 @@ class Trainer:
         m = Metric()
         
         train_loader_len = len(self.train_loader)
-        total_steps_len = (int(self.config.num_steps * self.config.gradient_accumulation_steps / self.world_size) + 1) - self._istep
+        total_steps_len = (int(self.config.num_steps * self.config.gradient_accumulation_steps) + 1) - self._istep
         done = train_loader_len >= total_steps_len
         with tqdm.tqdm(self.train_loader, dynamic_ncols=True, total=min(train_loader_len, total_steps_len), disable=self.local_rank != 0) as pbar:
             for istep, batch in enumerate(pbar):
@@ -431,6 +439,8 @@ class Trainer:
                 reported = False
                 if ((self.step + 1) % self.config.eval_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
                     gc_cuda()
+                    if self.deepspeed:
+                        self.ds_engine.empty_partition_cache()
                     if self.local_rank == 0: 
                         score = self.evaluate()
                     else:
@@ -505,7 +515,7 @@ class Trainer:
                 'config': asdict(self.config),
             }, path)
         else:
-            path = path[:4]
+            path = path[:-4]
             os.makedirs(path, exist_ok=True)
             self.ds_engine.save_checkpoint(path)
         print('saved', path)

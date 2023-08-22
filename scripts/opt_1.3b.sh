@@ -1,3 +1,5 @@
+# fits on 24GB
+
 export PYTHONPATH='./' 
 deepspeed src/trainer/perlin_trainer.py \
     --model opt-1.3b \
@@ -9,3 +11,4 @@ deepspeed src/trainer/perlin_trainer.py \
     --deepspeed-enable \
     --deepspeed \
     --deepspeed_config ./config/ds_opt_1.3.json
+    # --kd-checkpointing

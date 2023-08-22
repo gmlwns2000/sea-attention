@@ -396,6 +396,7 @@ class OPTAttention(nn.Module):
             ) #type: PerlinAttentionOutput
             self.last_loss = output.loss
             if not self.benchmarking and self.checkout_perlin_output:
+                warnings.warn("you are checking-out LARGE buffers!!")
                 if self.swap_out_device is None:
                     self.last_perlin_output = output
                 else:
@@ -538,9 +539,19 @@ class OPTDecoderLayer(nn.Module):
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
         
+        # to handle cpu checkpointing
         device = attention_mask.device
         if device != hidden_states.device:
             hidden_states = batch_to(hidden_states, device)
+            
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.fc1.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         residual = hidden_states
 
@@ -931,7 +942,14 @@ class OPTDecoder(OPTPreTrainedModel):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
             decoder_layer = decoder_layer # type: OPTDecoderLayer
             if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+                # NOTE: this costs some memory... we need to avoid store this in GPU, but offloading this value cause error on ZeRO3
+                if self.use_deepspeed:
+                    all_hidden_states += (hidden_states,)
+                else:
+                    if swap_out_device is not None:
+                        all_hidden_states += (batch_to(hidden_states, swap_out_device),)
+                    else:
+                        all_hidden_states += (hidden_states,)
 
             if self.training:
                 dropout_probability = torch.rand([])
@@ -948,6 +966,8 @@ class OPTDecoder(OPTPreTrainedModel):
                 def create_custom_forward(module: OPTDecoderLayer):
                     def custom_forward(*inputs):
                         # None for past_key_value
+                        if len(inputs) == 2:
+                            inputs = inputs + (None, None)
                         states = module(*inputs, output_attentions, None)
                         loss = module.self_attn.last_loss
                         assert loss is not None
@@ -960,14 +980,22 @@ class OPTDecoder(OPTPreTrainedModel):
                 USE_DS = self.use_deepspeed
                 if USE_DS:
                     import deepspeed
+                    # deepspeed.checkpointing.PARTITION_ACTIVATIONS = True
+                    # deepspeed.checkpointing.CPU_CHECKPOINT = True
+                    # deepspeed.checkpointing.CONTIGUOUS_CHECKPOINTING = True
+                    
+                    assert (head_mask[idx] if head_mask is not None else None) == None
+                    
+                    # NOTE: None is not accepted, for cpu checkpointing
+                    deepspeed.checkpointing.set_num_layers(len(self.layers))
                     layer_outputs = deepspeed.checkpointing.checkpoint(
                         create_custom_forward(decoder_layer),
                         hidden_states,
                         causal_attention_mask,
-                        head_mask[idx] if head_mask is not None else None,
-                        None,
                         # use_reentrant=False,
                     )
+                    
+                    # layer_outputs = batch_to(layer_outputs, swap_out_device)
                 else:
                     layer_outputs = checkpoint.checkpoint(
                         create_custom_forward(decoder_layer),
@@ -980,9 +1008,9 @@ class OPTDecoder(OPTPreTrainedModel):
                         swap_in_device=swap_in_device,
                     )
                 
-                assert isinstance(layer_outputs, (tuple, list))
-                layer_outputs = batch_to(layer_outputs, swap_out_device)
+                    layer_outputs = batch_to(layer_outputs, swap_out_device)
                 
+                assert isinstance(layer_outputs, (tuple, list))
                 layer_outputs, layer_loss = layer_outputs[:-1], layer_outputs[-1]
                 decoder_layer.self_attn.last_loss = None
                 decoder_layer.last_loss = layer_loss
