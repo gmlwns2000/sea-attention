@@ -4,6 +4,7 @@ import torch
 import os
 from datasets import load_dataset
 import tqdm
+from torch.utils.data.distributed import DistributedSampler
 
 class Wikitext2Dataset(Dataset):
     def __init__(self, subset, tokenizer, stride=2048, max_length=None, strided_indexing=None):
@@ -58,15 +59,30 @@ class Wikitext2Dataset(Dataset):
             'trg_len': torch.tensor(trg_len),
         }
 
-def get_dataloader(subset, tokenizer, batch_size=1, max_length=None):
+def get_dataloader(subset, tokenizer, batch_size=1, max_length=None, local_rank=0, world_size=1):
     assert max_length is not None
     ds = Wikitext2Dataset(subset, tokenizer, max_length=max_length)
-    return DataLoader(
-        ds, 
-        batch_size=batch_size, 
-        num_workers=0, 
-        shuffle=subset=='train'
-    )
+    use_shuffle = subset=='train'
+    
+    if world_size > 1:
+        return DataLoader(
+            ds, 
+            batch_size=batch_size, 
+            num_workers=0, 
+            sampler=DistributedSampler(
+                dataset=ds,
+                num_replicas=world_size,
+                rank=local_rank,
+                shuffle=use_shuffle,
+            )
+        )
+    else:
+        return DataLoader(
+            ds, 
+            batch_size=batch_size, 
+            num_workers=0, 
+            shuffle=use_shuffle
+        )
 
 if __name__ == '__main__':
     import transformers

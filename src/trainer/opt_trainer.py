@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, asdict
 import math
 import traceback
+import warnings
 
 import tqdm
 from ..utils import raise_if_nan, seed, batch_to, Metric
@@ -16,6 +17,7 @@ from ..dataset.wikitext2 import get_dataloader
 import gc
 import torch.nn.functional as F
 from ..utils import strify
+import torch.distributed
 
 default = lambda x, y: x if x is not None else y
 
@@ -153,22 +155,41 @@ class KDWrapperModel(nn.Module):
 
 class Trainer:
     def __init__(self, config: TrainerConfig = None, skip_init_loaders = False, deepspeed=False, cmd_args=None) -> None:
-        seed()
+        import deepspeed as ds
         
         self.config = config if config is not None else TrainerConfig()
         self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
+        self.local_rank = max(0, cmd_args.local_rank)
+        torch.cuda.set_device(self.device)
+        seed(42 + self.local_rank)
+        
+        if deepspeed: ds.init_distributed()
+        if torch.distributed.is_initialized():
+            self.world_size = torch.distributed.get_world_size()
+        else:
+            self.world_size = 1
+        print(f'DDP: {self.local_rank} / {self.world_size}')
         if self.config.kd_checkpointing:
             self.swap_out_device = torch.device('cpu')
+            warnings.warn("using cpu offload for KD buffers. this will save a lot of memory, but slow down A--LOT!")
         else:
             self.swap_out_device = self.device
         
         self.deepspeed = deepspeed
         self.cmd_args = cmd_args
         
+        if self.deepspeed:
+            ds_config = ds.DeepSpeedConfig(self.cmd_args.deepspeed_config, None)
+            old_steps = self.config.gradient_accumulation_steps
+            self.config.gradient_accumulation_steps = int(ds_config.train_batch_size / (ds_config.train_micro_batch_size_per_gpu * self.world_size))
+            warnings.warn(f"--gradient-accumulation-steps={old_steps} is ignored, cacluated grad. acc. steps using deepspeed config. inferenced={self.config.gradient_accumulation_steps}")
+        
         self.init_model()
         if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
         self.init_deepspeed()
+        
+        self.wandb_inited = False
     
     def init_model(self):
         teacher = self.config.teacher_model_cls.from_pretrained(
@@ -223,13 +244,17 @@ class Trainer:
                 subset='train', 
                 tokenizer=self.tokenizer, 
                 batch_size=self.config.batch_size, 
-                max_length=self.max_seq_len
+                max_length=self.max_seq_len,
+                local_rank=self.local_rank,
+                world_size=self.world_size,
             )
             self.valid_loader = get_dataloader(
                 subset='valid', 
                 tokenizer=self.tokenizer, 
                 batch_size=self.config.batch_size, 
-                max_length=self.max_seq_len
+                max_length=self.max_seq_len,
+                local_rank=0,
+                world_size=1,
             )
         else:
             raise Exception()
@@ -280,7 +305,11 @@ class Trainer:
         
         if optimizer_type == 'AdamW':
             if self.deepspeed:
-                optim_cls = deepspeed.ops.adam.DeepSpeedCPUAdam
+                config = deepspeed.DeepSpeedConfig(self.cmd_args.deepspeed_config, None)
+                if config.zero_enabled and config.zero_config.cpu_offload:
+                    optim_cls = deepspeed.ops.adam.DeepSpeedCPUAdam
+                else:
+                    optim_cls = torch.optim.AdamW
             else:
                 optim_cls = torch.optim.AdamW
         elif optimizer_type == 'Adam':
@@ -358,9 +387,10 @@ class Trainer:
         
         m = Metric()
         
-        done = len(self.train_loader) > (self.config.num_steps * self.config.gradient_accumulation_steps + 1)
         train_loader_len = len(self.train_loader)
-        with tqdm.tqdm(self.train_loader, dynamic_ncols=True, total=min(len(self.train_loader), self.config.num_steps * self.config.gradient_accumulation_steps + 1)) as pbar:
+        total_steps_len = (int(self.config.num_steps * self.config.gradient_accumulation_steps / self.world_size) + 1) - self._istep
+        done = train_loader_len >= total_steps_len
+        with tqdm.tqdm(self.train_loader, dynamic_ncols=True, total=min(train_loader_len, total_steps_len), disable=self.local_rank != 0) as pbar:
             for istep, batch in enumerate(pbar):
                 wandb_dict = {}
                 try:
@@ -401,7 +431,10 @@ class Trainer:
                 reported = False
                 if ((self.step + 1) % self.config.eval_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0:
                     gc_cuda()
-                    score = self.evaluate()
+                    if self.local_rank == 0: 
+                        score = self.evaluate()
+                    else:
+                        score = 0
                     gc_cuda()
                     wandb_dict['eval/score'] = score
                     self.save()
@@ -412,7 +445,7 @@ class Trainer:
                     reported = True
                 
                 if ((self.step % self.config.wandb_steps) == 0 and (self._istep % self.config.gradient_accumulation_steps) == 0) or reported:
-                    wandb.log(wandb_dict, step=self.step)
+                    if self.wandb_inited: wandb.log(wandb_dict, step=self.step)
                 
                 if self.step > self.config.num_steps:
                     done = True
@@ -496,28 +529,40 @@ class Trainer:
     
     def main(self):
         torch.set_float32_matmul_precision('high')
+        warnings.warn("using TF32 if available, so be caution...")
         
         from ..utils.secrets import WANDB_KEY, USER_NAME
         os.environ['WANDB_API_KEY'] = WANDB_KEY
-        wandb.init(
-            project=f"[{USER_NAME}] perlin-opt" if USER_NAME is not None else "perlin-opt",
-            config=asdict(self.config)
-        )
+        if self.local_rank == 0:
+            wandb.init(
+                project=f"[{USER_NAME}] perlin-opt" if USER_NAME is not None else "perlin-opt",
+                config=asdict(self.config)
+            )
+            self.wandb_inited = True
         
         epoch = 0
         while True:
             self.epoch = epoch
+            if hasattr(self.train_loader, 'sampler') and hasattr(self.train_loader.sampler, 'set_epoch'):
+                self.train_loader.sampler.set_epoch(epoch)
             
             done = self.train_epoch()
             
             gc_cuda()
-            score = self.evaluate()
+            if self.local_rank == 0:
+                score = self.evaluate()
+            else:
+                score = 0
             gc_cuda()
             
-            wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
+            if self.wandb_inited: wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
             self.save()
             
             if done: break
+            epoch += 1
+        
+        if self.world_size > 1:
+            torch.distributed.destroy_process_group()
 
 if __name__ == '__main__':
     t = Trainer()
