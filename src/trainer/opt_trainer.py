@@ -517,7 +517,7 @@ class Trainer:
         else:
             path = path[:-4]
             os.makedirs(path, exist_ok=True)
-            self.ds_engine.save_checkpoint(path)
+            self.ds_engine.save_checkpoint(path, tag='deepspeed')
         print('saved', path)
     
     def load(self, path=None):
