@@ -298,8 +298,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         if eval_steps is None:
             eval_steps = {
-                'opt-125m': 250,
-                'opt-350m': 150,
+                'opt-125m': 150,
+                'opt-350m': 100,
                 'opt-1.3b': 100,
                 'opt-2.7b': 100,
                 # 'opt-125m': 1,
