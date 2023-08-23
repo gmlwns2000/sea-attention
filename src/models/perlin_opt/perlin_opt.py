@@ -212,6 +212,7 @@ class OPTAttention(nn.Module):
             self.last_v = v
             self.last_attention_mask = attention_mask
         
+        op_dtype = q.dtype
         N_H, T_DST, _HID_Q = q.shape
         N_H, T_SRC, _HID_V = v.shape
         HID = self.head_dim
@@ -325,6 +326,7 @@ class OPTAttention(nn.Module):
                 v, 
                 input_attn_mask = binary_mask
             )
+            reformer_context_layer = reformer_context_layer.to(op_dtype)
             #unpad
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
@@ -357,6 +359,7 @@ class OPTAttention(nn.Module):
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
             with torch.autocast('cuda', torch.float32):
                 performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
+            performer_context_layer = performer_context_layer.to(op_dtype)
             
             if not self.benchmarking:
                 attention_probs = torch.zeros((N, H, T_DST, T_SRC), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
@@ -422,11 +425,20 @@ class OPTAttention(nn.Module):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
         is_cross_attention = key_value_states is not None
+        
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.q_proj.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
+        query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=self.q_proj.weight.dtype, device=hidden_states.device)
         past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -480,6 +492,9 @@ class OPTAttention(nn.Module):
         elif len(outputs) == 3:
             attn_output, attn_weights_reshaped, attn_state = outputs
         else: raise Exception()
+
+        if attn_output.dtype != self.out_proj.weight.dtype:
+            attn_output = attn_output.to(self.out_proj.weight.dtype)
         
         if attn_state is not None:
             past_key_value = (*past_key_value, attn_state)
@@ -577,22 +592,35 @@ class OPTDecoderLayer(nn.Module):
         )
         
         def after_self_atten(residual, hidden_states):
+            # deepspeed fp32 support, convert fp32
+            op_dtype = self.fc1.weight.dtype
+            if op_dtype != hidden_states:
+                hidden_states = hidden_states.to(op_dtype)
+            
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            # print('aa', hidden_states.dtype)
             hidden_states = residual + hidden_states
+            # print('faa', hidden_states.dtype)
 
             # 350m applies layer norm AFTER attention
             if not self.do_layer_norm_before:
                 hidden_states = self.self_attn_layer_norm(hidden_states)
+            # print('saa', hidden_states.dtype)
 
             # Fully Connected
             hidden_states_shape = hidden_states.shape
             hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
             residual = hidden_states
+            # print('00aa', hidden_states.dtype)
 
             # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
             if self.do_layer_norm_before:
                 hidden_states = self.final_layer_norm(hidden_states)
-
+            
+            if op_dtype != hidden_states:
+                hidden_states = hidden_states.to(op_dtype)
+            # print('aaff3', hidden_states.dtype)
+            
             hidden_states = self.fc1(hidden_states)
             hidden_states = self.activation_fn(hidden_states)
 
@@ -1328,7 +1356,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
             return_dict=return_dict,
         )
 
-        logits = self.lm_head(outputs[0]).contiguous()
+        logits = self.lm_head(outputs[0].to(self.lm_head.weight.dtype)).contiguous()
 
         loss = None
         if labels is not None:

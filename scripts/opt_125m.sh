@@ -14,5 +14,5 @@ deepspeed \
     --performer-nb-feature-factor 8 \
     --deepspeed-enable \
     --deepspeed \
-    --deepspeed_config ./config/ds_opt_125.json \
-    --kd-checkpointing
+    --deepspeed_config ./config/ds_opt_125.json
+    # --kd-checkpointing

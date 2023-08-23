@@ -104,7 +104,7 @@ class KDWrapperModel(nn.Module):
         
         # print('fi')
         
-        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
+        with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_teacher = self.base_model(**batch)
             if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)

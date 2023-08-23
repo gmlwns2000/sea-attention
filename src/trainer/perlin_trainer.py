@@ -302,6 +302,10 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'opt-350m': 150,
                 'opt-1.3b': 100,
                 'opt-2.7b': 100,
+                # 'opt-125m': 1,
+                # 'opt-350m': 1,
+                # 'opt-1.3b': 1,
+                # 'opt-2.7b': 1,
             }[model]
         if wandb_steps is None:
             # NOTE: freqenct wandb step is okay, because we use 32 batchsize on deepspeed
@@ -313,7 +317,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             }[model]
         if num_steps is None:
             num_steps = {
-                'wikitext2': 20000,
+                'wikitext2': 10000,
             }[subset]
         
         BaseOptTrainer.__init__(self, 

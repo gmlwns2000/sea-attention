@@ -66,14 +66,15 @@ deepspeed_config = {
         'reformer': './config/ds_opt_2.7.json',
     }}
 }[args.model][args.dataset][args.method]
-kd_checkpointing = {
-    'opt-125m': { 'wikitext2': {
-        'none': True,
-        'perlin': True,
-        'performer': True,
-        'reformer': True,
-    }},
-}.get(args.model, {'':{'':False}}).get(args.dataset, {'':False}).get(args.method, False)
+# kd_checkpointing = {
+#     'opt-125m': { 'wikitext2': {
+#         'none': True,
+#         'perlin': True,
+#         'performer': True,
+#         'reformer': True,
+#     }},
+# }.get(args.model, {'':{'':False}}).get(args.dataset, {'':False}).get(args.method, False)
+kd_checkpointing = False
 
 cmd = [
     'deepspeed',
