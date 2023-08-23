@@ -65,6 +65,7 @@ def gc_cuda():
     torch.cuda.reset_peak_memory_stats()
     
 import deepspeed
+import deepspeed.comm
 
 class KDWrapperModel(nn.Module):
     def __init__(self, config, device, swap_out_device, model, base_model, using_deepspeed):
@@ -78,6 +79,12 @@ class KDWrapperModel(nn.Module):
         self.using_deepspeed = using_deepspeed
     
     def forward(self, batch):
+        # print('cc')
+        
+        self.base_model.eval()
+        
+        # print('dd')
+        
         swap_in_device = self.device
         swap_out_device = self.swap_out_device
         # swap_out_device = torch.device('cpu')
@@ -95,12 +102,17 @@ class KDWrapperModel(nn.Module):
             if hasattr(m, 'swap_in_device'):
                 m.swap_in_device = swap_in_device
         
+        # print('fi')
+        
         with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled, cache_enabled=False):
             # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_teacher = self.base_model(**batch)
             if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
             if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
             output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
+        
+        # print('gg')
+        
         # print('*'*20, 'base2', torch.cuda.max_memory_allocated() // 1024 // 1024)
         with torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             batch['teacher'] = self.base_model
@@ -143,7 +155,7 @@ class KDWrapperModel(nn.Module):
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
             loss_special = self.model.calc_loss_special()
-        assert loss_special.requires_grad, loss_special.requires_grad
+        # assert loss_special.requires_grad, loss_special.requires_grad
         
         loss = loss_model + loss_kd + loss_special
         
@@ -152,8 +164,11 @@ class KDWrapperModel(nn.Module):
             'loss': loss_py,
             'loss_sp': loss_special.item() if isinstance(loss_special, torch.Tensor) else loss_special, 
             'loss_model': loss_model.item() if isinstance(loss_model, torch.Tensor) else loss_model,
-            'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd
+            'loss_kd': loss_kd.item() if isinstance(loss_kd, torch.Tensor) else loss_kd,
+            'student_model_loss': output_student.loss,
         }
+        
+        # print('ff')
         
         return loss, loss_py, loss_details
 
@@ -260,8 +275,8 @@ class Trainer:
                 tokenizer=self.tokenizer, 
                 batch_size=self.config.batch_size, 
                 max_length=self.max_seq_len,
-                local_rank=0,
-                world_size=1,
+                local_rank=self.local_rank,
+                world_size=self.world_size,
             )
         else:
             raise Exception()
@@ -390,8 +405,11 @@ class Trainer:
         return loss_py, loss_details
     
     def train_epoch(self):
-        self.model.train()
-        self.base_model.train()
+        if not self.deepspeed:
+            self.model.train()
+            self.base_model.eval()
+        else:
+            self.ds_engine.train()
         
         m = Metric()
         
@@ -441,16 +459,21 @@ class Trainer:
                     gc_cuda()
                     if self.deepspeed:
                         self.ds_engine.empty_partition_cache()
-                    if self.local_rank == 0: 
-                        score = self.evaluate()
-                    else:
-                        score = 0
+                    score = self.evaluate()
+                    # if self.local_rank == 0: 
+                    #     score = self.evaluate()
+                    # else:
+                    #     score = 0
+                    deepspeed.comm.barrier()
                     gc_cuda()
                     wandb_dict['eval/score'] = score
                     self.save()
                     
-                    self.model.train()
-                    self.base_model.train()
+                    if not self.deepspeed:
+                        self.model.train()
+                        self.base_model.eval()
+                    else:
+                        self.ds_engine.train()
                     
                     reported = True
                 
@@ -467,32 +490,54 @@ class Trainer:
         gc.collect()
         torch.cuda.empty_cache()
 
-        self.model.eval()
-        self.base_model.eval()
+        if not self.deepspeed:
+            self.model.eval()
+            self.base_model.eval()
+        else:
+            self.ds_engine.eval()
         
         # nlls = []
-        nll_sum = 0
-        for batch in tqdm.tqdm(self.valid_loader, dynamic_ncols=True, desc='evaluate'):
+        nll_sum = torch.tensor(0.0, device=self.device)
+        nll_count = torch.tensor(0.0, device=self.device)
+        for batch in tqdm.tqdm(self.valid_loader, dynamic_ncols=True, desc='evaluate', disable=self.local_rank != 0):
             batch = batch_to(batch, self.device)
             trg_len = batch['trg_len']
             del batch['trg_len']
             batch.update({
                 'output_hidden_states': True,
-                # 'output_attentions': True,
+                'output_attentions': False,
             })
-            with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-                self.base_model(**batch)
-            with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-                batch['teacher'] = self.base_model
-                output_student = self.model(**batch)
-                neg_log_likelihood = output_student.loss * trg_len.item()
+            if not self.deepspeed:
+                with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+                    self.base_model(**batch)
+                with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+                    batch['teacher'] = self.base_model
+                    output_student = self.model(**batch)
+                    student_loss = output_student.loss
+            else:
+                with torch.no_grad():
+                    # print('aa')
+                    _, _, loss_details = self.ds_engine(batch)
+                    # print('bb')
+                    student_loss = loss_details['student_model_loss']
+                    # print(student_loss)
+            neg_log_likelihood = student_loss * trg_len.item()
+            
             # nlls.append(neg_log_likelihood)
             nll_sum += neg_log_likelihood.item()
+            nll_count += batch['input_ids'].shape[-1]
 
             # for debugging
             if on_step is not None: on_step()
         
-        ppl = math.exp(nll_sum / self.valid_loader.dataset.seq_len)
+        if self.world_size > 1:
+            print(f"worker {self.local_rank}: nll_sum={nll_sum}, nll_count={nll_count}")
+            torch.distributed.all_reduce(nll_sum)
+            torch.distributed.all_reduce(nll_count)
+            if self.local_rank == 0:
+                print(f"master worker: nll_sum={nll_sum}, nll_count={nll_count}({self.valid_loader.dataset.seq_len})")
+        
+        ppl = math.exp(nll_sum.item() / nll_count.item())
         if not quite: print(f'[{self.step}/{self.config.num_steps}] PPL:', ppl)
         return ppl
     
@@ -563,6 +608,7 @@ class Trainer:
                 score = self.evaluate()
             else:
                 score = 0
+            deepspeed.comm.barrier()
             gc_cuda()
             
             if self.wandb_inited: wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)

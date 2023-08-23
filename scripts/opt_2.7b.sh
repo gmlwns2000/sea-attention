@@ -1,7 +1,11 @@
 # fits on 24GB
 
 export PYTHONPATH='./' 
-deepspeed src/trainer/perlin_trainer.py \
+MASTER_PORT=${MASTER_PORT:-32001}
+
+deepspeed \
+    --master_port $MASTER_PORT \
+    src/trainer/perlin_trainer.py \
     --model opt-2.7b \
     --dataset wikitext2 \
     --k 64 \
