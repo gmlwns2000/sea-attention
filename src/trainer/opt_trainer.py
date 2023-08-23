@@ -313,7 +313,7 @@ class Trainer:
         if optimizer_type == 'AdamW':
             if self.deepspeed:
                 config = deepspeed.DeepSpeedConfig(self.cmd_args.deepspeed_config, None)
-                if config.zero_enabled and config.zero_config.stage == 3:
+                if config.zero_enabled and (config.zero_config.stage == 3 or config.zero_config.offload_optimizer):
                     optim_cls = deepspeed.ops.adam.DeepSpeedCPUAdam
                 else:
                     optim_cls = torch.optim.AdamW
