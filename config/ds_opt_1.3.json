@@ -1,6 +1,7 @@
 {
     "train_batch_size": 32,
     "train_micro_batch_size_per_gpu": 1,
+    "zero_force_ds_cpu_optimizer": false,
     "fp16": {
         "enabled": true,
         "auto_cast": false,
