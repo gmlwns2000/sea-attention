@@ -970,6 +970,8 @@ class OPTDecoder(OPTPreTrainedModel):
                             inputs = inputs + (None, None)
                         states = module(*inputs, output_attentions, None)
                         loss = module.self_attn.last_loss
+                        if loss is None:
+                            loss = torch.zeros((1,), device=inputs[0].device)
                         assert loss is not None
                         return states + (loss,)
 
