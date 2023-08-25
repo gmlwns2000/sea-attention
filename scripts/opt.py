@@ -30,6 +30,7 @@ parser.add_argument('--dataset', type=str, required=False, default='wikitext2', 
 parser.add_argument('--k', type=int, default=64)
 parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
+parser.add_argument('--max-seq-len', type=int, default=-1)
 
 args = parser.parse_args()
 
@@ -107,6 +108,9 @@ cmd = [
 ]
 if kd_checkpointing:
     cmd.append('--kd-checkpointing')
+if args.max_seq_len > 0:
+    cmd.append('--max-seq-len')
+    cmd.append(str(int(args.max_seq_len)))
 
 print('cmd:', ' '.join(cmd))
 
