@@ -88,7 +88,8 @@ def get_dataloader(subset, tokenizer, batch_size=1, max_length=None, local_rank=
 if __name__ == '__main__':
     import transformers
     t = transformers.AutoTokenizer.from_pretrained('facebook/opt-125m')
-    loader = get_dataloader('train', t, batch_size=1, max_length=768)
+    # loader = get_dataloader('train', t, batch_size=1, max_length=768)
+    loader = get_dataloader('valid', t, batch_size=1, max_length=768)
     
     for batch in tqdm.tqdm(loader):
         # print([(k, v.shape) for k, v in batch.items()])
