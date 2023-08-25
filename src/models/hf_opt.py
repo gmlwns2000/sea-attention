@@ -754,11 +754,12 @@ class OPTDecoder(OPTPreTrainedModel):
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
+        op_dtype = hidden_states.dtype
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
         
-        if hidden_states.dtype != self.project_out.weight.dtype:
-            hidden_states = hidden_states.to(self.project_out.weight.dtype)
+        if hidden_states.dtype != op_dtype:
+            hidden_states = hidden_states.to(op_dtype)
 
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
