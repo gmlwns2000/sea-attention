@@ -2,7 +2,8 @@
 
 import argparse
 import os
-import subprocess
+import subprocess, math
+import multiprocessing as mp
 
 SUPPORTED_MODELS = [
     'opt-125m',
@@ -37,11 +38,24 @@ if 'CONDA_PREFIX' in os.environ and False:
     cplus_include_path = os.environ.get('CPLUS_INCLUDE_PATH', '')
     cplus_include_path = f'{conda_prefix}/include/crt:{conda_prefix}/include/thrust:{conda_prefix}/include/cuda:{cplus_include_path}'
     os.environ['CPLUS_INCLUDE_PATH'] = cplus_include_path.strip(':')
+    
+def get_total_num_gpus():
+    try:
+        return len(subprocess.check_output(['nvidia-smi', '-L']).decode('utf-8').strip().split('\n'))
+    except OSError:
+        return 0
+
+n_cpus = mp.cpu_count()
+n_gpus = get_total_num_gpus()
+n_visible_gpus = len(os.environ.get('CUDA_VISIBLE_DEVICES', ','.join(['0' for i in range(n_gpus)])).strip().split(','))
+n_gpus = min(n_gpus, n_visible_gpus)
+n_threads_per_proc = int(math.ceil(n_cpus / n_gpus))
+os.environ['TORCH_NUM_THREAD'] = str(n_threads_per_proc)
 
 os.environ['PYTHONPATH'] = './'
 master_port = os.environ.get('MASTER_PORT', 32042)
 deepspeed_config = {
-    'opt-125m': { 'wikitext2': {
+    'opt-125m': { 'wikitext2': { # zero0 by default
         'none': './config/ds_opt_125.json',
         'perlin': './config/ds_opt_125.json',
         'performer': './config/ds_opt_125.json',
@@ -50,8 +64,8 @@ deepspeed_config = {
     'opt-350m': { 'wikitext2': {
         'none': './config/ds_opt_350.json',
         'perlin': './config/ds_opt_350.json',
-        'performer': './config/ds_opt_350.json',
-        'reformer': './config/ds_opt_350.json',
+        'performer': './config/ds_opt_350_zero2.json',
+        'reformer': './config/ds_opt_350_zero2.json',
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',

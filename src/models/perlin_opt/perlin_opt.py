@@ -358,7 +358,7 @@ class OPTAttention(nn.Module):
             
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
             with torch.autocast('cuda', torch.float32):
-                performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
+                performer_context_layer = self.perlin_self_attention.attention.performer(q.to(torch.float32), k.to(torch.float32), v.to(torch.float32))
             performer_context_layer = performer_context_layer.to(op_dtype)
             
             if not self.benchmarking:

@@ -2,7 +2,13 @@ from dataclasses import asdict
 import warnings
 default = lambda x, y: x if x is not None else y
 
+import os
 import torch
+if 'TORCH_NUM_THREAD' in os.environ:
+    n_threads = int(os.environ['TORCH_NUM_THREAD'])
+    torch.set_num_threads(n_threads)
+    print('TORCH_NUM_THREAD', n_threads)
+
 from torch import nn
 # torch.autograd.set_detect_anomaly(True)
 
