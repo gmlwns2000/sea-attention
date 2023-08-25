@@ -535,8 +535,8 @@ class Trainer:
             print(f"worker {self.local_rank}: nll_sum={nll_sum}, nll_count={nll_count}")
             torch.distributed.all_reduce(nll_sum)
             torch.distributed.all_reduce(nll_count)
-            if self.local_rank == 0:
-                print(f"master worker: nll_sum={nll_sum}, nll_count={nll_count}({self.valid_loader.dataset.seq_len})")
+        if self.local_rank == 0:
+            print(f"master worker: nll_sum={nll_sum}, nll_count={nll_count}({self.valid_loader.dataset.seq_len})")
         
         ppl = math.exp(nll_sum.item() / nll_count.item())
         if not quite: print(f'[{self.step}/{self.config.num_steps}] PPL:', ppl)
