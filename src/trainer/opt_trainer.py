@@ -465,7 +465,8 @@ class Trainer:
                     #     score = self.evaluate()
                     # else:
                     #     score = 0
-                    deepspeed.comm.barrier()
+                    if self.deepspeed:
+                        deepspeed.comm.barrier()
                     gc_cuda()
                     wandb_dict['eval/score'] = score
                     self.save()
@@ -609,7 +610,8 @@ class Trainer:
                 score = self.evaluate()
             else:
                 score = 0
-            deepspeed.comm.barrier()
+            if self.deepspeed:
+                deepspeed.comm.barrier()
             gc_cuda()
             
             if self.wandb_inited: wandb.log({'eval/score': score, 'train/epoch': self.epoch+1}, step=self.step)
