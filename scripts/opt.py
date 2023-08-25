@@ -32,7 +32,7 @@ parser.add_argument('--nbf', type=int, default=8)
 
 args = parser.parse_args()
 
-if 'CONDA_PREFIX' in os.environ:
+if 'CONDA_PREFIX' in os.environ and False:
     conda_prefix = os.environ['CONDA_PREFIX']
     cplus_include_path = os.environ.get('CPLUS_INCLUDE_PATH', '')
     cplus_include_path = f'{conda_prefix}/include/crt:{conda_prefix}/include/thrust:{conda_prefix}/include/cuda:{cplus_include_path}'
