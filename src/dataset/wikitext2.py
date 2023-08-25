@@ -44,6 +44,7 @@ class Wikitext2Dataset(Dataset):
         
         end_loc = min(begin_loc + max_length, self.seq_len)
         trg_len = end_loc - min(begin_loc - self.stride + max_length, self.seq_len)
+        
         input_ids = self.encodings.input_ids[:, begin_loc:end_loc]
         target_ids = input_ids.clone()
         target_ids[:, :-trg_len] = -100
@@ -61,7 +62,7 @@ class Wikitext2Dataset(Dataset):
 
 def get_dataloader(subset, tokenizer, batch_size=1, max_length=None, local_rank=0, world_size=1):
     assert max_length is not None
-    ds = Wikitext2Dataset(subset, tokenizer, max_length=max_length)
+    ds = Wikitext2Dataset(subset, tokenizer, stride=max_length, max_length=max_length)
     use_shuffle = subset=='train'
     
     if world_size > 1:
@@ -87,7 +88,7 @@ def get_dataloader(subset, tokenizer, batch_size=1, max_length=None, local_rank=
 if __name__ == '__main__':
     import transformers
     t = transformers.AutoTokenizer.from_pretrained('facebook/opt-125m')
-    loader = get_dataloader('train', t, batch_size=1, max_length=2048)
+    loader = get_dataloader('train', t, batch_size=1, max_length=768)
     
     for batch in tqdm.tqdm(loader):
         # print([(k, v.shape) for k, v in batch.items()])
