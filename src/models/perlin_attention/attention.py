@@ -275,24 +275,6 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
         last_state: PerlinAttentionState = None, # JJ last state for what?
     ):
-        # warnings.warn("attention saving start")
-        # os.makedirs('./debug/opt/', exist_ok=True)
-        # path = './debug/opt/attn_params.pth'
-        # torch.save({
-        #     'q' : q,
-        #     'k' : k,
-        #     'v' : v,
-        #     'q_for_atten' : q_for_atten,
-        #     'k_for_atten' : k_for_atten,
-        #     'v_for_atten' : v_for_atten,
-        #     'q_for_score' : q_for_score,
-        #     'k_for_score' : k_for_score,
-        #     'attention_mask' : attention_mask,
-        #     'attention_scores_truth' : attention_scores_truth,
-        #     'context_layer_truth' : context_layer_truth,
-        #     'last_state' : last_state
-        # }, path)
-        # warnings.warn("attention all saved")
         if context_layer_truth is not None and context_layer_truth.device != q.device:
             context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
             attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
@@ -329,7 +311,7 @@ class PerlinAttention(nn.Module):
                 causal_attention_mask = attention_mask
                 attention_mask = attention_mask[:, :, :, :1].transpose(-1, -2) # WHY not use same method with use_cache
             else:
-                N, H, T_DST, T_SRC = attention_mask.shape # JJ it's not H but 1
+                N, H, T_DST, T_SRC = attention_mask.shape # JJ it's not H but fixed to 1
                 _N, _H, _T_DST, _HID_Q = q.shape
                 _N, _H, _T_SRC, _HID_K = k.shape
                 assert k.shape[:-2] == v.shape[:-2]
