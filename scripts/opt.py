@@ -31,6 +31,7 @@ parser.add_argument('--k', type=int, default=64)
 parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
 parser.add_argument('--max-seq-len', type=int, default=-1)
+parser.add_argument('--layerwise', type=bool, action='store_true')
 
 args = parser.parse_args()
 
@@ -111,6 +112,8 @@ if kd_checkpointing:
 if args.max_seq_len > 0:
     cmd.append('--max-seq-len')
     cmd.append(str(int(args.max_seq_len)))
+if args.layerwise:
+    cmd.append('--layerwise')
 
 print('cmd:', ' '.join(cmd))
 

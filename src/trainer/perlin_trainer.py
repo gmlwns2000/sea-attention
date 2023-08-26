@@ -140,18 +140,25 @@ class BaseTrainer:
                 assert not self.perlin_token_merging, "opt does not support this!"
                 module.attention_method = self.attention_method
         
-        if self.perlin_layerwise:
-            for name, param in model.named_parameters():
-                if 'perlin' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
+        # if self.perlin_layerwise:
+        #     for name, param in model.named_parameters():
+        #         if 'perlin' in name:
+        #             param.requires_grad = True
+        #         else:
+        #             param.requires_grad = False
 
+        #     for module in model.modules():
+        #         if isinstance(module, perlin_attention.PerlinSelfAttention):
+        #             if not self.perlin_lora: # activate QKV
+        #                 for p in module.parameters():
+        #                     p.requires_grad = True
+        
+        if self.perlin_layerwise:
             for module in model.modules():
-                if isinstance(module, perlin_attention.PerlinSelfAttention):
-                    if not self.perlin_lora: # activate QKV
-                        for p in module.parameters():
-                            p.requires_grad = True
+                if isinstance(module, perlin_opt.OPTDecoderLayer):
+                    module.train_layerwise = True
+                    print('layerwise patch', type(module))
+        
         return model
 
     def format_exp(self, name: str):

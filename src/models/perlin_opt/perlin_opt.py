@@ -528,6 +528,7 @@ class OPTDecoderLayer(nn.Module):
         
         self._gradient_checkpointing = False
         self.last_loss = None
+        self.train_layerwise = True
 
     def forward(
         self,
@@ -568,6 +569,16 @@ class OPTDecoderLayer(nn.Module):
         if op_dtype != layer_head_mask and layer_head_mask is not None:
             layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
+        # if layerwise, detach!
+        if self.train_layerwise:
+            if hidden_states.requires_grad:
+                hidden_states = hidden_states.detach()
+            if attention_mask is not None and attention_mask.requires_grad:
+                attention_mask = attention_mask.detach()
+            if layer_head_mask is not None and layer_head_mask.requires_grad:
+                layer_head_mask = layer_head_mask.detach()
+            assert past_key_value is None
+        
         residual = hidden_states
 
         # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
