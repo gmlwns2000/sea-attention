@@ -1,7 +1,12 @@
+import gc
+from math import sin
+from sympy import is_increasing
 import torch
 import warnings
 import weakref
 from typing import Any, Iterable, List, Tuple
+
+from ..utils import batch_to, get_all_allocated_tensors, strify
 
 __all__ = [
     "checkpoint", "checkpoint_sequential", "CheckpointFunction",
@@ -71,10 +76,11 @@ def _get_autocast_kwargs():
 class CheckpointFunction(torch.autograd.Function):
 
     @staticmethod
-    def forward(ctx, run_function, preserve_rng_state, *args):
+    def forward(ctx, run_function, preserve_rng_state, swap_in_device: torch.device, swap_out_device: torch.device, *args):
         check_backward_validity(args)
         ctx.run_function = run_function
         ctx.preserve_rng_state = preserve_rng_state
+        ctx.swap_in_device = swap_in_device
         # Accommodates the (remote) possibility that autocast is enabled for cpu AND gpu.
         ctx.gpu_autocast_kwargs, ctx.cpu_autocast_kwargs = _get_autocast_kwargs()
         if preserve_rng_state:
@@ -95,6 +101,9 @@ class CheckpointFunction(torch.autograd.Function):
         tensor_inputs = []
         for i, arg in enumerate(args):
             if torch.is_tensor(arg):
+                assert isinstance(arg, torch.Tensor)
+                if swap_out_device is not None and arg.device != swap_out_device:
+                    arg = batch_to(arg, swap_out_device)
                 tensor_inputs.append(arg)
                 ctx.tensor_indices.append(i)
                 ctx.inputs.append(None)
@@ -104,11 +113,21 @@ class CheckpointFunction(torch.autograd.Function):
         ctx.save_for_backward(*tensor_inputs)
 
         with torch.no_grad():
+            swap_in_args = []
+            for arg in args:
+                if swap_in_device is not None and isinstance(arg, torch.Tensor) and arg.device != swap_in_device:
+                    swap_in_args.append(batch_to(arg, swap_in_device))
+                else:
+                    swap_in_args.append(arg)
+            args = swap_in_args
             outputs = run_function(*args)
+            # assert isinstance(outputs, (tuple, list, torch.Tensor))
+            # if swap_out_device is not None:
+            #     outputs = batch_to(outputs, swap_out_device)
         return outputs
-
+    
     @staticmethod
-    def backward(ctx, *args):
+    def backward_inner(ctx, *args):
         if not torch.autograd._is_checkpoint_valid():
             raise RuntimeError(
                 "Checkpointing is not compatible with .grad() or when an `inputs` parameter"
@@ -117,7 +136,7 @@ class CheckpointFunction(torch.autograd.Function):
         # Copy the list to avoid modifying original list.
         inputs = list(ctx.inputs)
         tensor_indices = ctx.tensor_indices
-        tensors = ctx.saved_tensors
+        tensors = batch_to(ctx.saved_tensors, ctx.swap_in_device)
 
         # Fill in inputs with appropriate saved tensors.
         for i, idx in enumerate(tensor_indices):
@@ -155,13 +174,49 @@ class CheckpointFunction(torch.autograd.Function):
                 "none of output has requires_grad=True,"
                 " this checkpoint() is not necessary")
         torch.autograd.backward(outputs_with_grad, args_with_grad)
-        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else None
-                      for inp in detached_inputs)
+        grads = tuple(inp.grad if isinstance(inp, torch.Tensor) else None for inp in detached_inputs)
+        # grads = tuple(inp if isinstance(inp, torch.Tensor) else None for inp in detached_inputs)
+        
+        swap_out_device = torch.device('cpu')
+        swap_out_grads = []
+        for g in grads:
+            if isinstance(g, torch.Tensor):
+                swap_out_grads.append(batch_to(g, swap_out_device))
+            else:
+                swap_out_grads.append(g)
+        grads = tuple(swap_out_grads)
 
-        return (None, None) + grads
+        return (None, None, None, None) + grads
+    
+    @staticmethod
+    def backward(ctx, *args):
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        print('start', torch.cuda.max_memory_allocated() // 1024 // 1024)
+        start_set = set([id(t) for t, r in get_all_allocated_tensors()])
+        
+        ret = CheckpointFunction.backward_inner(ctx, *args)
+        
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        print('fin', torch.cuda.max_memory_allocated() // 1024 // 1024)
+        
+        tensors = get_all_allocated_tensors()
+        end_set = set([id(t) for t, r in tensors])
+        leak_set = end_set - start_set
+        for t, r in tensors:
+            if id(t) in leak_set:
+                print('leak obj', strify(t), t.element_size()*t.numel())
+                if len(t.shape) > 2 and t.shape[-1] == t.shape[-2]:
+                    t.data = t.data.to('cpu')
+                    print('forcely dump out')
+                # print('refs', [i if isinstance(i, str) else type(i) for i in r] if not isinstance(r, str) else r)
+        
+        return ret
 
-
-def checkpoint(function, *args, use_reentrant: bool = True, **kwargs):
+def checkpoint(function, *args, use_reentrant: bool = True, swap_out_device=None, swap_in_device=None, **kwargs):
     r"""Checkpoint a model or part of the model
 
     Checkpointing works by trading compute for memory. Rather than storing all
@@ -246,11 +301,15 @@ def checkpoint(function, *args, use_reentrant: bool = True, **kwargs):
         raise ValueError("Unexpected keyword arguments: " + ",".join(arg for arg in kwargs))
 
     if use_reentrant:
-        return CheckpointFunction.apply(function, preserve, *args)
+        return CheckpointFunction.apply(function, preserve, swap_in_device, swap_out_device, *args)
     else:
+        # assert swap_in_device is None
+        # assert swap_out_device is None
         return _checkpoint_without_reentrant(
             function,
             preserve,
+            swap_in_device, 
+            swap_out_device,
             *args,
             **kwargs,
         )
@@ -335,7 +394,7 @@ def checkpoint_sequential(functions, segments, input, use_reentrant=True, **kwar
         )
     return run_function(end + 1, len(functions) - 1, functions)(input)
 
-def _checkpoint_without_reentrant(function, preserve_rng_state=True, *args, **kwargs):
+def _checkpoint_without_reentrant(function, preserve_rng_state=True, swap_in_device=None, swap_out_device=None, *args, **kwargs):
     """Checkpointining without re-entrant autograd
     Args:
         function: describes what to run in the forward pass of the model or
@@ -364,6 +423,14 @@ def _checkpoint_without_reentrant(function, preserve_rng_state=True, *args, **kw
             had_cuda_in_fwd = True
             fwd_gpu_devices, fwd_gpu_states = get_device_states(*args)
 
+    # assert swap_out_device is not None
+    if swap_out_device is not None:
+        swap_out_args = batch_to(args, swap_out_device)
+    else:
+        swap_out_args = args
+    #TODO! memory seems leaking!
+    assert len(kwargs) == 0
+    
     # Custom class to be able to take weak references
     class Holder():
         pass
@@ -417,7 +484,12 @@ def _checkpoint_without_reentrant(function, preserve_rng_state=True, *args, **kw
                      torch.cuda.amp.autocast(**gpu_autocast_kwargs), \
                      torch.cpu.amp.autocast(**cpu_autocast_kwargs), \
                      torch.autograd.graph.saved_tensors_hooks(inner_pack, inner_unpack):
-                    _unused = function(*args, **kwargs)
+                    if swap_in_device is not None:
+                        swap_in_args = batch_to(swap_out_args, swap_in_device)
+                        # print('swap', swap_out_device, swap_in_device)
+                    else:
+                        swap_in_args = swap_out_device
+                    _unused = function(*swap_in_args, **kwargs)
 
         if x not in storage:
             raise RuntimeError(
@@ -430,6 +502,7 @@ def _checkpoint_without_reentrant(function, preserve_rng_state=True, *args, **kw
 
     with torch.autograd.graph.saved_tensors_hooks(pack, unpack):
         output = function(*args, **kwargs)
+        del args
         if torch.cuda._initialized and preserve_rng_state and not had_cuda_in_fwd:
             # Cuda was not initialized before running the forward, so we didn't
             # stash the CUDA state.

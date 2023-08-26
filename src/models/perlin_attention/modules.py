@@ -34,14 +34,18 @@ class Residual(nn.Module):
         return x + y
 
 class KeepRes(nn.Module):
-    def __init__(self, *args):
+    def __init__(self, *args, output_width=None):
         super().__init__()
         self.net = nn.Sequential(*args)
+        self.output_width = output_width
     
     def forward(self, x):
         x_shape = x.shape
         x = self.net(x)
-        x = interpolate(x, x_shape[-2:])
+        if self.output_width is None:
+            x = interpolate(x, x_shape[-2:])
+        else:
+            x = interpolate(x, (x_shape[-2], self.output_width))
         return x
 
 class ResBlock(nn.Module):

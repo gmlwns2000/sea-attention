@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """ PyTorch OPT model."""
+import gc
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
 from .. import hf_opt
-from ...utils import get_bench
+from ...utils import batch_to, get_bench, get_all_allocated_tensors
 
 from typing import List, Optional, Tuple, Union
 
@@ -197,7 +198,9 @@ class OPTAttention(nn.Module):
             perlin_config=self.pconfig,
         )
         self.last_loss = None
+        self.checkout_perlin_output = False
         self.last_perlin_output = None
+        self.swap_out_device = None
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -209,6 +212,7 @@ class OPTAttention(nn.Module):
             self.last_v = v
             self.last_attention_mask = attention_mask
         
+        op_dtype = q.dtype
         N_H, T_DST, _HID_Q = q.shape
         N_H, T_SRC, _HID_V = v.shape
         HID = self.head_dim
@@ -322,6 +326,7 @@ class OPTAttention(nn.Module):
                 v, 
                 input_attn_mask = binary_mask
             )
+            reformer_context_layer = reformer_context_layer.to(op_dtype)
             #unpad
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
@@ -353,7 +358,8 @@ class OPTAttention(nn.Module):
             
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
             with torch.autocast('cuda', torch.float32):
-                performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
+                performer_context_layer = self.perlin_self_attention.attention.performer(q.to(torch.float32), k.to(torch.float32), v.to(torch.float32))
+            performer_context_layer = performer_context_layer.to(op_dtype)
             
             if not self.benchmarking:
                 attention_probs = torch.zeros((N, H, T_DST, T_SRC), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
@@ -392,8 +398,13 @@ class OPTAttention(nn.Module):
                 last_state = last_state,
             ) #type: PerlinAttentionOutput
             self.last_loss = output.loss
-            if not self.benchmarking:
-                self.last_perlin_output = output
+            if not self.benchmarking and self.checkout_perlin_output:
+                warnings.warn("you are checking-out LARGE buffers!!")
+                if self.swap_out_device is None:
+                    self.last_perlin_output = output
+                else:
+                    self.last_perlin_output = output.to(self.swap_out_device)
+                    print('OptAtten: swap out')
             
             return output.context_layer, output.partial_attention_probs, output.state
         else:
@@ -414,11 +425,20 @@ class OPTAttention(nn.Module):
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
         is_cross_attention = key_value_states is not None
+        
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.q_proj.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
+        query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=self.q_proj.weight.dtype, device=hidden_states.device)
         past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -472,6 +492,9 @@ class OPTAttention(nn.Module):
         elif len(outputs) == 3:
             attn_output, attn_weights_reshaped, attn_state = outputs
         else: raise Exception()
+
+        if attn_output.dtype != self.out_proj.weight.dtype:
+            attn_output = attn_output.to(self.out_proj.weight.dtype)
         
         if attn_state is not None:
             past_key_value = (*past_key_value, attn_state) # WHY
@@ -503,7 +526,9 @@ class OPTDecoderLayer(nn.Module):
         self.fc2 = nn.Linear(config.ffn_dim, self.embed_dim, bias=config.enable_bias)
         self.final_layer_norm = nn.LayerNorm(self.embed_dim, elementwise_affine=config.layer_norm_elementwise_affine)
         
-        self.gradient_checkpointing = False
+        self._gradient_checkpointing = False
+        self.last_loss = None
+        self.train_layerwise = True
 
     def forward(
         self,
@@ -529,7 +554,31 @@ class OPTDecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+        
+        # to handle cpu checkpointing
+        device = attention_mask.device
+        if device != hidden_states.device:
+            hidden_states = batch_to(hidden_states, device)
+            
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.fc1.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
+        # if layerwise, detach!
+        if self.train_layerwise:
+            if hidden_states.requires_grad:
+                hidden_states = hidden_states.detach()
+            if attention_mask is not None and attention_mask.requires_grad:
+                attention_mask = attention_mask.detach()
+            if layer_head_mask is not None and layer_head_mask.requires_grad:
+                layer_head_mask = layer_head_mask.detach()
+            assert past_key_value is None
+        
         residual = hidden_states
 
         # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
@@ -538,7 +587,7 @@ class OPTDecoderLayer(nn.Module):
                 hidden_states = self.self_attn_layer_norm(hidden_states)
                 return hidden_states
             
-            if self.gradient_checkpointing and self.training:
+            if self._gradient_checkpointing and self.training:
                 hidden_states = checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
@@ -554,22 +603,35 @@ class OPTDecoderLayer(nn.Module):
         )
         
         def after_self_atten(residual, hidden_states):
+            # deepspeed fp32 support, convert fp32
+            op_dtype = self.fc1.weight.dtype
+            if op_dtype != hidden_states:
+                hidden_states = hidden_states.to(op_dtype)
+            
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
+            # print('aa', hidden_states.dtype)
             hidden_states = residual + hidden_states
+            # print('faa', hidden_states.dtype)
 
             # 350m applies layer norm AFTER attention
             if not self.do_layer_norm_before:
                 hidden_states = self.self_attn_layer_norm(hidden_states)
+            # print('saa', hidden_states.dtype)
 
             # Fully Connected
             hidden_states_shape = hidden_states.shape
             hidden_states = hidden_states.reshape(-1, hidden_states.size(-1))
             residual = hidden_states
+            # print('00aa', hidden_states.dtype)
 
             # 125m, 1.7B, ..., 175B applies layer norm BEFORE attention
             if self.do_layer_norm_before:
                 hidden_states = self.final_layer_norm(hidden_states)
-
+            
+            if op_dtype != hidden_states:
+                hidden_states = hidden_states.to(op_dtype)
+            # print('aaff3', hidden_states.dtype)
+            
             hidden_states = self.fc1(hidden_states)
             hidden_states = self.activation_fn(hidden_states)
 
@@ -584,7 +646,7 @@ class OPTDecoderLayer(nn.Module):
                 
             return hidden_states
         
-        if self.gradient_checkpointing and self.training:
+        if self._gradient_checkpointing and self.training:
             hidden_states = checkpoint.checkpoint(after_self_atten, residual, hidden_states, preserve_rng_state=True)
         else:
             hidden_states = after_self_atten(residual, hidden_states)
@@ -749,6 +811,10 @@ class OPTDecoder(OPTPreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
+        
+        self.swap_in_device = None
+        self.swap_out_device = None
+        self.use_deepspeed = False
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -908,10 +974,21 @@ class OPTDecoder(OPTPreTrainedModel):
                         f" {head_mask.size()[0]}."
                     )
 
+        swap_in_device = self.swap_in_device
+        swap_out_device = self.swap_out_device
+        
         for idx, decoder_layer in enumerate(self.layers):
             # add LayerDrop (see https://arxiv.org/abs/1909.11556 for description)
+            decoder_layer = decoder_layer # type: OPTDecoderLayer
             if output_hidden_states:
-                all_hidden_states += (hidden_states,)
+                # NOTE: this costs some memory... we need to avoid store this in GPU, but offloading this value cause error on ZeRO3
+                if self.use_deepspeed:
+                    all_hidden_states += (hidden_states,)
+                else:
+                    if swap_out_device is not None:
+                        all_hidden_states += (batch_to(hidden_states, swap_out_device),)
+                    else:
+                        all_hidden_states += (hidden_states,)
 
             if self.training:
                 dropout_probability = torch.rand([])
@@ -920,22 +997,79 @@ class OPTDecoder(OPTPreTrainedModel):
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
 
-            if self.gradient_checkpointing and self.training and False:
-
-                def create_custom_forward(module):
+            if self.gradient_checkpointing and self.training:
+                # start_set = set([id(t) for t, r in get_all_allocated_tensors()])
+                start_mem = torch.cuda.max_memory_allocated()
+                # print('processing layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024)
+                
+                def create_custom_forward(module: OPTDecoderLayer):
                     def custom_forward(*inputs):
                         # None for past_key_value
-                        return module(*inputs, output_attentions, None)
+                        if len(inputs) == 2:
+                            inputs = inputs + (None, None)
+                        states = module(*inputs, output_attentions, None)
+                        loss = module.self_attn.last_loss
+                        if loss is None:
+                            loss = torch.zeros((1,), device=inputs[0].device)
+                        assert loss is not None
+                        return states + (loss,)
 
                     return custom_forward
-
-                layer_outputs = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(decoder_layer),
-                    hidden_states,
-                    causal_attention_mask,
-                    head_mask[idx] if head_mask is not None else None,
-                    None,
-                )
+                
+                decoder_layer.self_attn.swap_out_device = swap_out_device
+                
+                USE_DS = self.use_deepspeed
+                if USE_DS:
+                    import deepspeed
+                    # deepspeed.checkpointing.PARTITION_ACTIVATIONS = True
+                    # deepspeed.checkpointing.CPU_CHECKPOINT = True
+                    # deepspeed.checkpointing.CONTIGUOUS_CHECKPOINTING = True
+                    
+                    assert (head_mask[idx] if head_mask is not None else None) == None
+                    
+                    # NOTE: None is not accepted, for cpu checkpointing
+                    deepspeed.checkpointing.set_num_layers(len(self.layers))
+                    layer_outputs = deepspeed.checkpointing.checkpoint(
+                        create_custom_forward(decoder_layer),
+                        hidden_states,
+                        causal_attention_mask,
+                        # use_reentrant=False,
+                    )
+                    
+                    # layer_outputs = batch_to(layer_outputs, swap_out_device)
+                else:
+                    layer_outputs = checkpoint.checkpoint(
+                        create_custom_forward(decoder_layer),
+                        hidden_states,
+                        causal_attention_mask,
+                        head_mask[idx] if head_mask is not None else None,
+                        None,
+                        use_reentrant=False,
+                        swap_out_device=swap_out_device,
+                        swap_in_device=swap_in_device,
+                    )
+                
+                    layer_outputs = batch_to(layer_outputs, swap_out_device)
+                
+                assert isinstance(layer_outputs, (tuple, list))
+                layer_outputs, layer_loss = layer_outputs[:-1], layer_outputs[-1]
+                decoder_layer.self_attn.last_loss = None
+                decoder_layer.last_loss = layer_loss
+                
+                # print('processed layer', idx, torch.cuda.max_memory_allocated() // 1024 // 1024, (torch.cuda.max_memory_allocated() - start_mem) // 1024 // 1024)
+                
+                # torch.cuda.synchronize()
+                # gc.collect()
+                # torch.cuda.empty_cache()
+                # torch.cuda.reset_peak_memory_stats()
+                
+                # tensors = get_all_allocated_tensors()
+                # end_set = set([id(t) for t, r in tensors])
+                # leak_set = end_set - start_set
+                # for t, r in tensors:
+                #     if id(t) in leak_set:
+                #         print('leak obj', strify(t), t.element_size()*t.numel())
+                #         print('refs', [type(i) for i in r])
             else:
                 layer_outputs = decoder_layer(
                     hidden_states,
@@ -949,14 +1083,23 @@ class OPTDecoder(OPTPreTrainedModel):
             hidden_states = layer_outputs[0]
 
             if use_cache:
+                assert not self.gradient_checkpointing
                 next_decoder_cache += (layer_outputs[2 if output_attentions else 1],)
 
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
+        if hidden_states.device != swap_in_device:
+            hidden_states = batch_to(hidden_states, swap_in_device)
+        
+        op_dtype = hidden_states.dtype
+        
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
 
+        if hidden_states.dtype != op_dtype:
+            hidden_states = hidden_states.to(op_dtype)
+        
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
 
@@ -1082,9 +1225,23 @@ class OPTForCausalLM(OPTPreTrainedModel):
     def calc_loss_special(self):
         loss = 0
         weights = 0
+        # print('hmm?')
         for m in self.modules():
-            if isinstance(m, OPTAttention):
-                if m.last_loss is not None:
+            if isinstance(m, OPTDecoderLayer) and m.last_loss is not None:
+                # print('good')
+                loss += m.last_loss
+                weights += 1
+                m.last_loss = None
+        for m in self.modules():
+            if isinstance(m, OPTAttention) and m.last_loss is not None:
+                # print('hello')
+                if weights > 0:
+                    warnings.warn(
+                        "OPTAttention.last_loss is ignored, because gradient checkpointing activated! "
+                        "If you see this message when not grad. chkpt is not activated, please report."
+                    )
+                else:
+                    # print('no')
                     loss += m.last_loss
                     weights += 1
                     m.last_loss = None
@@ -1215,7 +1372,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
             return_dict=return_dict,
         )
 
-        logits = self.lm_head(outputs[0]).contiguous()
+        logits = self.lm_head(outputs[0].to(self.lm_head.weight.dtype)).contiguous()
 
         loss = None
         if labels is not None:

@@ -2,7 +2,7 @@ import copy
 import gc
 import os
 import threading
-from typing import Dict, TextIO
+from typing import Dict, List, TextIO, Tuple
 import numpy as np
 import torch
 import random
@@ -48,26 +48,41 @@ def register_copy_lock(lock):
 
 def tensor_buffer_to(v, device):
     if isinstance(v, torch.Tensor):
-        if v.device == torch.device(device):
-            return v
+        if not isinstance(device, torch.device) and not isinstance(device, torch.dtype):
+            device = torch.device(device)
+        op_type = 'device' if isinstance(device, torch.device) else 'dtype'
+        
+        if op_type == 'device':
+            if v.device == device:
+                return v
 
-        acquired = False
-        if cuda_copy_lock is not None:
-            cuda_copy_lock.acquire()
-            acquired = True
-        
-        new_v = v.to(device, non_blocking=True)
-        
-        if acquired:
-            cuda_copy_lock.release()
-        
-        return new_v
+            acquired = False
+            if cuda_copy_lock is not None:
+                cuda_copy_lock.acquire()
+                acquired = True
+            
+            new_v = v.to(device, non_blocking=True)
+            
+            if acquired:
+                cuda_copy_lock.release()
+            
+            return new_v
+        elif op_type == 'dtype':
+            if v.dtype == device:
+                return v
+            return v.to(device)
+        else:
+            raise Exception()
     elif isinstance(v, list):
         return list([tensor_buffer_to(i, device) for i in v])
     elif isinstance(v, dict):
         return dict({k:tensor_buffer_to(vv, device) for k,vv in v.items()})
+    elif isinstance(v, (float, int, str)):
+        return v
+    elif v is None:
+        return v
     else:
-        raise Exception()
+        raise Exception(type(v))
 
 def batch_to(batch, device):
     if isinstance(batch, dict):
@@ -82,8 +97,10 @@ def batch_to(batch, device):
         if isinstance(batch, tuple):
             new_batch = tuple(new_batch)
         return new_batch
+    elif isinstance(batch, torch.Tensor):
+        return tensor_buffer_to(batch, device)
     else:
-        raise Exception()
+        raise Exception(type(batch))
 
 def get_device_name(device):
     name = torch.cuda.get_device_name(device=device)
@@ -323,22 +340,38 @@ def query_available_devices() -> list[int]:
     return available_devices
 
 class Metric:
-    def __init__(self):
+    def __init__(self, method='moving_average', window_size=50):
+        self.method = method
+        self.window_size = window_size
+        
         self.sum = {}
         self.count = {}
+        self.buf = {}
         
     def update(self, x, name='', weight=1):
         if isinstance(x, torch.Tensor):
             x = x.item()
-        if not name in self.sum:
-            self.sum[name] = 0
-            self.count[name] = 0
-        self.sum[name] += x * weight
-        self.count[name] += weight
-        return self.sum[name] / self.count[name]
+        
+        if self.method == 'mean':
+            if not name in self.sum:
+                self.sum[name] = 0
+                self.count[name] = 0
+            self.sum[name] += x * weight
+            self.count[name] += weight
+        elif self.method == 'moving_average':
+            buf = self.buf.get(name, [])
+            buf.append(x)
+            if len(buf) > self.window_size:
+                buf.pop(0)
+            self.buf[name] = buf
+        return self.get(name)
 
     def get(self, name=''):
-        return self.sum[name] / self.count[name]
+        if self.method == 'mean':
+            return self.sum[name] / self.count[name]
+        elif self.method == 'moving_average':
+            return sum(self.buf[name]) / len(self.buf[name])
+        raise Exception(self.method)
 
     def to_dict(self):
         r = {}
@@ -502,3 +535,23 @@ BENCHMARK = Benchmark()
 def get_bench() -> Benchmark:
     global BENCHMARK
     return BENCHMARK
+
+def trace_referrers(obj, live_count=2):
+    if live_count <= 0:
+        return str(type(obj))
+    parent = gc.get_referrers(obj)
+    return f"[{[trace_referrers(p, live_count=live_count-1) for p in parent]}]({type(obj)})"
+
+def get_all_allocated_tensors() -> List[Tuple[torch.Tensor, list]]:
+    tensors = []
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, torch.Tensor) and (not isinstance(obj, torch.nn.Parameter)) and (torch.is_tensor(obj) or (hasattr(obj, 'data') and torch.is_tensor(obj.data))):
+                if obj.device != torch.device('cpu'):
+                    obj = obj #type: torch.Tensor
+                    # referrers = gc.get_referrers(obj)
+                    referrers = trace_referrers(obj)
+                    tensors.append((obj, referrers))
+        except OSError:
+            pass
+    return tensors
