@@ -33,7 +33,7 @@ def resize_from_m_to_t(
     
     mask = (attention_mask > -1).float()
     mask_cs = mask.cumsum(-1)
-    token_length = mask_cs[:, :, :, -1].unsqueeze(-1) 
+    token_length = mask_cs[:, :, :, -1].unsqueeze(-1)
     if training:
         mask_cs = torch.clamp(
             mask_cs + (torch.rand_like(mask_cs) * 4 - 2), 

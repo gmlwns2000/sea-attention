@@ -20,6 +20,8 @@ torch.set_float32_matmul_precision('highest')
 TRACKING_BUFFERS = [
     'q',
     'k',
+    'v',
+    'attention_mask',
     'v_for_atten',
     'performer_context_layer',
     'performer_value',
@@ -27,12 +29,27 @@ TRACKING_BUFFERS = [
     'estimated_attention_score_dec_row',
     'estimated_attention_score',
     'estimated_attention_probs',
+    'attention_probs_truth',
+    'estimated_attention_probs_resized',
+    'estimated_attention_score_resized',
+    'masked_estimated_attention_probs',
+    'per_item_top_k',
+    'top_k_elems',
+    'topk_indices',
+    't_dead_mask',
     'partial_attention_mask_before_interp',
     'partial_attention_mask',
+    'q_for_score',
+    'k_for_score',
+    'attention_scores_dense',
     'partial_attention_scores',
+    'attention_matrix',
+    'partial_context_layer_1',
     'estimated_scales',
     'average_scale',
+    'estimated_attention_probs_t',
     'average_context_layer',
+    'partial_context_layer_2',
     'partial_context_layer_sparse',
     'normalized_partial_context_layer',
     'partial_context_layer',
@@ -45,7 +62,7 @@ MAX_SEQ_LEN = 2048
 i = 0 
 N = [1, ][i]
 H = [12, ][i]
-T_DST = [20, ][i]
+T_DST = [2048, ][i]
 HID = [64, ][i]
 
 DTYPE = torch.float32 # check
@@ -126,7 +143,7 @@ def main():
     )
 
     perlin_self_attention.to(DEVICE)
-    
+    perlin_self_attention.attention.training = False
     # q, k, v
     # attention_mask, attention_scores_truth, context_layer_truth, last_state
     hidden_states = torch.randn(N, T_DST, H*HID).to(DEVICE)
@@ -194,8 +211,9 @@ def main():
 
     bench.reset_temp_buffers()
 
-    for name, value in vars(output_t).items():
-        output_truth[name] = value
+    perlin_output_name = ['loss', 'context_layer', 'partial_attention_probs', 'partial_attention_mask', 'estimated_attention_probs_m', 'estimated_attention_probs', 'dense_attention_probs', 'key_for_score', 'state']
+    for i in range(len(output_t)):
+        output_truth[perlin_output_name[i]] = output_t[i]
 
     hidden_states_canary = hidden_states.clone()
     canary_i = T_DST//2
@@ -238,8 +256,8 @@ def main():
     
     bench.reset_temp_buffers()
 
-    for name, value in vars(output_c).items():
-        output_canary[name] = value
+    for i in range(len(output_c)):
+        output_canary[perlin_output_name[i]] = output_c[i]
     
     assert output_truth.keys() == output_canary.keys()
 
@@ -260,7 +278,10 @@ def main():
                     x = x.to(torch.float64)
                     y = y.to(torch.float64)
                     return (x - y).abs().sum().log10()
-                loss = error(truth[...,idx,:], mine[...,idx,:]).item()
+                if truth.dim()<2 or truth.shape[-2]<T_DST:
+                    loss = error(truth, mine).item()
+                else:
+                    loss = error(truth[...,idx,:], mine[...,idx,:]).item()
                 # if name=='partial_attention_mask_before_interp':breakpoint()
                 # if name=='partial_attention_mask':breakpoint()
                 losses.append(loss)
