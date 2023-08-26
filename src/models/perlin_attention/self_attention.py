@@ -86,7 +86,10 @@ class PerlinSelfAttention(nn.Module):
         last_state: object = None,
     ) -> Tuple[torch.Tensor]:
         if self.pconfig.layerwise and self.training:
-            hidden_states = hidden_states.detach()
+            if hidden_states is not None:
+                hidden_states = hidden_states.detach()
+            else:
+                assert query_layer is not None
         
         t_key_layer = default_lazy(key_layer, lambda: lora_forward_linear(key, hidden_states))
         key_layer = self.transpose_for_scores(lora_forward_lora(
@@ -241,8 +244,8 @@ class PerlinSelfAttention(nn.Module):
         if self.checkout_last_attention_probs:
             self.last_attention_probs = output.partial_attention_probs
         
-        if self.pconfig.layerwise and self.training:
-            output.partial_attention_probs = output.partial_attention_probs.detach()
-            output.context_layer = output.context_layer.detach()
+        # if self.pconfig.layerwise and self.training:
+        #     output.partial_attention_probs = output.partial_attention_probs.detach()
+        #     output.context_layer = output.context_layer.detach()
         
         return output
