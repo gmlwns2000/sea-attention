@@ -285,26 +285,8 @@ class PerlinAttention(nn.Module):
         attention_mask: torch.Tensor,
         attention_scores_truth: torch.Tensor,
         context_layer_truth: torch.Tensor,
-        last_state: PerlinAttentionState = None,
+        last_state: PerlinAttentionState = None, # JJ last state for what?
     ):
-        # warnings.warn("attention saving start")
-        # os.makedirs('./debug/opt/', exist_ok=True)
-        # path = './debug/opt/attn_params.pth'
-        # torch.save({
-        #     'q' : q,
-        #     'k' : k,
-        #     'v' : v,
-        #     'q_for_atten' : q_for_atten,
-        #     'k_for_atten' : k_for_atten,
-        #     'v_for_atten' : v_for_atten,
-        #     'q_for_score' : q_for_score,
-        #     'k_for_score' : k_for_score,
-        #     'attention_mask' : attention_mask,
-        #     'attention_scores_truth' : attention_scores_truth,
-        #     'context_layer_truth' : context_layer_truth,
-        #     'last_state' : last_state
-        # }, path)
-        # warnings.warn("attention all saved")
         if context_layer_truth is not None and context_layer_truth.device != q.device:
             context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
             attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
@@ -341,7 +323,7 @@ class PerlinAttention(nn.Module):
                 causal_attention_mask = attention_mask
                 attention_mask = attention_mask[:, :, :, :1].transpose(-1, -2) # WHY not use same method with use_cache
             else:
-                N, H, T_DST, T_SRC = attention_mask.shape # JJ it's not H but 1
+                N, H, T_DST, T_SRC = attention_mask.shape # JJ it's not H but fixed to 1
                 _N, _H, _T_DST, _HID_Q = q.shape
                 _N, _H, _T_SRC, _HID_K = k.shape
                 assert k.shape[:-2] == v.shape[:-2]
@@ -708,7 +690,7 @@ class PerlinAttention(nn.Module):
                                 per_item_top_k = (H * torch.floor(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
                             else:
                                 # NOTE consider causal token length
-                                per_item_top_k = torch.clamp((H * torch.round(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
+                                per_item_top_k = torch.clamp((H * torch.round(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M) # TODO JJ I think; if N>1, squeeze(1), view(N,T_DST,1)
                         else: raise Exception()
                         
                         # NOTE to prevent 0 top-k when large T and small T_m
@@ -1048,7 +1030,7 @@ class PerlinAttention(nn.Module):
                         avg_v = v * (dst_attention_mask > -1)
                         average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1) # WHY where was the bug
                         average_context_layer = average_context_layer.to(v.dtype)
-                        if average_context_layer.shape[-2] > q.shape[-2]: # WHY
+                        if average_context_layer.shape[-2] > q.shape[-2]:
                             average_context_layer = average_context_layer[...,-q.shape[-2]:,:]
                         # return DUMMY_OUTPUT #2978
                     average_scale = torch.sigmoid(estimated_scales[..., 1:2])

@@ -497,8 +497,7 @@ class OPTAttention(nn.Module):
             attn_output = attn_output.to(self.out_proj.weight.dtype)
         
         if attn_state is not None:
-            past_key_value = (*past_key_value, attn_state) # WHY
-
+            past_key_value = (*past_key_value, attn_state) # WHY attn_state for what?
         attn_output = self.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
