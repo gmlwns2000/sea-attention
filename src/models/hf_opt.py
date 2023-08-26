@@ -168,6 +168,14 @@ class OPTAttention(nn.Module):
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
+        
+        op_dtype = self.q_proj.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         # if key_value_states are provided this layer is used as a cross-attention layer
         # for the decoder
@@ -176,7 +184,7 @@ class OPTAttention(nn.Module):
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
-        query_states = self.q_proj(hidden_states) * self.scaling
+        query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
             # reuse k,v, cross_attentions
@@ -328,6 +336,15 @@ class OPTDecoderLayer(nn.Module):
                 (see `past_key_values`).
             past_key_value (`Tuple(torch.FloatTensor)`, *optional*): cached past key and value projection states
         """
+        
+        # deepspeed fp32 support, convert fp32
+        op_dtype = self.self_attn.q_proj.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        if op_dtype != attention_mask and attention_mask is not None:
+            attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
+        if op_dtype != layer_head_mask and layer_head_mask is not None:
+            layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         residual = hidden_states
 
@@ -359,6 +376,10 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
+        op_dtype = self.self_attn.q_proj.weight.dtype
+        if op_dtype != hidden_states:
+            hidden_states = hidden_states.to(op_dtype)
+        
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
 
@@ -733,8 +754,12 @@ class OPTDecoder(OPTPreTrainedModel):
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
+        op_dtype = hidden_states.dtype
         if self.final_layer_norm is not None:
             hidden_states = self.final_layer_norm(hidden_states)
+        
+        if hidden_states.dtype != op_dtype:
+            hidden_states = hidden_states.to(op_dtype)
 
         if self.project_out is not None:
             hidden_states = self.project_out(hidden_states)
@@ -962,8 +987,8 @@ class OPTForCausalLM(OPTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
-
-        logits = self.lm_head(outputs[0]).contiguous()
+        
+        logits = self.lm_head(outputs[0].to(self.lm_head.weight.dtype)).contiguous()
 
         loss = None
         if labels is not None:

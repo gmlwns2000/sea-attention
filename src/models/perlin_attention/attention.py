@@ -16,7 +16,7 @@ from torch import nn, optim
 #     scaled_dot_product_attention
 # )
 
-from ...utils import get_bench, Metric
+from ...utils import batch_to, get_bench, Metric
 from ..common.kl_div_for_atten import kl_div_attention
 from ..common.lora import (
     LoraLinear, 
@@ -81,8 +81,10 @@ def safe_to(t, d):
         return t.to(d)
     return t
 
-@dataclass
-class PerlinAttentionOutput:
+from typing import NamedTuple
+
+# @dataclass
+class PerlinAttentionOutput(NamedTuple):
     loss: torch.Tensor
     context_layer: torch.Tensor
     partial_attention_probs: torch.Tensor
@@ -165,9 +167,17 @@ class PerlinAttention(nn.Module):
             performer_value_hidden_size = self.attention_head_size*3
         else:
             performer_value_hidden_size = self.attention_head_size*3
+        self.register_buffer('attention_predictor_enc_head_embd', None)
+        self.attention_predictor_enc_head_embd = torch.eye(self.num_attention_heads)
+        self.attention_predictor_enc_per_layer = nn.Sequential(
+            nn.Linear(performer_value_hidden_size * self.num_attention_heads, self.attention_head_size * 2 * self.num_attention_heads),
+            nn.LayerNorm(self.attention_head_size * 2 * self.num_attention_heads),
+            nn.GELU(),
+        )
         self.attention_predictor_enc = nn.Sequential(
             # nn.Dropout(0.1),
             nn.Linear(performer_value_hidden_size, self.attention_head_size*2),
+            # nn.Linear(performer_value_hidden_size + self.num_attention_heads, self.attention_head_size*2),
             nn.LayerNorm(self.attention_head_size*2),
             nn.GELU(),
         )
@@ -207,6 +217,8 @@ class PerlinAttention(nn.Module):
                 ModuleBenchmark('cnn.keepres', KeepRes(
                     # ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
                     # nn.ReLU(),
+                    ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                    nn.ReLU(),
                     ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
                     nn.ReLU(),
                     ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
@@ -427,9 +439,9 @@ class PerlinAttention(nn.Module):
                             last_state,
                             "performer->performer_context_layer",
                             self.performer,
-                            q_for_atten, 
-                            k_for_atten, 
-                            v_for_atten,
+                            batch_to(q_for_atten, PRECISION_PERF), 
+                            batch_to(k_for_atten, PRECISION_PERF), 
+                            batch_to(v_for_atten, PRECISION_PERF),
                         )
                     if q_type != performer_context_layer.dtype:
                         performer_context_layer = performer_context_layer.to(q_type)
@@ -468,7 +480,22 @@ class PerlinAttention(nn.Module):
                 if self.pconfig.attention_predictor_method == 'mlp':
                     with timer("predictor.enc"):
                         raise_if_nan(performer_value)
-                        t_attention_predictor = self.attention_predictor_enc(performer_value)
+                        ENC_PER_LAYER = False
+                        if ENC_PER_LAYER:
+                            _N, _H, _T, _D = performer_value.shape
+                            t_enc_x = performer_value.permute(0, 2, 1, 3).reshape(_N, _T, _H*_D)
+                            t_attention_predictor = self.attention_predictor_enc_per_layer(t_enc_x)
+                            _HD = t_attention_predictor.shape[-1]
+                            t_attention_predictor = t_attention_predictor.view(N, _T, _H, _HD // _H).permute(0, 2, 1, 3)
+                            assert t_attention_predictor.shape[:3] == (_N, _H, _T)
+                        else:
+                            t_enc_x = performer_value
+                            # _N, _H, _T, _D = performer_value.shape
+                            # t_enc_x = torch.cat([
+                            #     performer_value, 
+                            #     self.attention_predictor_enc_head_embd.view(1, _H, 1, _H).expand(_N, _H, _T, _H)
+                            # ], dim=-1)
+                            t_attention_predictor = self.attention_predictor_enc(t_enc_x)
                     with timer("predictor.dec_row"):
                         raise_if_nan(t_attention_predictor)
                         estimated_attention_score = self.attention_predictor_dec_row(t_attention_predictor) # type: torch.Tensor
