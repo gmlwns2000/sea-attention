@@ -31,7 +31,7 @@ parser.add_argument('--k', type=int, default=64)
 parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
 parser.add_argument('--max-seq-len', type=int, default=-1)
-parser.add_argument('--layerwise', type=bool, action='store_true')
+parser.add_argument('--layerwise', action='store_true')
 
 args = parser.parse_args()
 
