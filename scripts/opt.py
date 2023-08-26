@@ -32,6 +32,7 @@ parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
 parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
+parser.add_argument('--enable-lora', action='store_true')
 
 args = parser.parse_args()
 
@@ -114,6 +115,8 @@ if args.max_seq_len > 0:
     cmd.append(str(int(args.max_seq_len)))
 if args.layerwise:
     cmd.append('--layerwise')
+if args.enable_lora:
+    cmd.append('--enable-lora')
 
 print('cmd:', ' '.join(cmd))
 
