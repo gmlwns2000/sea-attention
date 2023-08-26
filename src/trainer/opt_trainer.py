@@ -596,6 +596,7 @@ class Trainer:
                 config=asdict(self.config)
             )
             self.wandb_inited = True
+            print('save path', self.checkpoint_path())
         
         epoch = 0
         while True:

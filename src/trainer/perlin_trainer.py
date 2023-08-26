@@ -158,6 +158,12 @@ class BaseTrainer:
                 if isinstance(module, perlin_opt.OPTDecoderLayer):
                     module.train_layerwise = True
                     print('layerwise patch', type(module))
+            if self.perlin_lora:
+                for name, param in model.named_parameters():
+                    if 'perlin' in name:
+                        param.requires_grad = True
+                    else:
+                        param.requires_grad = False
         
         return model
 
