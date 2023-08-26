@@ -291,7 +291,7 @@ def main():
                 return f"\033[91m{str}\033[0m"
             print(f' - {name.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
     
-    print('\n### 2 : PerlinAttentionOutput')
+    print('\n### 2.1 : PerlinAttentionOutput')
     print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
     
     for k in output_truth.keys():
@@ -317,6 +317,40 @@ def main():
                 return f"\033[92m{str}\033[0m" # bright green
             return f"\033[91m{str}\033[0m" # bright red
         print(f' - {k.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
+    
+    print(f'\n### 2.2 : PerlinAttentionOutput(for all index before {canary_i})')
+    # print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
+    
+    total_bugs = 0
+    for k in output_truth.keys():
+        if k in ['loss', 'state']:
+            continue
+        truth = output_truth[k]
+        mine = output_canary[k]
+        losses = []
+        for idx in range(canary_i):
+            loss = 0
+            def error(x, y):
+                x = x.to(torch.float64)
+                y = y.to(torch.float64)
+                return (x - y).abs().sum().log10()
+            if k=='loss':
+                loss = error(truth, mine).item()
+            else:
+                loss = error(truth[...,idx,:], mine[...,idx,:]).item()
+            # if k=='partial_attention_mask':breakpoint()
+            losses.append(loss)
+        def deco_error(str, e):
+            if e < -3:
+                return f"\033[92m{str}\033[0m" # bright green
+            return f"\033[91m{str}\033[0m" # bright red
+        for i, loss in enumerate(losses):
+            if loss>=-3:
+                print(f'k | i | loss : {k} {i} \033[91m{loss}\033[0m')
+                total_bugs +=1
+    
+    if total_bugs == 0:
+        print('\033[92mNO BUG EXISTS!\033[0m\n')
 
 if __name__ == '__main__':
     main()
