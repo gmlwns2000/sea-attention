@@ -169,7 +169,7 @@ class OPTAttention(nn.Module):
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
         
-        op_dtype = self.q_proj.weight.dtype
+        op_dtype = torch.float16 if self.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
             hidden_states = hidden_states.to(op_dtype)
         if op_dtype != attention_mask and attention_mask is not None:
@@ -338,7 +338,7 @@ class OPTDecoderLayer(nn.Module):
         """
         
         # deepspeed fp32 support, convert fp32
-        op_dtype = self.self_attn.q_proj.weight.dtype
+        op_dtype = torch.float16 if self.self_attn.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
             hidden_states = hidden_states.to(op_dtype)
         if op_dtype != attention_mask and attention_mask is not None:
@@ -376,7 +376,7 @@ class OPTDecoderLayer(nn.Module):
         if self.do_layer_norm_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
-        op_dtype = self.self_attn.q_proj.weight.dtype
+        op_dtype = torch.float16 if self.self_attn.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
             hidden_states = hidden_states.to(op_dtype)
         
@@ -988,7 +988,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
             return_dict=return_dict,
         )
         
-        logits = self.lm_head(outputs[0].to(self.lm_head.weight.dtype)).contiguous()
+        logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 
         loss = None
         if labels is not None:

@@ -92,11 +92,12 @@ class PerlinSelfAttention(nn.Module):
                 assert query_layer is not None
         
         t_key_layer = default_lazy(key_layer, lambda: lora_forward_linear(key, hidden_states))
+        # print('ff', t_key_layer.dtype, key_layer.dtype)
         key_layer = self.transpose_for_scores(lora_forward_lora(
             linear=key, 
             linear_x=t_key_layer, 
             lora=self.key_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_key_layer), 
             enabled=self.pconfig.lora_enabed
         ))
         if self.pconfig.lora_in_approx_enabled:
@@ -122,7 +123,7 @@ class PerlinSelfAttention(nn.Module):
             linear=value, 
             linear_x=t_value_layer, 
             lora=self.value_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_value_layer), 
             enabled=self.pconfig.lora_enabed
         ))
         if self.pconfig.lora_in_approx_enabled:
@@ -137,13 +138,21 @@ class PerlinSelfAttention(nn.Module):
             value_layer_for_atten = value_layer
         
         t_mixed_query_layer = default_lazy(query_layer, lambda: lora_forward_linear(query, hidden_states))
+        if self.pconfig.causal:
+            warnings.warn("causal opt does not use scaling in attention operator. it applied in query")
+            t_mixed_query_layer = t_mixed_query_layer * torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
         query_layer = self.transpose_for_scores(lora_forward_lora(
             linear=query, 
             linear_x=t_mixed_query_layer, 
             lora=self.query_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_mixed_query_layer), 
             enabled=self.pconfig.lora_enabed
         ))
+        if self.pconfig.causal:
+            t_mixed_query_layer = t_mixed_query_layer / torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
+        # assert self.pconfig.lora_enabed
+        # assert self.query_lora.lora_a.requires_grad
+        # assert query_layer.requires_grad
         if self.pconfig.lora_in_approx_enabled:
             query_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
                 linear=query, 
@@ -244,8 +253,8 @@ class PerlinSelfAttention(nn.Module):
         if self.checkout_last_attention_probs:
             self.last_attention_probs = output.partial_attention_probs
         
-        # if self.pconfig.layerwise and self.training:
-        #     output.partial_attention_probs = output.partial_attention_probs.detach()
-        #     output.context_layer = output.context_layer.detach()
+        if self.pconfig.layerwise and self.pconfig.lora_enabed and self.training:
+            output._replace(partial_attention_probs = output.partial_attention_probs.detach())
+            output._replace(context_layer = output.context_layer.detach())
         
         return output

@@ -7,7 +7,7 @@ import tqdm
 from ..utils import raise_if_nan, seed, batch_to, Metric
 raise_if_nan = lambda x: x
 from ..models import hf_opt as opt
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple, Callable
 import torch
 import wandb
 import transformers
@@ -54,6 +54,8 @@ class TrainerConfig:
     # NOTE decrease this only for DEBUG!!, this should be larger than 2048 on OPT
     max_seq_len: int = 32000
     additional_config: dict = field(default_factory=lambda: {})
+    
+    on_model_init: Optional[Callable] = None
     
 # BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 BF_16 = torch.float16
@@ -159,6 +161,8 @@ class KDWrapperModel(nn.Module):
         
         loss = loss_model + loss_kd + loss_special
         
+        # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
+        
         loss_py = loss.item()
         loss_details = {
             'loss': loss_py,
@@ -206,6 +210,7 @@ class Trainer:
             warnings.warn(f"--gradient-accumulation-steps={old_steps} is ignored, cacluated grad. acc. steps using deepspeed config. inferenced={self.config.gradient_accumulation_steps}")
         
         self.init_model()
+        if self.config.on_model_init is not None: self.config.on_model_init()
         if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
         self.init_deepspeed()
