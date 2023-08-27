@@ -1,3 +1,5 @@
+import argparse
+import json
 import os, tqdm, gc
 import warnings
 from typing import Optional
@@ -13,57 +15,13 @@ import torch.nn.functional as F
 
 from torch import nn
 
+bool2int = lambda x: 1 if x else 0
 
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.set_float32_matmul_precision('highest')
 
-TRACKING_BUFFERS = [
-    'q',
-    'k',
-    'v',
-    'attention_mask',
-    'v_for_atten',
-    'performer_context_layer',
-    'performer_value',
-    't_attention_predictor',
-    'estimated_attention_score_dec_row',
-    'estimated_attention_score',
-    'estimated_attention_probs',
-    'attention_probs_truth',
-    'estimated_attention_probs_resized',
-    'estimated_attention_score_resized',
-    'masked_estimated_attention_probs',
-    'per_item_top_k',
-    'top_k_elems',
-    'topk_indices',
-    't_dead_mask',
-    'partial_attention_mask_before_interp',
-    'partial_attention_mask',
-    'q_for_score',
-    'k_for_score',
-    'attention_scores_dense',
-    'partial_attention_scores',
-    'attention_matrix',
-    'partial_context_layer_1',
-    'estimated_scales',
-    'average_scale',
-    'estimated_attention_probs_t',
-    'average_context_layer',
-    'partial_context_layer_2',
-    'partial_context_layer_sparse',
-    'normalized_partial_context_layer',
-    'partial_context_layer',
-]
-
-
 INDEX_LAYER = 0
 MAX_SEQ_LEN = 2048
-
-i = 0 
-N = [1, ][i]
-H = [12, ][i]
-T_DST = [2048, ][i]
-HID = [64, ][i]
 
 DTYPE = torch.float32 # check
 DEVICE = 0
@@ -126,9 +84,22 @@ from ...models.perlin_attention.self_attention import PerlinSelfAttention, get_d
 from transformers.models.bert.configuration_bert import BertConfig
 
 
-def main():
+def main(canary, n, h, t_dst, hid, canary_i):
+
+    print(f'\033[93m===============\033[0m')
+    print(f'\033[93mcanary {canary}\033[0m')
+    print(f'\033[93mN {n}\033[0m')
+    print(f'\033[93mH {h}\033[0m')
+    print(f'\033[93mT_DST {t_dst}\033[0m')
+    print(f'\033[93mHID {hid}\033[0m')
+    if canary:
+        print(f'\033[93mCANARY_I {canary_i}\033[0m')
+    print(f'\033[93m===============\033[0m')
+
+    VIEW_TABLE_1 = False
+    VIEW_TABLE_2 = False
+
     seed()
-    use_cache = True
     bench = get_bench()
     bench.disabled = False
     bench.activate_temp_buffers = True
@@ -138,55 +109,54 @@ def main():
     pconfig.use_cache = False
 
     perlin_self_attention = PerlinSelfAttention(
-        BertConfig(hidden_size=H*HID, num_attention_heads=H), # WHY
+        BertConfig(hidden_size=h*hid, num_attention_heads=h), # WHY
         perlin_config=pconfig,
     )
 
     perlin_self_attention.to(DEVICE)
-    perlin_self_attention.attention.training = False
+    # perlin_self_attention.attention.training = False
     # q, k, v
     # attention_mask, attention_scores_truth, context_layer_truth, last_state
-    hidden_states = torch.randn(N, T_DST, H*HID).to(DEVICE)
-    scaling = HID**-0.5
+    hidden_states = torch.randn(n, t_dst, h*hid).to(DEVICE)
+    scaling = hid**-0.5
 
-    q_proj = nn.Linear(H*HID, H*HID, bias=True).to(DEVICE)
-    k_proj = nn.Linear(H*HID, H*HID, bias=True).to(DEVICE)
-    v_proj = nn.Linear(H*HID, H*HID, bias=True).to(DEVICE)
+    q_proj = nn.Linear(h*hid, h*hid, bias=True).to(DEVICE)
+    k_proj = nn.Linear(h*hid, h*hid, bias=True).to(DEVICE)
+    v_proj = nn.Linear(h*hid, h*hid, bias=True).to(DEVICE)
     
     # N, 1, T, T
     causal_attention_mask = _prepare_decoder_attention_mask(
-        attention_mask=torch.ones(N, T_DST), 
-        input_shape=(N, T_DST),
+        attention_mask=torch.ones(n, t_dst), 
+        input_shape=(n, t_dst),
         device=DEVICE,
         past_key_values_length = 0
     )
     causal_attention_mask_c = causal_attention_mask.clone()
 
-    attention_scores_truth = torch.randn(N, H, T_DST, T_DST).to(DEVICE)
+    attention_scores_truth = torch.randn(n, h, t_dst, t_dst).to(DEVICE)
     attention_scores_truth_c = attention_scores_truth.clone()
-    context_layer_truth = torch.randn(N*H, T_DST, HID)\
-                .view(N, H, T_DST, HID)\
+    context_layer_truth = torch.randn(n*h, t_dst, hid)\
+                .view(n, h, t_dst, hid)\
                 .transpose(1, 2)\
-                .reshape(N, T_DST, H*HID)\
+                .reshape(n, t_dst, h*hid)\
                 .to(DEVICE)
     context_layer_truth_c = context_layer_truth.clone()
 
-    q = (q_proj(hidden_states) * scaling).view(N, T_DST, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
-    k = k_proj(hidden_states).view(N, -1, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
-    v = v_proj(hidden_states).view(N, -1, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
+    q = (q_proj(hidden_states) * scaling).view(n, t_dst, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
+    k = k_proj(hidden_states).view(n, -1, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
+    v = v_proj(hidden_states).view(n, -1, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
     '''
-    PerlinAttentionOutput]
-    loss: torch.Tensor
-    context_layer: torch.Tensor
-    partial_attention_probs: torch.Tensor
-    partial_attention_mask: torch.Tensor
-    estimated_attention_probs_m: torch.Tensor
-    estimated_attention_probs: torch.Tensor
-    dense_attention_probs: torch.Tensor
-    key_for_score: torch.Tensor
-    state: PerlinAttentionState
+        PerlinAttentionOutput]
+        loss: torch.Tensor
+        context_layer: torch.Tensor
+        partial_attention_probs: torch.Tensor
+        partial_attention_mask: torch.Tensor
+        estimated_attention_probs_m: torch.Tensor
+        estimated_attention_probs: torch.Tensor
+        dense_attention_probs: torch.Tensor
+        key_for_score: torch.Tensor
+        state: PerlinAttentionState
     '''
-
     output_truth = {}
 
     output_t = perlin_self_attention(
@@ -203,29 +173,31 @@ def main():
         last_state = None, # check - for use_cache
     ) #type: PerlinAttentionOutput
 
+    TRACKING_BUFFERS = [*(bench.buffers.keys())]
+
     buffers_truth = {}
     for name in TRACKING_BUFFERS:
         # sample only first layer
         if name in bench.buffers:
             buffers_truth[name] = bench.get_temp_buffer(name, index=INDEX_LAYER)
-
+    
     bench.reset_temp_buffers()
 
     perlin_output_name = ['loss', 'context_layer', 'partial_attention_probs', 'partial_attention_mask', 'estimated_attention_probs_m', 'estimated_attention_probs', 'dense_attention_probs', 'key_for_score', 'state']
     for i in range(len(output_t)):
         output_truth[perlin_output_name[i]] = output_t[i]
 
-    hidden_states_canary = hidden_states.clone()
-    canary_i = T_DST//2
+    seed() # b/c randlike in resize_m_to_t
 
-    canary = True
+    hidden_states_canary = hidden_states.clone()
+
     if canary:
         hidden_states_canary[:,canary_i,:] = 300000
 
     # TODO check whether it's same when hidden_states is in
-    q_c = (q_proj(hidden_states_canary) * scaling).view(N, T_DST, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
-    k_c = k_proj(hidden_states_canary).view(N, -1, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
-    v_c = v_proj(hidden_states_canary).view(N, -1, H, HID).transpose(1,2).contiguous().view(N*H, -1, HID).view(N, H, -1, HID)
+    q_c = (q_proj(hidden_states_canary) * scaling).view(n, t_dst, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
+    k_c = k_proj(hidden_states_canary).view(n, -1, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
+    v_c = v_proj(hidden_states_canary).view(n, -1, h, hid).transpose(1,2).contiguous().view(n*h, -1, hid).view(n, h, -1, hid)
     
     if not canary:
         assert (~torch.eq(q, q_c)).sum().item()==0
@@ -263,22 +235,21 @@ def main():
 
     CHECK_INDEX = [0, 1, 2, canary_i-1, canary_i, canary_i+1, canary_i+2, -3, -2, -1]
     JUST_WIDTH = 12
-    print(f'\nT_DST : {T_DST}')
-    print(f'canary_i : {canary_i}')
 
-    print('\n### 1 : TRACKING_BUFFERS')
-    print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
+    print('\n### 1.1 : TRACKING_BUFFERS')
+    total_bugs = 0
+    type1_bug = {}
     for name in TRACKING_BUFFERS:
         if name in buffers_truth and name in buffers_canary:
             truth = buffers_truth[name]
             mine = buffers_canary[name]
             losses = []
-            for idx in CHECK_INDEX:
+            for idx in range(canary_i):
                 def error(x, y):
                     x = x.to(torch.float64)
                     y = y.to(torch.float64)
                     return (x - y).abs().sum().log10()
-                if truth.dim()<2 or truth.shape[-2]<T_DST:
+                if truth.dim()<2 or truth.shape[-2]<t_dst:
                     loss = error(truth, mine).item()
                 else:
                     loss = error(truth[...,idx,:], mine[...,idx,:]).item()
@@ -289,39 +260,61 @@ def main():
                 if e < -3:
                     return f"\033[92m{str}\033[0m"
                 return f"\033[91m{str}\033[0m"
-            print(f' - {name.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
+            for i, loss in enumerate(losses):
+                if loss>=-3:
+                    if name in type1_bug:
+                        type1_bug[name][0] += 1
+                        if type1_bug[name][2]<loss:
+                            type1_bug[name][2] = loss
+                    else:
+                        type1_bug['N']=n
+                        type1_bug['H']=h
+                        type1_bug['T_DST']=t_dst
+                        type1_bug['HID']=hid
+                        type1_bug[name] = [1, len(losses), loss]
+                    # print(f'name | i | loss : {name} {i} \033[91m{loss}\033[0m')
+                    total_bugs +=1
+    if total_bugs == 0:
+        pass
+        print('\033[92mNO BUG EXISTS!\033[0m\n')
+    else:
+        VIEW_TABLE_1 = True
+        print(f"\033[91m{type1_bug}\033[0m")
+        os.makedirs(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}', exist_ok=True)
+        with open(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}/type1.txt','a') as file:
+            file.write(json.dumps(type1_bug)+'\n')
+
+    if VIEW_TABLE_1:
+        print('\n### 1.2 : TRACKING_BUFFERS')
+        print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
+        for name in TRACKING_BUFFERS:
+            if name in buffers_truth and name in buffers_canary:
+                truth = buffers_truth[name]
+                mine = buffers_canary[name]
+                losses = []
+                for idx in CHECK_INDEX:
+                    def error(x, y):
+                        x = x.to(torch.float64)
+                        y = y.to(torch.float64)
+                        return (x - y).abs().sum().log10()
+                    if truth.dim()<2 or truth.shape[-2]<t_dst:
+                        loss = error(truth, mine).item()
+                    else:
+                        loss = error(truth[...,idx,:], mine[...,idx,:]).item()
+                    # if name=='partial_attention_mask_before_interp':breakpoint()
+                    # if name=='partial_attention_mask':breakpoint()
+                    losses.append(loss)
+                def deco_error(str, e):
+                    if e < -3:
+                        return f"\033[92m{str}\033[0m"
+                    return f"\033[91m{str}\033[0m"
+                print(f' - {name.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
     
-    print('\n### 2.1 : PerlinAttentionOutput')
-    print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
-    
-    for k in output_truth.keys():
-        if k=='state':
-            continue
-        truth = output_truth[k]
-        mine = output_canary[k]
-        losses = []
-        for idx in CHECK_INDEX:
-            loss = 0
-            def error(x, y):
-                x = x.to(torch.float64)
-                y = y.to(torch.float64)
-                return (x - y).abs().sum().log10()
-            if k=='loss':
-                loss = error(truth, mine).item()
-            else:
-                loss = error(truth[...,idx,:], mine[...,idx,:]).item()
-            # if k=='partial_attention_mask':breakpoint()
-            losses.append(loss)
-        def deco_error(str, e):
-            if e < -3:
-                return f"\033[92m{str}\033[0m" # bright green
-            return f"\033[91m{str}\033[0m" # bright red
-        print(f' - {k.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
-    
-    print(f'\n### 2.2 : PerlinAttentionOutput(for all index before {canary_i})')
+    print(f'\n### 2.1 : PerlinAttentionOutput(for all index before {canary_i})')
     # print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
     
     total_bugs = 0
+    type2_bug = {}
     for k in output_truth.keys():
         if k in ['loss', 'state']:
             continue
@@ -346,11 +339,83 @@ def main():
             return f"\033[91m{str}\033[0m" # bright red
         for i, loss in enumerate(losses):
             if loss>=-3:
-                print(f'k | i | loss : {k} {i} \033[91m{loss}\033[0m')
+                if name in type2_bug:
+                    type2_bug[name][0] += 1
+                    if type2_bug[name][2]<loss:
+                        type2_bug[name][2] = loss
+                else:
+                    type2_bug['N']=n
+                    type2_bug['H']=h
+                    type2_bug['T_DST']=t_dst
+                    type2_bug['HID']=hid
+                    type2_bug[name] = [1, len(losses), loss]
+                # print(f'k | i | loss : {k} {i} \033[91m{loss}\033[0m')
                 total_bugs +=1
-    
     if total_bugs == 0:
+        pass
         print('\033[92mNO BUG EXISTS!\033[0m\n')
+    else:
+        VIEW_TABLE_2 = True
+        print(f"\033[91m{type2_bug}\033[0m")
+        os.makedirs(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}', exist_ok=True)
+        with open(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}/type2.txt','a') as file:
+            file.write(json.dumps(type2_bug)+'\n')
+    
+    if VIEW_TABLE_2:    
+        print('\n### 2.2 : PerlinAttentionOutput')
+        print(f'   {"ERROR=(x-y).abs().sum().log10()".ljust(JUST_WIDTH*3)} | INDEX: {",".join([str(i).rjust(JUST_WIDTH) for i in CHECK_INDEX])}')
+        
+        for k in output_truth.keys():
+            if k=='state':
+                continue
+            truth = output_truth[k]
+            mine = output_canary[k]
+            losses = []
+            for idx in CHECK_INDEX:
+                loss = 0
+                def error(x, y):
+                    x = x.to(torch.float64)
+                    y = y.to(torch.float64)
+                    return (x - y).abs().sum().log10()
+                if k=='loss':
+                    loss = error(truth, mine).item()
+                else:
+                    loss = error(truth[...,idx,:], mine[...,idx,:]).item()
+                # if k=='partial_attention_mask':breakpoint()
+                losses.append(loss)
+            def deco_error(str, e):
+                if e < -3:
+                    return f"\033[92m{str}\033[0m" # bright green
+                return f"\033[91m{str}\033[0m" # bright red
+            print(f' - {k.ljust(JUST_WIDTH*3)} | ERROR: {",".join([deco_error(f"{loss:.4f}".rjust(JUST_WIDTH), loss) for loss in losses])}')
+        
+    return type1_bug, type2_bug
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--canary', action='store_true', default=False)
+
+    args = parser.parse_args()
+    canary = args.canary
+    
+    os.makedirs(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}', exist_ok=True)
+    with open(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}/type1.txt','w') as file:
+        pass
+    with open(f'./saves/tests/test_perlin_opt_causal/canary{bool2int(canary)}/type2.txt','w') as file:
+        pass
+
+    N = [1,] #  2, 8, 16, 
+    H = [1, 7, 12, 16, 19, 25, 32, 64] # 1, 2, 4, 7, 12, 
+    T_DST = [1024] # 2048
+    HID = [32, 64, ]
+
+    from itertools import product
+    list = list(product(N, H, T_DST, HID))
+
+    for l in list:
+        main(canary=canary,
+                n=l[0],
+                h=l[1],
+                t_dst=l[2],
+                hid=l[3],
+                canary_i=l[2]//2)
