@@ -164,6 +164,7 @@ class BaseTrainer:
                         param.requires_grad = True
                     else:
                         param.requires_grad = False
+                    # print(name, param.requires_grad)
         
         return model
 
@@ -339,6 +340,10 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'wikitext2': 10000,
             }[subset]
         
+        def on_model_init():
+            print('on model init')
+            self.apply_model_options(self.model)
+        
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
                 experiment_name=self.format_exp(f'{model}_{subset}'),
@@ -355,6 +360,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
                 kd_checkpointing=kd_checkpointing,
+                on_model_init=on_model_init,
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,

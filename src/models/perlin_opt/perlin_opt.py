@@ -427,7 +427,7 @@ class OPTAttention(nn.Module):
         is_cross_attention = key_value_states is not None
         
         # deepspeed fp32 support, convert fp32
-        op_dtype = self.q_proj.weight.dtype
+        op_dtype = torch.float16 if self.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
             hidden_states = hidden_states.to(op_dtype)
         if op_dtype != attention_mask and attention_mask is not None:
@@ -438,7 +438,7 @@ class OPTAttention(nn.Module):
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
-        query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=self.q_proj.weight.dtype, device=hidden_states.device)
+        query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
         past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -477,6 +477,8 @@ class OPTAttention(nn.Module):
         value_states = value_states.view(*proj_shape)
         assert attention_mask is not None
         assert layer_head_mask is None
+        
+        # print(query_states.dtype, key_states.dtype)
 
         outputs = self.attention(
             q=query_states,
@@ -493,8 +495,8 @@ class OPTAttention(nn.Module):
             attn_output, attn_weights_reshaped, attn_state = outputs
         else: raise Exception()
 
-        if attn_output.dtype != self.out_proj.weight.dtype:
-            attn_output = attn_output.to(self.out_proj.weight.dtype)
+        if attn_output.dtype != op_dtype:
+            attn_output = attn_output.to(op_dtype)
         
         if attn_state is not None:
             past_key_value = (*past_key_value, attn_state)
@@ -561,7 +563,7 @@ class OPTDecoderLayer(nn.Module):
             hidden_states = batch_to(hidden_states, device)
             
         # deepspeed fp32 support, convert fp32
-        op_dtype = self.fc1.weight.dtype
+        op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
             hidden_states = hidden_states.to(op_dtype)
         if op_dtype != attention_mask and attention_mask is not None:
@@ -604,7 +606,7 @@ class OPTDecoderLayer(nn.Module):
         
         def after_self_atten(residual, hidden_states):
             # deepspeed fp32 support, convert fp32
-            op_dtype = self.fc1.weight.dtype
+            op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
             if op_dtype != hidden_states:
                 hidden_states = hidden_states.to(op_dtype)
             
@@ -1018,8 +1020,7 @@ class OPTDecoder(OPTPreTrainedModel):
                 
                 decoder_layer.self_attn.swap_out_device = swap_out_device
                 
-                USE_DS = self.use_deepspeed
-                if USE_DS:
+                if self.use_deepspeed and (not decoder_layer.self_attn.perlin_self_attention.pconfig.layerwise):
                     import deepspeed
                     # deepspeed.checkpointing.PARTITION_ACTIVATIONS = True
                     # deepspeed.checkpointing.CPU_CHECKPOINT = True
@@ -1049,6 +1050,7 @@ class OPTDecoder(OPTPreTrainedModel):
                         swap_in_device=swap_in_device,
                     )
                 
+                if not self.use_deepspeed:
                     layer_outputs = batch_to(layer_outputs, swap_out_device)
                 
                 assert isinstance(layer_outputs, (tuple, list))
@@ -1372,7 +1374,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
             return_dict=return_dict,
         )
 
-        logits = self.lm_head(outputs[0].to(self.lm_head.weight.dtype)).contiguous()
+        logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 
         loss = None
         if labels is not None:
