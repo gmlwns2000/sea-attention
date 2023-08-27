@@ -33,6 +33,7 @@ parser.add_argument('--nbf', type=int, default=8)
 parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
+parser.add_argument('--load-checkpoint', type=str, default=None)
 
 args = parser.parse_args()
 
@@ -72,7 +73,7 @@ deepspeed_config = {
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',
-        'perlin': './config/ds_opt_1.3.json',
+        'perlin': './config/ds_opt_1.3_zero3.json',
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
     }},
@@ -117,6 +118,9 @@ if args.layerwise:
     cmd.append('--layerwise')
 if args.enable_lora:
     cmd.append('--enable-lora')
+if args.load_checkpoint is not None:
+    cmd.append('--load-checkpoint')
+    cmd.append(args.load_checkpoint)
 
 print('cmd:', ' '.join(cmd))
 

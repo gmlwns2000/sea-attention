@@ -569,19 +569,24 @@ class Trainer:
     
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
-        state = torch.load(path, map_location='cpu')
-        result = self.model.load_state_dict(state['model'], strict=False)
-        print(result)
-        if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
-        try:
-            self.optimizer.load_state_dict(state['optimizer'])
-        except Exception as ex:
-            traceback.print_exc()
-            print('error during load optimizer', ex)
-        step = state['step']
-        epoch = state['epoch']
-        epochs = state['config']['epochs']
-        del state
+        if not self.deepspeed:
+            state = torch.load(path, map_location='cpu')
+            result = self.model.load_state_dict(state['model'], strict=False)
+            print(result)
+            if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
+            try:
+                self.optimizer.load_state_dict(state['optimizer'])
+            except Exception as ex:
+                traceback.print_exc()
+                print('error during load optimizer', ex)
+            step = state['step']
+            epoch = state['epoch']
+            epochs = state['config']['epochs']
+            del state
+        else:
+            path = path[:-4]
+            print(f'try to load from {path}@{"deepspeed"}')
+            self.ds_engine.load_checkpoint(path, tag='deepspeed')
         print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
     
     def main(self):
