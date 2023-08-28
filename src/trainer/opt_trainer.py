@@ -588,6 +588,7 @@ class Trainer:
             epoch = state['epoch']
             epochs = state['config']['epochs']
             del state
+            print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
         else:
             path = path[:-4]
             print(f'try to load from {path}@{"deepspeed"}')
@@ -595,7 +596,7 @@ class Trainer:
                 self.ds_engine.load_checkpoint(path, tag='deepspeed')
             else:
                 self.ds_engine.load_checkpoint(path, tag='deepspeed', load_optimizer_states=False)
-        print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
+            print(f'loaded {path} ({-1}@[{-1}/{-1}])')
     
     def main(self):
         torch.set_float32_matmul_precision('high')
