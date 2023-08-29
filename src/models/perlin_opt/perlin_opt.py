@@ -1034,7 +1034,6 @@ class OPTDecoder(OPTPreTrainedModel):
                         create_custom_forward(decoder_layer),
                         hidden_states,
                         causal_attention_mask,
-                        # use_reentrant=False,
                     )
                     
                     # layer_outputs = batch_to(layer_outputs, swap_out_device)
