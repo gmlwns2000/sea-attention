@@ -185,10 +185,10 @@ class PerlinAttention(nn.Module):
             self.attention_predictor_dec_row_down_scale = 2
             self.attention_predictor_dec_row_splits = 4
             self.attention_predictor_dec_row_out_ch = (self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale) * self.attention_predictor_dec_row_splits
-            self.attention_predictor_dec_row = nn.Sequential(
-                nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
-                ChannelSplit(self.attention_predictor_dec_row_splits),
-            )
+            # self.attention_predictor_dec_row = nn.Sequential(
+            #     nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
+            #     ChannelSplit(self.attention_predictor_dec_row_splits),
+            # )
             # self.attention_predictor_cnn = nn.Sequential(
             #     KeepRes(
             #         nn.Conv2d(self.attention_predictor_dec_row_splits*N_H, 4*N_H, 3, padding=1, stride=(2, 1)),
@@ -208,13 +208,12 @@ class PerlinAttention(nn.Module):
             self.attention_predictor_cnn = nn.Sequential(
                 KeepRes(
                     # NOTE if we use pixelshuffle outch should be 48
-                    nn.Conv2d(12, 48, 3, padding=0, stride=2),
+                    CausalConv2d(12, 48, 3, padding=1, stride=2, causal=self.pconfig.causal),
                     nn.ReLU(),
-                    ResBlock(48),
-                    ResBlock(48),
-                    nn.ConvTranspose2d(48, 12, 3, stride=2, padding=0),
-                    nn.ReLU(),
-                    nn.Conv2d(12, 12, 3, padding=0),
+                    ResBlock(48, causal=self.pconfig.causal),
+                    ResBlock(48, causal=self.pconfig.causal),
+                    UpsampleFP32(2, torch.float16),
+                    CausalConv2d(48, 12, 3, padding=1, causal=self.pconfig.causal),
                 )
             )
         else:
@@ -579,7 +578,7 @@ class PerlinAttention(nn.Module):
                     masked_fill_value=masked_fill_value,
                     attention_mask=mask,
                     target_width=target_width,
-                    training=self.training,
+                    training=self.training and self.pconfig.causal,
                     is_causal=self.pconfig.causal,
                 )
             
@@ -588,8 +587,8 @@ class PerlinAttention(nn.Module):
             if not self.benchmarking and not use_cache and attention_scores_truth is not None:
                 N, H, T, T_M = estimated_attention_score.shape
                 # for loss calculation
-                with torch.no_grad():
-                    estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)
+                # with torch.no_grad():
+                estimated_attention_probs_resized = resize_from_m_to_t(estimated_attention_probs, masked_fill_value=0)
                 # return DUMMY_OUTPUT #413
                 estimated_attention_score_resized = resize_from_m_to_t(estimated_attention_score, masked_fill_value=FP_MIN, output_dtype=torch.float32)
                 # return DUMMY_OUTPUT #601
