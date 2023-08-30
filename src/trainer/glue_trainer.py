@@ -76,11 +76,11 @@ def get_base_model(dataset, only_tokenizer=False):
         "bert": berts.BertForSequenceClassification,
     }[dataset]
     
-    tokenizer = transformers.BertTokenizerFast.from_pretrained(checkpoint)
+    tokenizer = transformers.BertTokenizerFast.from_pretrained(checkpoint, cache_dir='/d1/jinakim/.cache/huggingface/')
     if only_tokenizer:
         return None, tokenizer
     
-    bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
+    bert = model.from_pretrained(checkpoint, cache_dir='/d1/jinakim/.cache/huggingface/')
     return bert, tokenizer
 
 BF16 = torch.float16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -330,7 +330,7 @@ class Trainer:
         if self.subset == 'bert':
             metric = load_metric('glue', 'cola')
         else:
-            metric = load_metric('glue', self.subset)
+            metric = load_metric('glue', self.subset, cache_dir= '/d1/jinakim/.cache/huggingface/metrics')
         
         loader = self.valid_loader
         if split == 'train':
@@ -351,7 +351,6 @@ class Trainer:
             if self.subset != 'stsb': 
                 predictions = torch.argmax(predictions, dim=-1)
             metric.add_batch(predictions=predictions, references=labels)
-        
         score = metric.compute()
         self.last_metric_score = score
         if show_messages:
@@ -360,7 +359,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint_dummy.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/final.pth'
         return path
     
     def save(self):
