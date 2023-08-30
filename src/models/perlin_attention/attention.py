@@ -189,17 +189,33 @@ class PerlinAttention(nn.Module):
                 nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
                 ChannelSplit(self.attention_predictor_dec_row_splits),
             )
+            # self.attention_predictor_cnn = nn.Sequential(
+            #     KeepRes(
+            #         nn.Conv2d(self.attention_predictor_dec_row_splits*N_H, 4*N_H, 3, padding=1, stride=(2, 1)),
+            #         # nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+            #         nn.ReLU(),
+            #         nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+            #         nn.ReLU(),
+            #         UpsampleFP32(2, torch.float16),
+            #         nn.Conv2d(4*N_H, N_H, 3, padding=1),
+            #         output_width=self.pconfig.attention_predictor_length
+            #     ),
+            # )
+            self.attention_predictor_dec_row = nn.Sequential(
+                nn.Linear(self.attention_head_size*2, self.pconfig.attention_predictor_length),
+                # ChannelSplit(self.attention_predictor_dec_row_splits),
+            )
             self.attention_predictor_cnn = nn.Sequential(
                 KeepRes(
-                    nn.Conv2d(self.attention_predictor_dec_row_splits*N_H, 4*N_H, 3, padding=1, stride=(2, 1)),
-                    # nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+                    # NOTE if we use pixelshuffle outch should be 48
+                    nn.Conv2d(12, 48, 3, padding=0, stride=2),
                     nn.ReLU(),
-                    nn.Conv2d(4*N_H, 4*N_H, 3, padding=1),
+                    ResBlock(48),
+                    ResBlock(48),
+                    nn.ConvTranspose2d(48, 12, 3, stride=2, padding=0),
                     nn.ReLU(),
-                    UpsampleFP32(2, torch.float16),
-                    nn.Conv2d(4*N_H, N_H, 3, padding=1),
-                    output_width=self.pconfig.attention_predictor_length
-                ),
+                    nn.Conv2d(12, 12, 3, padding=0),
+                )
             )
         else:
             is_causal = self.pconfig.causal
