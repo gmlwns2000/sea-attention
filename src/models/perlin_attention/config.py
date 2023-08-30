@@ -23,7 +23,7 @@ class PerlinAttentionConfig:
     attention_predictor_comp_patch_size: int = 16
     attention_predictor_comp_patch_count: int = 16
     layerwise: bool = False
-    lora_r: int = 16
+    lora_r: int = 32
     lora_enabed: bool = False
     lora_in_approx_enabled: bool = False
     partial_attention_scaler: bool = True

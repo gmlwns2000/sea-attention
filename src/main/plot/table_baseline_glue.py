@@ -1,21 +1,63 @@
-data = {
-    'Ours (k=7)': 82.1,
-    'Reformer': 81.7,
-    'BigBird': 80.0,
-    'Scatterbrain': 79.5,
-    'Longformer': 78.8,
-    'Sinkhorn': 76.0,
-    'Synthesizr': 74.0,
-    'Performer': 74.0,
-    'Cosformer': 62.2,
+data_mnli = {
+    'Ours': 82.1,
+    'Re-': 81.7,
+    'B.B': 80.0,
+    'S.B': 79.5,
+    'Long-': 78.8,
+    'Sink.': 76.0,
+    'Synth.': 74.0,
+    'Per-': 74.0,
+    # 'Cos-': 62.2,
 }
-my_key = 'Ours (k=7)'
+data_cola = {
+    'Ours': 82.1,
+    'Re-': 81.7,
+    'B.B': 80.0,
+    'S.B': 79.5,
+    'Long-': 78.8,
+    'Sink.': 76.0,
+    'Synth.': 74.0,
+    'Per-': 74.0,
+    # 'Cos-': 62.2,
+}
+data_mrpc = {
+    'Ours': 82.1,
+    'Re-': 81.7,
+    'B.B': 80.0,
+    'S.B': 79.5,
+    'Long-': 78.8,
+    'Sink.': 76.0,
+    'Synth.': 74.0,
+    'Per-': 74.0,
+    # 'Cos-': 62.2,
+}
+data_sst2 = {
+    'Ours': 82.1,
+    'Re-': 81.7,
+    'B.B': 80.0,
+    'S.B': 79.5,
+    'Long-': 78.8,
+    'Sink.': 76.0,
+    'Synth.': 74.0,
+    'Per-': 74.0,
+    # 'Cos-': 62.2,
+}
 
-col_keys = list(data.keys())
+data = {
+    'MNLI': data_mnli,
+    'CoLA': data_cola,
+    'MRPC': data_mrpc,
+    'SST2': data_sst2,
+}
+
+my_key = 'Ours'
+
+col_keys = list(data_mnli.keys())
 
 cell_data = []
-cell_data.append(['MNLI (Acc.)'] + [data[c] for c in col_keys])
-cell_data.append(['MNLI (Rel. Acc.)'] + [data[c] / data[my_key] * 100 for c in col_keys])
+for ds in data.keys():
+    cell_data.append([f'{ds} (Acc.)'] + [data[ds][c] for c in col_keys])
+    # cell_data.append([f'{ds} (Rel. Acc.)'] + [data[ds][c] / data[ds][my_key] * 100 for c in col_keys])
 just_width = 13
 just_width_header = 20
 def format(lst):
@@ -36,7 +78,7 @@ table_cells = "|".join(['c'] * len(cell_data[0]))
 table_header = "&".join(["".rjust(just_width_header)] + [k.rjust(just_width) for k in col_keys])
 table = \
 f"\\begin{{table}}[h]\n"\
-f"\\caption{{glue benchmark}}\n"\
+f"\\caption{{Comparison with GLUE dataset among linear attention methods. Trained with same number of optimizer steps.}}\n"\
 f"\\label{{table.baseline.glue}}\n"\
 f"\\begin{{center}}\n"\
 f"\\begin{{tabular}}{{{table_cells}}}\n"\
