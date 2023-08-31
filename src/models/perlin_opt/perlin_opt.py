@@ -174,7 +174,7 @@ class OPTAttention(nn.Module):
         self.perlin_reformer_atten = LSHAttention(
             dropout=dropout,
             bucket_size=32, # this will re adjust atomatically
-            n_hashes=8,
+            n_hashes=self.pconfig.reformer_n_hashs,
             return_attn=False,
             causal=True,
         )

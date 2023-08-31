@@ -11,6 +11,7 @@ from ..hf_bert import BertConfig
 
 @dataclass
 class PerlinAttentionConfig:
+    reformer_n_hashs: int = 8
     performer_nb_factor: int = 1
     k: int = 7
     k_flatten: bool = True

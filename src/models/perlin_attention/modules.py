@@ -83,6 +83,8 @@ class UpsampleFP32(nn.Module):
             x = x.to(x_type)
         return x
     
+CAUSAL_CONV_FORCE_NON_CAUSAL = False
+    
 class CausalConv2d(nn.Module):
     def __init__(self, 
         in_channels: int,
@@ -94,9 +96,13 @@ class CausalConv2d(nn.Module):
         dilation: int = 1,
         causal: bool = False,
     ):
+        global CAUSAL_CONV_FORCE_NON_CAUSAL
+        
         super().__init__()
         
         self.causal = causal
+        if CAUSAL_CONV_FORCE_NON_CAUSAL:
+            self.causal = False
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.kernel_size = kernel_size
