@@ -168,22 +168,23 @@ class OPTAttention(nn.Module):
         self.benchmarking = False
         self.attention_method = 'none'
         
+        from ..perlin_attention import PerlinSelfAttention, get_default_config
+        pconfig = get_default_config()
+        
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
         
         self.perlin_reformer_atten = LSHAttention(
             dropout=dropout,
             bucket_size=32, # this will re adjust atomatically
-            n_hashes=self.pconfig.reformer_n_hashs,
+            n_hashes=pconfig.reformer_n_hashs,
             return_attn=False,
             causal=True,
         )
         
         ### perlin
-        from ..perlin_attention import PerlinSelfAttention, get_default_config
         from transformers.models.bert.configuration_bert import BertConfig
         
-        pconfig = get_default_config()
         pconfig.causal = True
         if pconfig.k_flatten_dim == 'batch':
             warnings.warn("Perlin default config's k_flatten_dim is batch. However, you try to initialize causal attention, therefore silently replace to causal_batch")
