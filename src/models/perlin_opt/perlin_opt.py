@@ -531,7 +531,7 @@ class OPTDecoderLayer(nn.Module):
         
         self._gradient_checkpointing = False
         self.last_loss = None
-        self.train_layerwise = True
+        self.train_layerwise = False
 
     def forward(
         self,
