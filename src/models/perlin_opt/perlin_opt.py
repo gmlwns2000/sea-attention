@@ -433,23 +433,29 @@ class OPTAttention(nn.Module):
             binary_mask = attention_mask > -1
             
             #pad
-            perlin_k = self.perlin_self_attention.pconfig.k
-            to_pad = 0 if (T % perlin_k) == 0 else (perlin_k - (T % perlin_k))
-            TP = T + to_pad
-            if to_pad != 0:
-                pad_config = (0,0,0,to_pad)
-                q = F.pad(q, pad_config).float()
-                k = F.pad(k, pad_config).float()
-                v = F.pad(v, pad_config).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, 1, T), (0,to_pad), value=0.0).bool().view(N, TP)
-                assert q.shape == (N, H, T+to_pad, HID)
-                # assert binary_mask.shape == (N, T+to_pad)
-            else:
-                q = q.float()
-                k = k.float()
-                v = v.float()
-                binary_mask = binary_mask.bool().view(N, TP)
-            sinkhorn_context_layer = self.perlin_sinkhorn_atten(q, k, v)
+            to_pad = 0
+            # perlin_k = self.perlin_self_attention.pconfig.k
+            # to_pad = 0 if (T % perlin_k) == 0 else (perlin_k - (T % perlin_k))
+            # TP = T + to_pad
+            # if to_pad != 0:
+            #     pad_config = (0,0,0,to_pad)
+            #     q = F.pad(q, pad_config).float()
+            #     k = F.pad(k, pad_config).float()
+            #     v = F.pad(v, pad_config).float()
+            #     binary_mask = F.pad(binary_mask.expand(N, 1, 1, T), (0,to_pad), value=0.0).bool().view(N, TP)
+            #     assert q.shape == (N, H, T+to_pad, HID)
+            #     # assert binary_mask.shape == (N, T+to_pad)
+            # else:
+            #     q = q.float()
+            #     k = k.float()
+            #     v = v.float()
+            #     binary_mask = binary_mask.bool().view(1, TP)
+            op_dtype = q.dtype
+            with torch.autocast('cuda', torch.float32):
+                sinkhorn_context_layer = self.perlin_sinkhorn_atten(q.to(torch.float32), k.to(torch.float32), v.to(torch.float32))
+            if op_dtype != sinkhorn_context_layer.dtype:
+                sinkhorn_context_layer = sinkhorn_context_layer.to(op_dtype)
+            
             #unpad
             if to_pad != 0:
                 q = q[:, :, :T, :]
@@ -463,14 +469,10 @@ class OPTAttention(nn.Module):
                 attention_probs = None
             
             sinkhorn_context_layer = sinkhorn_context_layer.permute(0, 2, 1, 3).contiguous()
-            new_context_layer_shape = sinkhorn_context_layer.size()[:-2] + (self.all_head_size,)
+            new_context_layer_shape = sinkhorn_context_layer.size()[:-2] + (self.embed_dim,)
             sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
             
-            context_layer = sinkhorn_context_layer
-            
-            self.last_loss = 0
-            
-            return context_layer, attention_probs
+            return sinkhorn_context_layer, attention_probs
         else:
             raise Exception()
 

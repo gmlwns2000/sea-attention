@@ -27,7 +27,8 @@ class Wikitext2Dataset(Dataset):
     
     def __len__(self):
         if self.strided_indexing:
-            return math.ceil(self.seq_len / self.stride)
+            # drop last by default
+            return max(math.floor(self.seq_len / self.stride), 1)
         else:
             # return self.seq_len - self.stride * 2
             return self.seq_len - self.stride
