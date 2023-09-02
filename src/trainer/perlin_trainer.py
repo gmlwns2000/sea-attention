@@ -53,6 +53,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--n-hashs', default=8, type=int)
     return parser
 
 def parse_perlin_model_options(args):
@@ -72,7 +73,8 @@ def parse_perlin_model_options(args):
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
-        'perlin_predictor_length': args.predictor_length
+        'perlin_predictor_length': args.predictor_length,
+        'perlin_n_hashs': args.n_hashs,
     }
     return kwargs
 
@@ -83,7 +85,7 @@ class BaseTrainer:
         perlin_k_flatten = True,
         perlin_k_flatten_dim = 'batch',
         perlin_layerwise = False,
-        perlin_lora = True,
+        perlin_lora = False,
         attention_method = 'perlin',
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
@@ -93,6 +95,7 @@ class BaseTrainer:
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
         perlin_predictor_length = 128,
+        perlin_n_hashs = 8,
         compile = False,
         **kwargs,
     ) -> None:
@@ -112,9 +115,11 @@ class BaseTrainer:
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
         self.perlin_predictor_length = perlin_predictor_length
+        self.perlin_n_hashs = perlin_n_hashs
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
+            reformer_n_hashs = perlin_n_hashs,
             performer_nb_factor = perlin_performer_nb_feature_factor,
             k = perlin_k,
             k_flatten = perlin_k_flatten,
@@ -176,10 +181,11 @@ class BaseTrainer:
         name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
+        name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}'
         return name
 
     def get_global_config(self):

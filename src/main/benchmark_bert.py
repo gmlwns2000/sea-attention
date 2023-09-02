@@ -13,6 +13,7 @@ from ..models.hf_bert import BertModel as TeacherBertModel
 from ..models import perlin_bert
 from ..models.perlin_bert import BertModel, BertSelfAttention
 from ..models.perlin_attention.config import PerlinAttentionConfig, register_default_config
+from ..models.perlin_opt import OPTModel, OPTAttention, OPTDecoderLayer
 from ..utils import seed, get_bench
 from torch import nn
 import json
@@ -28,7 +29,11 @@ class BenchConfig:
     bsize: int = 1
     seq_len: int = 4096
     k: int = 64
+    w: int = None
     nbf: float = 1
+    trace: bool = True
+    causal: bool = False
+    n_hash: int = 8
 
 def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
@@ -95,21 +100,21 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     
     device = torch.device('cuda')
 
-    config = AutoConfig.from_pretrained('bert-base-uncased')
-    config.max_position_embeddings = SEQ_LEN
-
-    pred_len = 128  
-    if bench_config.seq_len >= 2048:
-        pred_len = 256
-    elif bench_config.seq_len >= 4096:
-        pred_len = 256
-    elif bench_config.seq_len >= 8192:
-        pred_len = 512
-    elif bench_config.seq_len >= 16384:
-        pred_len = 1024
+    if bench_config.w is None:
+        pred_len = 128
+        if bench_config.seq_len >= 2048:
+            pred_len = 256
+        elif bench_config.seq_len >= 4096:
+            pred_len = 256
+        elif bench_config.seq_len >= 8192:
+            pred_len = 512
+        elif bench_config.seq_len >= 16384:
+            pred_len = 1024
+    else:
+        pred_len = bench_config.w
 
     register_default_config(PerlinAttentionConfig(
-        performer_nb_factor=bench_config.nbf if method == 'perlin' else 1,
+        performer_nb_factor=bench_config.nbf if method == 'perlin' or (method == 'performer' and bench_config.causal) else 1,
         lora_enabed=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
@@ -117,7 +122,14 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         k=bench_config.k,
         attention_predictor_length=pred_len
     ))
-    perlin = BertModel(config).eval()
+    if not bench_config.causal:
+        config = AutoConfig.from_pretrained('bert-base-uncased')
+        config.max_position_embeddings = SEQ_LEN
+        perlin = BertModel(config).eval()
+    else:
+        config = AutoConfig.from_pretrained('facebook/opt-125m')
+        # config.max_position_embeddings = SEQ_LEN
+        perlin = OPTModel(config).eval()
     for module in perlin.modules():
         if isinstance(module, BertSelfAttention):
             module.perlin_token_merging = False
@@ -125,24 +137,39 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
             module.perlin_token_merging_ratio = 0.5
             module.perlin_token_merging_score_source = 'probs'
             module.attention_method = method
+        if isinstance(module, OPTAttention):
+            module.attention_method = method
+            module.perlin_reformer_atten.n_hashes = bench_config.n_hash
         if hasattr(module, 'benchmarking'):
             module.benchmarking = True
 
-    attention_mask = torch.ones((BSIZE, SEQ_LEN), dtype=BENCH_PRECISION).to(device)
-    # for i in range(attention_mask.shape[0]):
-    #     attention_mask[i, random.randint(128, attention_mask.shape[1]-1):] = 0
-    hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
-    attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
-    attention_mask_expand = (1-attention_mask_expand)*(-32000)
+    if not bench_config.causal:
+        attention_mask = torch.ones((BSIZE, SEQ_LEN), dtype=BENCH_PRECISION).to(device)
+        hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
+        attention_mask_expand = attention_mask.view(BSIZE, 1, 1, -1).contiguous()
+        attention_mask_expand = (1-attention_mask_expand)*(-32000)
 
-    layer = perlin.encoder.layer[0] # type: BertLayer
-    attention = layer.attention.self # type: BertSelfAttention
-    # attention.teacher_attention_prob = torch.rand((BSIZE, 12, SEQ_LEN, SEQ_LEN), device=device)
-    # attention.teacher_attention_score = torch.rand((BSIZE, 12, SEQ_LEN, SEQ_LEN), device=device)
-    # attention.teacher_context_layer = torch.rand((BSIZE, SEQ_LEN, config.hidden_size), device=device)
-    layer.intermediate = nn.Identity()
-    layer.output = IndentityXY()
-    layer.attention.output = IndentityXY()
+        layer = perlin.encoder.layer[0] # type: BertLayer
+        attention = layer.attention.self # type: BertSelfAttention
+        # attention.teacher_attention_prob = torch.rand((BSIZE, 12, SEQ_LEN, SEQ_LEN), device=device)
+        # attention.teacher_attention_score = torch.rand((BSIZE, 12, SEQ_LEN, SEQ_LEN), device=device)
+        # attention.teacher_context_layer = torch.rand((BSIZE, SEQ_LEN, config.hidden_size), device=device)
+        layer.intermediate = nn.Identity()
+        layer.output = IndentityXY()
+        layer.attention.output = IndentityXY()
+    else:
+        attention_mask = (torch.arange(0, SEQ_LEN).view(SEQ_LEN, 1) >= torch.arange(0, SEQ_LEN).view(1, SEQ_LEN)) * 1.0
+        hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
+        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
+        
+        layer = perlin.decoder.layers[0] # type: OPTDecoderLayer
+        fc1 = nn.Identity()
+        fc1.weight = layer.fc1.weight
+        layer.fc1 = fc1
+        layer.fc2 = nn.Identity()
+        out_proj = nn.Identity()
+        out_proj.weight = layer.self_attn.out_proj.weight
+        layer.self_attn.out_proj = out_proj
     
     def test_layer():
         layer(hidden_states=hidden_states, attention_mask=attention_mask_expand)
@@ -160,7 +187,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         get_bench().reset_trace()
         get_bench().reset_measures()
     
-    if method == 'perlin':
+    if method == 'perlin' and bench_config.trace:
         bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""} (trace)', test_layer, bench_config, on_warmup=on_warmup)
         msg = get_bench().format_tracetree()
         if len(msg) > 0: print(msg)
@@ -168,9 +195,13 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     get_bench().disabled = True
     get_bench().synchronize = False
     
-    result = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}', test_layer, bench_config)
+    result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}', test_layer, bench_config)
+    # print(result_interval, BSIZE)
+    result_interval = result_interval / BSIZE
+    result_mem = result_mem / BSIZE
+    
     if return_queue is not None:
-        return_queue.put(result)
+        return_queue.put((result_interval, result_mem))
 
 def exam_config(config: BenchConfig):
     q = mp.Queue()

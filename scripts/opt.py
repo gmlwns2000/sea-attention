@@ -21,6 +21,7 @@ SUPPORTED_METHODS = [
     'perlin',
     'performer',
     'reformer',
+    'sinkhorn',
 ]
 
 parser = argparse.ArgumentParser()
@@ -30,6 +31,7 @@ parser.add_argument('--dataset', type=str, required=False, default='wikitext2', 
 parser.add_argument('--k', type=int, default=64)
 parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
+parser.add_argument('--n-hashs', type=int, default=-1)
 parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
@@ -64,24 +66,28 @@ deepspeed_config = {
         'perlin': './config/ds_opt_125.json',
         'performer': './config/ds_opt_125.json',
         'reformer': './config/ds_opt_125.json',
+        'sinkhorn': './config/ds_opt_125.json',
     }},
     'opt-350m': { 'wikitext2': {
         'none': './config/ds_opt_350.json',
         'perlin': './config/ds_opt_350.json',
         'performer': './config/ds_opt_350_zero2.json',
         'reformer': './config/ds_opt_350_zero2.json',
+        'sinkhorn': './config/ds_opt_350_zero2.json',
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',
-        'perlin': './config/ds_opt_1.3.json',
+        'perlin': './config/ds_opt_1.3_zero3.json',
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
+        'sinkhorn': './config/ds_opt_1.3.json',
     }},
     'opt-2.7b': { 'wikitext2': {
         'none': './config/ds_opt_2.7.json',
         'perlin': './config/ds_opt_2.7.json',
         'performer': './config/ds_opt_2.7.json',
         'reformer': './config/ds_opt_2.7.json',
+        'sinkhorn': './config/ds_opt_2.7.json',
     }}
 }[args.model][args.dataset][args.method]
 # kd_checkpointing = {
@@ -121,6 +127,9 @@ if args.enable_lora:
 if args.load_checkpoint is not None:
     cmd.append('--load-checkpoint')
     cmd.append(args.load_checkpoint)
+if args.n_hashs > 0:
+    cmd.append('--n-hashs')
+    cmd.append(str(int(args.n_hashs)))
 
 print('cmd:', ' '.join(cmd))
 

@@ -138,7 +138,7 @@ class PerlinSelfAttention(nn.Module):
             value_layer_for_atten = value_layer
         
         t_mixed_query_layer = default_lazy(query_layer, lambda: lora_forward_linear(query, hidden_states))
-        if self.pconfig.causal:
+        if self.pconfig.causal and self.pconfig.lora_enabed:
             warnings.warn("causal opt does not use scaling in attention operator. it applied in query")
             t_mixed_query_layer = t_mixed_query_layer * torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
         query_layer = self.transpose_for_scores(lora_forward_lora(
@@ -148,7 +148,7 @@ class PerlinSelfAttention(nn.Module):
             x=default_lazy(hidden_states, lambda: t_mixed_query_layer), 
             enabled=self.pconfig.lora_enabed
         ))
-        if self.pconfig.causal:
+        if self.pconfig.causal and self.pconfig.lora_enabed:
             t_mixed_query_layer = t_mixed_query_layer / torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
         # assert self.pconfig.lora_enabed
         # assert self.query_lora.lora_a.requires_grad

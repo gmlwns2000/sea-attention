@@ -81,7 +81,7 @@ def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinea
     
     # assert x.requires_grad
     
-    if linear_x_flatten or x_flatten:
+    if x_flatten:
         x = x.view(N, T, H, D).permute(0, 2, 1, 3).contiguous()
     
     # assert x.requires_grad
