@@ -85,7 +85,7 @@ class BaseTrainer:
         perlin_k_flatten = True,
         perlin_k_flatten_dim = 'batch',
         perlin_layerwise = False,
-        perlin_lora = True,
+        perlin_lora = False,
         attention_method = 'perlin',
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
