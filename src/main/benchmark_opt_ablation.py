@@ -40,7 +40,7 @@ def main():
                     trace=False,
                     causal=True,
                 ))
-                data[f'nbf:{nbf},k:{k},w:{w}'] = {
+                data[f'perlin,nbf:{nbf},k:{k},w:{w}'] = {
                     'latency': latency * 1000, 
                     'mem': mem / (1024 ** 2),
                 }
