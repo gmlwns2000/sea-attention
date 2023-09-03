@@ -45,9 +45,9 @@ data_sst2 = {
 
 data = {
     'MNLI': data_mnli,
-    'CoLA': data_cola,
-    'MRPC': data_mrpc,
-    'SST2': data_sst2,
+    # 'CoLA': data_cola,
+    # 'MRPC': data_mrpc,
+    # 'SST2': data_sst2,
 }
 
 my_key = 'Ours'

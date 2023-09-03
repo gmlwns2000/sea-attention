@@ -19,25 +19,45 @@ def main():
                     nbf=nbf,
                     trace=False,
                 ))
-                data[f'nbf:{nbf},k:{k},w:{w}'] = {
+                data[f'perlin,nbf:{nbf},k:{k},w:{w}'] = {
+                    'method': 'perlin',
                     'latency': latency * 1000, 
                     'mem': mem / (1024 ** 2),
                 }
-                
+    
     for baseline in BASELINES:
-        latency, mem = exam_config(BenchConfig(
-            method=baseline,
-            bsize=32,
-            seq_len=256,
-            k=7,
-            w=128,
-            nbf=1,
-            trace=False,
-        ))
-        data[f'{baseline}'] = {
-            'latency': latency * 1000, 
-            'mem': mem / (1024 ** 2),
-        }
+        if baseline == 'performer':
+            for nbf in nbfs:
+                latency, mem = exam_config(BenchConfig(
+                    method=baseline,
+                    bsize=32,
+                    seq_len=256,
+                    k=7,
+                    w=128,
+                    nbf=nbf,
+                    trace=False,
+                ))
+                data[f'{baseline},nbf:{nbf}'] = {
+                    'method': baseline,
+                    'latency': latency * 1000, 
+                    'mem': mem / (1024 ** 2),
+                }
+        else:
+            for k in ks:
+                latency, mem = exam_config(BenchConfig(
+                    method=baseline,
+                    bsize=32,
+                    seq_len=256,
+                    k=k,
+                    w=128,
+                    nbf=1,
+                    trace=False,
+                ))
+                data[f'{baseline},k:{k}'] = {
+                    'method': baseline,
+                    'latency': latency * 1000, 
+                    'mem': mem / (1024 ** 2),
+                }
     
     path = './plots/main/benchmark_bert_ablation'
     os.makedirs(path, exist_ok=True)
