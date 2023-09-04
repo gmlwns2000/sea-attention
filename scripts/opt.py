@@ -32,6 +32,7 @@ parser.add_argument('--k', type=int, default=64)
 parser.add_argument('--predictor-length', type=int, default=256)
 parser.add_argument('--nbf', type=int, default=8)
 parser.add_argument('--n-hashs', type=int, default=-1)
+parser.add_argument('--n-steps', type=int, default=-1)
 parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
@@ -130,6 +131,9 @@ if args.load_checkpoint is not None:
 if args.n_hashs > 0:
     cmd.append('--n-hashs')
     cmd.append(str(int(args.n_hashs)))
+if args.n_steps > 0:
+    cmd.append('--num-steps')
+    cmd.append(str(int(args.n_steps)))
 
 print('cmd:', ' '.join(cmd))
 
