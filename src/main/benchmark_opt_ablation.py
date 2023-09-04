@@ -56,7 +56,7 @@ def main():
             trace=False,
             causal=True,
         ))
-        data[f'performer=nbf:{nbf}'] = {
+        data[f'performer,nbf:{nbf}'] = {
             'latency': latency * 1000, 
             'mem': mem / (1024 ** 2),
         }
@@ -73,7 +73,7 @@ def main():
             causal=True,
             n_hash=n_hash,
         ))
-        data[f'reformer=n_hash:{n_hash}'] = {
+        data[f'reformer,n_hash:{n_hash}'] = {
             'latency': latency * 1000, 
             'mem': mem / (1024 ** 2),
         }
