@@ -14,6 +14,7 @@
 # limitations under the License.
 """ PyTorch OPT model."""
 import gc
+import os
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
@@ -173,15 +174,16 @@ class OPTAttention(nn.Module):
         
         ### sinkhorn
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornCausalAttention
-        
-        self.perlin_sinkhorn_atten = SinkhornCausalAttention(
-            bucket_size=pconfig.k,
-            dim=self.embed_dim,
-            dim_heads=self.head_dim,
-            heads=self.num_heads,
-            max_seq_len=2048,
-            dropout=dropout,
-        )
+        if os.environ.get("PERLIN_IGNORE_SINKHORN", "0") == "0":
+            self.perlin_sinkhorn_atten = SinkhornCausalAttention(
+                bucket_size=pconfig.k,
+                dim=self.embed_dim,
+                dim_heads=self.head_dim,
+                heads=self.num_heads,
+                max_seq_len=2048,
+                dropout=dropout,
+            )
+            warnings.warn("sinkhorn ignored")
         
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention

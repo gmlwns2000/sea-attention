@@ -593,9 +593,9 @@ class Trainer:
             path = path[:-4]
             print(f'try to load from {path}@{"deepspeed"}')
             if int(os.environ.get('DS_LOAD_OPTIM', '1')) == 1:
-                self.ds_engine.load_checkpoint(path, tag='deepspeed')
+                self.ds_engine.load_checkpoint(path, tag='deepspeed', load_module_strict=False)
             else:
-                self.ds_engine.load_checkpoint(path, tag='deepspeed', load_optimizer_states=False)
+                self.ds_engine.load_checkpoint(path, tag='deepspeed', load_optimizer_states=False, load_module_strict=False)
             print(f'loaded {path} ({-1}@[{-1}/{-1}])')
     
     def main(self):
