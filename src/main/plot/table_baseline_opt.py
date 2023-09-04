@@ -14,8 +14,8 @@ data = {
     'opt-1.3b': {
         'none': 13.29,
         'ours': 0.0,
-        'reformer': 67.987,
-        'performer': 33.8,
+        'reformer': 46.73,
+        'performer': 30.81,
     },
     # 'opt-2.7b': {
     #     'none': 12.0,

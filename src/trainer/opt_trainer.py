@@ -181,8 +181,11 @@ class Trainer:
         import deepspeed as ds
         
         self.config = config if config is not None else TrainerConfig()
-        self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
-        self.local_rank = max(0, cmd_args.local_rank)
+        if cmd_args is None:
+            self.device = 0
+        else:
+            self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
+        self.local_rank = max(0, cmd_args.local_rank if cmd_args != None else 0)
         torch.cuda.set_device(self.device)
         seed(42 + self.local_rank)
         
