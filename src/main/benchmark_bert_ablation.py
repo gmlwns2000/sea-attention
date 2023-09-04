@@ -42,6 +42,21 @@ def main():
                     'latency': latency * 1000, 
                     'mem': mem / (1024 ** 2),
                 }
+        elif baseline == 'cosformer':
+            latency, mem = exam_config(BenchConfig(
+                method=baseline,
+                bsize=32,
+                seq_len=256,
+                k=7,
+                w=128,
+                nbf=1,
+                trace=False,
+            ))
+            data[f'{baseline}'] = {
+                'method': baseline,
+                'latency': latency * 1000, 
+                'mem': mem / (1024 ** 2),
+            }
         else:
             for k in ks:
                 latency, mem = exam_config(BenchConfig(

@@ -78,6 +78,22 @@ def main():
             'mem': mem / (1024 ** 2),
         }
     
+    latency, mem = exam_config(BenchConfig(
+        method='cosformer',
+        bsize=1,
+        seq_len=2048,
+        k=64,
+        w=128,
+        nbf=nbf,
+        trace=False,
+        causal=True,
+        n_hash=n_hash,
+    ))
+    data[f'cosformer'] = {
+        'latency': latency * 1000, 
+        'mem': mem / (1024 ** 2),
+    }
+    
     path = './plots/main/benchmark_opt_ablation'
     os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, 'data.json'), 'w') as f:

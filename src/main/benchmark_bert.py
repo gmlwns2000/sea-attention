@@ -210,7 +210,7 @@ def exam_config(config: BenchConfig):
     proc.join()
     return q.get()
 
-BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 
 def main_methods():
     for method in BASELINES:
@@ -305,6 +305,7 @@ def load_and_plot():
         
         MARKERS = {
             'none': '>',
+            'cosformer': '+',
             'performer': 'v',
             'reformer': '^',
             'scatterbrain': 'x',
