@@ -184,6 +184,15 @@ class OPTAttention(nn.Module):
                 dropout=dropout,
             )
             warnings.warn("sinkhorn ignored")
+            
+        ### cosformer
+        from ..cosformer import CosformerAttention
+        if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
+            self.perlin_cosformer_atten = CosformerAttention(
+                embed_dim=self.embed_dim,
+                num_heads=self.num_heads,
+                causal=True,
+            )
         
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
@@ -374,6 +383,38 @@ class OPTAttention(nn.Module):
             # self.perlin_performer_proj_updater.redraw_projections(q.device)
             with torch.autocast('cuda', torch.float32):
                 performer_context_layer = self.perlin_self_attention.attention.performer(q.to(torch.float32), k.to(torch.float32), v.to(torch.float32))
+            performer_context_layer = performer_context_layer.to(op_dtype)
+            
+            if not self.benchmarking:
+                attention_probs = torch.zeros((N, H, T_DST, T_SRC), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+            else:
+                attention_probs = None
+            
+            performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = performer_context_layer.size()[:-2] + (self.embed_dim,)
+            performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+            
+            context_layer = performer_context_layer
+            
+            return context_layer, attention_probs
+        elif self.attention_method == 'cosformer':
+            # assert T_SRC == T_DST
+            
+            q = q.view(N, H, T_DST, HID)
+            k = k.view(N, H, T_SRC, HID)
+            v = v.view(N, H, T_SRC, HID)
+            
+            N, H, T, HID = q.shape
+            v = v * (attention_mask[:,:,:,:1] > -1)
+            
+            # self.perlin_performer_proj_updater.redraw_projections(q.device)
+            with torch.autocast('cuda', torch.float32):
+                t = self.perlin_cosformer_atten(
+                    q.permute(0, 2, 1, 3).reshape(N, T_DST, H*HID).permute(1, 0, 2).to(torch.float32), 
+                    k.permute(0, 2, 1, 3).reshape(N, T_SRC, H*HID).permute(1, 0, 2).to(torch.float32), 
+                    v.permute(0, 2, 1, 3).reshape(N, T_SRC, H*HID).permute(1, 0, 2).to(torch.float32)
+                )
+                performer_context_layer = t.reshape(T, N, H, HID).permute(1, 2, 0, 3)
             performer_context_layer = performer_context_layer.to(op_dtype)
             
             if not self.benchmarking:

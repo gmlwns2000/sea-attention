@@ -22,6 +22,7 @@ SUPPORTED_METHODS = [
     'performer',
     'reformer',
     'sinkhorn',
+    'cosformer',
 ]
 
 parser = argparse.ArgumentParser()
@@ -68,6 +69,7 @@ deepspeed_config = {
         'performer': './config/ds_opt_125.json',
         'reformer': './config/ds_opt_125.json',
         'sinkhorn': './config/ds_opt_125.json',
+        'cosformer': './config/ds_opt_125.json',
     }},
     'opt-350m': { 'wikitext2': {
         'none': './config/ds_opt_350.json',
@@ -75,6 +77,7 @@ deepspeed_config = {
         'performer': './config/ds_opt_350_zero2.json',
         'reformer': './config/ds_opt_350_zero2.json',
         'sinkhorn': './config/ds_opt_350_zero2.json',
+        'cosformer': './config/ds_opt_350_zero2.json',
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',
@@ -82,6 +85,7 @@ deepspeed_config = {
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
         'sinkhorn': './config/ds_opt_1.3.json',
+        'cosformer': './config/ds_opt_1.3.json',
     }},
     'opt-2.7b': { 'wikitext2': {
         'none': './config/ds_opt_2.7.json',
@@ -89,6 +93,7 @@ deepspeed_config = {
         'performer': './config/ds_opt_2.7.json',
         'reformer': './config/ds_opt_2.7.json',
         'sinkhorn': './config/ds_opt_2.7.json',
+        'cosformer': './config/ds_opt_2.7.json',
     }}
 }[args.model][args.dataset][args.method]
 # kd_checkpointing = {
