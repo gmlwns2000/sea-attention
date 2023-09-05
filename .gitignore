@@ -28,3 +28,4 @@ wandb/
 
 src/utils/secrets.*
 plots/
+/debug
