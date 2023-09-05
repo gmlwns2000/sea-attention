@@ -1,7 +1,9 @@
+# BigBird removed due to implementation error. The value is dummy
+
 data_mnli = {
     'Ours': 81.85,
     'Re-': 80.34,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.22,
     'Long-': 78.8,
     'Sink.': 76.26,
@@ -12,7 +14,7 @@ data_mnli = {
 data_cola = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
@@ -23,7 +25,7 @@ data_cola = {
 data_mrpc = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
@@ -34,7 +36,7 @@ data_mrpc = {
 data_sst2 = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
