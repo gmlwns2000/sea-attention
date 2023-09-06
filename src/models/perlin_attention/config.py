@@ -20,7 +20,7 @@ class PerlinAttentionConfig:
     random_lookup_count: int = 3
     attention_predictor_method: str = 'mlp'
     attention_predictor_length: int = 128
-    attention_predictor_backend: int = 'performer'
+    attention_predictor_backend: str = 'performer'
     attention_predictor_comp_book_size: int = 8
     attention_predictor_comp_patch_size: int = 16
     attention_predictor_comp_patch_count: int = 16
