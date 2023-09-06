@@ -163,7 +163,7 @@ class PerlinAttention(nn.Module):
             self.performer,
             1000,
         )
-        if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
+        if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0" and self.pconfig.attention_predictor_backend == 'cosformer':
             from ..cosformer import CosformerAttention
             # cosformer not supported because of v dim does not supports custom
             self.cosformer = CosformerAttention(
