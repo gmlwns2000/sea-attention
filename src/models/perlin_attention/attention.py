@@ -1,5 +1,6 @@
 import copy
 import math
+import os
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -162,6 +163,15 @@ class PerlinAttention(nn.Module):
             self.performer,
             1000,
         )
+        if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
+            from ..cosformer import CosformerAttention
+            self.cosformer = CosformerAttention(
+                embed_dim=self.embed_dim,
+                vdim=self.embed_dim*2,
+                num_heads=self.num_heads,
+                has_outproj=False,
+                causal=True,
+            )
         if not self.pconfig.causal:
             performer_value_hidden_size = self.attention_head_size*3
         else:

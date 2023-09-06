@@ -359,6 +359,7 @@ class BertSelfAttention(nn.Module):
         self.perlin_cosformer_atten = CosformerAttention(
             embed_dim=self.all_head_size,
             num_heads=self.num_attention_heads,
+            has_outproj=False,
             causal=False,
         )
 

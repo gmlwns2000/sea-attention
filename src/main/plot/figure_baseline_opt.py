@@ -55,7 +55,7 @@ def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
                 x = benchmark[k][benchmark_metric]
                 xs.append(x)
                 ys.append(y)
-        print(xs, ys, method)
+        # print(xs, ys, method)
         ax.scatter(
             xs, 
             ys, 
@@ -67,7 +67,7 @@ def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
         plot_data.append([xs, ys])
     ax.grid(True)
     ax.set_xlabel(x_label)
-    ax.set_ylabel('PPL.')
+    ax.set_ylabel('PPL. (Lower is better)')
     return plot_data
 
 root = './plots/main/figure_baseline_opt'
@@ -78,7 +78,7 @@ ncols = 3
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.5*ncols)
 fig.set_figheight(3*nrows)
-fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2')
+fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2', fontweight=1000)
 
 ax = axs[1]
 ax.set_title(f'Memory', fontsize=10)
@@ -99,7 +99,7 @@ for imethod, method in enumerate(methods):
     data = np.array(data)
     data[1,0,:] = data[1,0,:]*10
     data = data.mean(0)
-    print(method, data)
+    # print(method, data)
     xs = data[0, :]
     ys = data[1, :]
     ax.scatter(
@@ -112,7 +112,7 @@ for imethod, method in enumerate(methods):
     )
     ax.grid(True)
     ax.set_xlabel('10*Lat.+Mem.')
-    ax.set_ylabel('PPL.')
+    ax.set_ylabel('PPL. (Lower is better)')
 
 handles, labels = ax.get_legend_handles_labels()
 fig.subplots_adjust(top=0.82, bottom=0.27, wspace=0.3)
@@ -120,3 +120,4 @@ fig.legend(handles, labels, loc='lower center', ncol=len(labels))
 
 plt.savefig(os.path.join(root, 'plot_baseline_opt.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_opt.pdf'), bbox_inches='tight')
+print(os.path.join(root, 'plot_baseline_opt.png'))

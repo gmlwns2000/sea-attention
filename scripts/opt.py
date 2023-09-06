@@ -38,6 +38,7 @@ parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
 parser.add_argument('--load-checkpoint', type=str, default=None)
+parser.add_argument('--predictor-backend', type=str, default='performer', choices=['performer', 'cosformer'])
 
 args = parser.parse_args()
 
@@ -116,6 +117,7 @@ cmd = [
     '--k', str(args.k),
     '--predictor-length', str(args.predictor_length),
     '--performer-nb-feature-factor', str(args.nbf),
+    '--predictor-backend', str(args.predictor_backend),
     '--gradient-checkpointing',
     '--deepspeed-enable',
     '--deepspeed',

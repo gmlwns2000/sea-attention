@@ -53,6 +53,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
     return parser
 
@@ -74,6 +75,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_predictor_length': args.predictor_length,
+        'prelin_predictor_backend': args.predictor_backend,
         'perlin_n_hashs': args.n_hashs,
     }
     return kwargs
@@ -95,6 +97,7 @@ class BaseTrainer:
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
         perlin_predictor_length = 128,
+        perlin_predictor_backend = 'performer',
         perlin_n_hashs = 8,
         compile = False,
         **kwargs,
@@ -115,6 +118,7 @@ class BaseTrainer:
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
         self.perlin_predictor_length = perlin_predictor_length
+        self.perlin_predictor_backend = perlin_predictor_backend
         self.perlin_n_hashs = perlin_n_hashs
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
@@ -128,6 +132,7 @@ class BaseTrainer:
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
             attention_predictor_length=perlin_predictor_length,
+            attention_predictor_backend=perlin_predictor_backend,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
             compile = compile,
@@ -183,10 +188,11 @@ class BaseTrainer:
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
         name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
+        name_predictor_backend = f'_pw{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}{name_predictor_length}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}{name_predictor_length}{name_predictor_backend}'
         return name
 
     def get_global_config(self):

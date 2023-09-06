@@ -191,6 +191,7 @@ class OPTAttention(nn.Module):
             self.perlin_cosformer_atten = CosformerAttention(
                 embed_dim=self.embed_dim,
                 num_heads=self.num_heads,
+                has_outproj=False,
                 causal=True,
             )
         
