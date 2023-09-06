@@ -25,7 +25,7 @@ class CosformerAttention(nn.Module):
         super().__init__()
         self.embed_dim = embed_dim
         self.kdim = kdim if kdim is not None else embed_dim
-        self.vdim = vdim if kdim is not None else embed_dim
+        self.vdim = vdim if vdim is not None else embed_dim
         self.num_heads = num_heads
         self.has_outproj = has_outproj
         self.act_fun = self.get_act_fun(act_fun)

@@ -75,7 +75,7 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_predictor_length': args.predictor_length,
-        'prelin_predictor_backend': args.predictor_backend,
+        'perlin_predictor_backend': args.predictor_backend,
         'perlin_n_hashs': args.n_hashs,
     }
     return kwargs

@@ -165,10 +165,11 @@ class PerlinAttention(nn.Module):
         )
         if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
             from ..cosformer import CosformerAttention
+            # cosformer not supported because of v dim does not supports custom
             self.cosformer = CosformerAttention(
-                embed_dim=self.embed_dim,
-                vdim=self.embed_dim*2,
-                num_heads=self.num_heads,
+                embed_dim=self.all_head_size,
+                vdim=self.all_head_size*2,
+                num_heads=self.num_attention_heads,
                 has_outproj=False,
                 causal=True,
             )
@@ -459,14 +460,32 @@ class PerlinAttention(nn.Module):
                     else:
                         PRECISION_PERF = torch.float32
                     with torch.autocast('cuda', PRECISION_PERF):
-                        last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
-                            last_state,
-                            "performer->performer_context_layer",
-                            self.performer,
-                            batch_to(q_for_atten, PRECISION_PERF), 
-                            batch_to(k_for_atten, PRECISION_PERF), 
-                            batch_to(v_for_atten, PRECISION_PERF),
-                        )
+                        if self.pconfig.attention_predictor_backend == 'performer':
+                            last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
+                                last_state,
+                                "performer->performer_context_layer",
+                                self.performer,
+                                batch_to(q_for_atten, PRECISION_PERF), 
+                                batch_to(k_for_atten, PRECISION_PERF), 
+                                batch_to(v_for_atten, PRECISION_PERF),
+                            )
+                        elif self.pconfig.attention_predictor_backend == 'cosformer':
+                            _q = batch_to(q_for_atten, PRECISION_PERF)
+                            _k = batch_to(k_for_atten, PRECISION_PERF)
+                            _v = batch_to(v_for_atten, PRECISION_PERF)
+                            _N, _H, _T, _HID = _q.shape
+                            _q = _q.permute(0, 2, 1, 3).reshape(_N, _T, _H*_HID).permute(1, 0, 2)
+                            _N, _H, _T, _HID = _k.shape
+                            _k = _k.permute(0, 2, 1, 3).reshape(_N, _T, _H*_HID).permute(1, 0, 2)
+                            _N, _H, _T, _HID = _v.shape
+                            _v = _v.permute(0, 2, 1, 3).reshape(_N, _T, _H*_HID).permute(1, 0, 2)
+                            t = self.cosformer(_q, _k, _v)
+                            print(t.shape)
+                            performer_context_layer = t.reshape(_T, _N, _H, _HID).permute(1, 2, 0, 3)
+                            print('hello')
+                        else:
+                            raise Exception(self.pconfig.attention_predictor_backend)
+                        
                     if q_type != performer_context_layer.dtype:
                         performer_context_layer = performer_context_layer.to(q_type)
                     assert performer_context_layer.shape[-2] == q.shape[-2], f"{performer_context_layer.shape} == {q.shape}, {v_for_atten.shape}"
