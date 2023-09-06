@@ -52,12 +52,12 @@ def main(
                 'partial_attn': partial_attn.cpu(),
             })
     
-    os.makedirs(f"./plots/visualize_glue", exist_ok=True)
+    os.makedirs(f"./plots/visualize_glue/k{kwargs['perlin_k']}", exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
         # token_length = batch['input_ids'].shape[-1]
         img = process_batch_index(attentions, i, token_length)
-        path = f"./plots/visualize_glue/{i}.png"
+        path = f"./plots/visualize_glue/k{kwargs['perlin_k']}/{i}.png"
         cv2.imwrite(path, img)
         print('processed', path)
     
