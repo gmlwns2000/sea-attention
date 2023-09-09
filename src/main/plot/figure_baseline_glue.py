@@ -1,9 +1,12 @@
 import json
 import matplotlib.pyplot as plt
 import os
+import matplotlib
 
 import numpy as np
 plt.style.use('seaborn-bright')
+
+matplotlib.rcParams['font.family'] = 'Noto Sans'
 
 COLORS = {
     'perlin': 'magenta',
@@ -12,6 +15,7 @@ COLORS = {
     'scatterbrain': 'gray',
     'sinkhorn': 'orange',
     'synthesizer': 'yellow',
+    'cosformer': 'skyblue',
 }
 METHOD_NAMES = {
     'perlin': 'Ours',
@@ -20,6 +24,7 @@ METHOD_NAMES = {
     'scatterbrain': 'ScatterBrain',
     'sinkhorn': 'Sinkhorn',
     'synthesizer': 'Synthesizer',
+    'cosformer': 'Cosformer',
 }
 MARKERS = {
     'perlin': '*'
@@ -73,6 +78,11 @@ def import_jn_format(path):
                 'metric': metric,
                 'method': 'performer'
             }
+        elif method == 'cosformer':
+            ret['cosformer'] = {
+                'metric': metric,
+                'method': 'cosformer',
+            }
         else:
             k = v['k']
             ret[f'{method},k:{k}'] = {
@@ -96,10 +106,11 @@ def import_benchmark(path):
 
 data_cola = import_jn_format('./plots/main/bert_cola_ablation.json')
 data_mrpc = import_jn_format('./plots/main/bert_mrpc_ablation.json')
+data_mnli = import_jn_format('./plots/main/bert_mnli_ablation.json')
 metrics = {
     'cola': data_cola,
     'mrpc': data_mrpc,
-    'mnli': data_mrpc,
+    'mnli': data_mnli,
 }
 benchmarks = import_benchmark('./plots/main/benchmark_bert_ablation/data.json')
 
@@ -127,7 +138,7 @@ def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms'):
         ax.scatter(xs, ys, label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'), s=MARKER_SIZE.get(method, MARKER_SIZE['default']))
         plot_data.append([xs, ys])
     ax.grid(True)
-    ax.set_xlabel(x_label)
+    # ax.set_xlabel(x_label, fontweight=500)
     return plot_data
 
 ncols = len(metrics.keys())
@@ -135,23 +146,23 @@ nrows = 2
 
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.5*ncols)
-fig.set_figheight(2.5*nrows+1)
+fig.set_figheight(2.2*nrows+1)
 # fig.set_facecolor('black')
-fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy')
+fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy', fontsize=14, fontweight=500)
 
 all_plot_data = []
 for isubset, subset in enumerate(metrics.keys()):
     ax = axs[0, isubset]
-    ax.set_title(f'Memory / {NAMES[subset]}', fontsize=10)
+    ax.set_title(f'Memory (MB) ({NAMES[subset]})', fontsize=12, fontweight=500)
     plot_data_memory = render_fig(ax, metrics[subset], benchmarks, 'mem', 'MB')
     
     ax = axs[1, isubset]
-    ax.set_title(f'Latency / {NAMES[subset]}', fontsize=10)
+    ax.set_title(f'Latency (ms) ({NAMES[subset]})', fontsize=12, fontweight=500)
     plot_data_latency = render_fig(ax, metrics[subset], benchmarks, 'latency', 'ms')
     all_plot_data.append([plot_data_memory, plot_data_latency])
 
 handles, labels = ax.get_legend_handles_labels()
-fig.subplots_adjust(bottom=0.135, hspace=0.4)
+fig.subplots_adjust(bottom=0.115, hspace=0.32)
 fig.legend(handles, labels, loc='lower center', ncol=len(labels))
 # fig.tight_layout()
 
@@ -169,7 +180,10 @@ for imethod, method in enumerate(methods):
         for i in all_plot_data # for each subset
     ]
     # print(imethod, method, data)
-    data = np.array(data)
+    try:
+        data = np.array(data)
+    except ValueError:
+        print(method, data)
     print(data.shape)
     # scale latency x axis
     data[:,1,0,:] = data[:,1,0,:] * 10
@@ -181,7 +195,7 @@ for imethod, method in enumerate(methods):
 
 # plt.legend()
 plt.grid()
-plt.xlabel('Average 10*Lat.+Mem.')
-plt.ylabel('Average Metric')
+plt.xlabel('Average 10*Lat.+Mem.', fontsize=12, fontweight=500)
+plt.ylabel('Average Metric', fontsize=12, fontweight=500)
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.pdf'), bbox_inches='tight')

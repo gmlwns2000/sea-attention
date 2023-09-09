@@ -4,6 +4,9 @@ import os
 
 import numpy as np
 plt.style.use('seaborn-bright')
+import matplotlib
+
+matplotlib.rcParams['font.family'] = 'Noto Sans'
 
 METHOD_NAMES = {
     'perlin': 'Ours',
@@ -78,19 +81,19 @@ ncols = 3
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.5*ncols)
 fig.set_figheight(3*nrows)
-fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2', fontweight=1000)
+fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2', fontsize=12, fontweight=500)
 
 ax = axs[1]
-ax.set_title(f'Memory', fontsize=10)
+ax.set_title(f'Memory', fontsize=11, fontweight=500)
 plot_data_mem = render_plot(ax, metrics, benchmarks, 'mem', 'MB')
 
 ax = axs[2]
-ax.set_title(f'Latency', fontsize=10)
+ax.set_title(f'Latency', fontsize=11, fontweight=500)
 plot_data_latency = render_plot(ax, metrics, benchmarks, 'latency', 'ms')
 
 ax = axs[0]
 plot_data = [plot_data_mem, plot_data_latency]
-ax.set_title(f'Overall Efficiency', fontsize=10)
+ax.set_title(f'Overall Efficiency', fontsize=11, fontweight=500)
 for imethod, method in enumerate(methods):
     data = [
         i[imethod]
@@ -111,8 +114,8 @@ for imethod, method in enumerate(methods):
         label=METHOD_NAMES[method]
     )
     ax.grid(True)
-    ax.set_xlabel('10*Lat.+Mem.')
-    ax.set_ylabel('PPL. (Lower is better)')
+    ax.set_xlabel('10*Lat.+Mem.', fontweight=500)
+    ax.set_ylabel('PPL. (Lower is better)', fontweight=500)
 
 handles, labels = ax.get_legend_handles_labels()
 fig.subplots_adjust(top=0.82, bottom=0.27, wspace=0.3)

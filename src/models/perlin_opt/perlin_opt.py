@@ -183,6 +183,7 @@ class OPTAttention(nn.Module):
                 max_seq_len=2048,
                 dropout=dropout,
             )
+        else:
             warnings.warn("sinkhorn ignored")
             
         ### cosformer
@@ -194,6 +195,8 @@ class OPTAttention(nn.Module):
                 has_outproj=False,
                 causal=True,
             )
+        else:
+            warnings.warn("cosformer ignored")
         
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
@@ -1200,7 +1203,7 @@ class OPTDecoder(OPTPreTrainedModel):
             if output_attentions:
                 all_self_attns += (layer_outputs[1],)
 
-        if hidden_states.device != swap_in_device:
+        if hidden_states.device != swap_in_device and swap_in_device is not None:
             hidden_states = batch_to(hidden_states, swap_in_device)
         
         op_dtype = hidden_states.dtype
