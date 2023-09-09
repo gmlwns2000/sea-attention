@@ -24,6 +24,7 @@ class PerlinAttentionConfig:
     attention_predictor_comp_book_size: int = 8
     attention_predictor_comp_patch_size: int = 16
     attention_predictor_comp_patch_count: int = 16
+    attention_predictor_enc_per_layer: bool = False
     layerwise: bool = False
     lora_r: int = 32
     lora_enabed: bool = False

@@ -37,6 +37,7 @@ parser.add_argument('--n-steps', type=int, default=-1)
 parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
+parser.add_argument('--enc-per-layer', action='store_true', default=False)
 parser.add_argument('--load-checkpoint', type=str, default=None)
 parser.add_argument('--predictor-backend', type=str, default='performer', choices=['performer', 'cosformer'])
 
@@ -141,6 +142,8 @@ if args.n_hashs > 0:
 if args.n_steps > 0:
     cmd.append('--num-steps')
     cmd.append(str(int(args.n_steps)))
+if args.enc_per_layer:
+    cmd.append('--enc-per-layer')
 
 print('cmd:', ' '.join(cmd))
 

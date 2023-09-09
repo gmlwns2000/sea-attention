@@ -55,6 +55,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--predictor-length', default=128, type=int)
     parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
+    parser.add_argument('--enc-per-layer', action='store_true', default=False)
     return parser
 
 def parse_perlin_model_options(args):
@@ -77,6 +78,7 @@ def parse_perlin_model_options(args):
         'perlin_predictor_length': args.predictor_length,
         'perlin_predictor_backend': args.predictor_backend,
         'perlin_n_hashs': args.n_hashs,
+        'perlin_enc_per_layer': args.enc_per_layer,
     }
     return kwargs
 
@@ -99,6 +101,7 @@ class BaseTrainer:
         perlin_predictor_length = 128,
         perlin_predictor_backend = 'performer',
         perlin_n_hashs = 8,
+        perlin_enc_per_layer = False,
         compile = False,
         **kwargs,
     ) -> None:
@@ -112,6 +115,7 @@ class BaseTrainer:
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
+        self.perlin_enc_per_layer = perlin_enc_per_layer
         
         self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
@@ -133,6 +137,7 @@ class BaseTrainer:
             attention_predictor_method = perlin_attention_predictor_method,
             attention_predictor_length=perlin_predictor_length,
             attention_predictor_backend=perlin_predictor_backend,
+            attention_predictor_enc_per_layer=perlin_enc_per_layer,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
             compile = compile,
@@ -189,10 +194,11 @@ class BaseTrainer:
         name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
         name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
         name_predictor_backend = f'_pw{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else ''
+        name_enc_per_layer = f'_epl' if self.perlin_enc_per_layer else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}{name_predictor_length}{name_predictor_backend}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}{name_predictor_length}{name_predictor_backend}{name_enc_per_layer}'
         return name
 
     def get_global_config(self):

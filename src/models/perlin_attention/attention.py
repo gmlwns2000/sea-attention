@@ -482,7 +482,7 @@ class PerlinAttention(nn.Module):
                             t = self.cosformer(_q, _k, _v)
                             print(t.shape)
                             performer_context_layer = t.reshape(_T, _N, _H, _HID).permute(1, 2, 0, 3)
-                            print('hello')
+                            # print('hello')
                         else:
                             raise Exception(self.pconfig.attention_predictor_backend)
                         
@@ -523,8 +523,9 @@ class PerlinAttention(nn.Module):
                 if self.pconfig.attention_predictor_method == 'mlp':
                     with timer("predictor.enc"):
                         raise_if_nan(performer_value)
-                        ENC_PER_LAYER = False
-                        if ENC_PER_LAYER:
+                        # ENC_PER_LAYER = False
+                        if self.pconfig.attention_predictor_enc_per_layer:
+                            # print('hello')
                             _N, _H, _T, _D = performer_value.shape
                             t_enc_x = performer_value.permute(0, 2, 1, 3).reshape(_N, _T, _H*_D)
                             t_attention_predictor = self.attention_predictor_enc_per_layer(t_enc_x)
