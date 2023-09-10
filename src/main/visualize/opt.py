@@ -13,15 +13,17 @@ from .common import (
     gather_fixed_batch,
     process_batch_index,
 )
+from . import common
 
 def main(
     dataset = 'wikitext2',
+    model = 'opt',
     checkpoint_path = None,
     evaluate = False,
     **kwargs
 ):
     trainer = OptTrainer(
-        model='opt',
+        model=model,
         subset=dataset,
         **kwargs,
     )
@@ -55,6 +57,12 @@ def main(
     
     teacher = trainer.base_model
     student = trainer.model
+    
+    for module in student.modules():
+        if isinstance(module, perlin_opt.OPTAttention):
+            module.checkout_intermediates = True
+            module.checkout_perlin_output = True
+            module.swap_out_device = torch.device('cuda')
     
     teacher.eval()
     student.eval()
@@ -96,7 +104,8 @@ def main(
     for i in range(len(batch['input_ids'])):
         token_length = batch['input_ids'].shape[-1]
         # token_length = batch['input_ids'].shape[-1]
-        img = process_batch_index(attentions, i, token_length)
+        common.POOL = 8
+        img = process_batch_index(attentions, i, token_length, gs=[0.2,0.2,0.2,0.2])
         layer_dir = f"./plots/visualize_opt/{dataset}_{i}"
         os.makedirs(layer_dir, exist_ok=True)
         assert (img.shape[0] % num_layers) == 0, f"{img.shape}"
@@ -113,6 +122,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', type=str, default=None)
     parser.add_argument('--evaluate', action='store_true')
     parser.add_argument('--max-seq-len', type=int, default=2048)
+    parser.add_argument('--model', type=str, default='opt')
     add_perlin_model_options(parser)
     
     args = parser.parse_args()
@@ -124,6 +134,7 @@ if __name__ == '__main__':
         'checkpoint_path': args.checkpoint,
         'evaluate': args.evaluate,
         'max_seq_len': args.max_seq_len,
+        'model': args.model
     })
     
     main(**kwargs)

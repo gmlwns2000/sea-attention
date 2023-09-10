@@ -4,19 +4,39 @@ import os
 import warnings
 default = lambda x, y: x if x is not None else y
 
+import os
 import torch
-from torch import nn
+if 'TORCH_NUM_THREAD' in os.environ:
+    n_threads = int(os.environ['TORCH_NUM_THREAD'])
+    torch.set_num_threads(n_threads)
+    print('TORCH_NUM_THREAD', n_threads)
 
-from ..models import perlin_attention
-from ..models import perlin_bert
-from ..models import perlin_opt
-from ..models.perlin_bert.compat import migrate_state_dict
-from ..utils import seed
-from .glue_trainer import Trainer as BaseGlueTrainer
-from .glue_trainer import task_to_batch_size
-from .lra_trainer import Trainer as BaseLraTrainer
-from .opt_trainer import Trainer as BaseOptTrainer
-from .opt_trainer import TrainerConfig as OptTrainerConfig
+from torch import nn
+# torch.autograd.set_detect_anomaly(True)
+
+# from ..models import perlin_attention
+# from ..models import perlin_bert
+# from ..models import perlin_opt
+# from ..models.perlin_bert.compat import migrate_state_dict
+# from ..utils import seed
+# from .glue_trainer import Trainer as BaseGlueTrainer
+# from .glue_trainer import task_to_batch_size
+# from .lra_trainer import Trainer as BaseLraTrainer
+# from .opt_trainer import Trainer as BaseOptTrainer
+# from .opt_trainer import TrainerConfig as OptTrainerConfig
+
+from src.models import perlin_attention
+from src.models import perlin_bert
+from src.models import perlin_opt
+from src.models.perlin_bert.compat import migrate_state_dict
+from src.utils import seed
+from src.trainer.glue_trainer import Trainer as BaseGlueTrainer
+from src.trainer.glue_trainer import task_to_batch_size
+from src.trainer.lra_trainer import Trainer as BaseLraTrainer
+from src.trainer.opt_trainer import Trainer as BaseOptTrainer
+from src.trainer.opt_trainer import TrainerConfig as OptTrainerConfig
+
+import deepspeed
 
 bool2int = lambda x: 1 if x else 0
 
@@ -41,6 +61,10 @@ def add_perlin_model_options(parser):
     parser.add_argument('--colsel-save', action='store_true', default=False)
     parser.add_argument('--no-partial-scaler', action='store_true', default=False)
 
+    parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--predictor-backend', type=str, default='performer')
+    parser.add_argument('--n-hashs', default=8, type=int)
+    parser.add_argument('--enc-per-layer', action='store_true', default=False)
     return parser
 
 def parse_perlin_model_options(args):
@@ -66,6 +90,10 @@ def parse_perlin_model_options(args):
         "perlin_colsel_per_head_col" : args.colsel_per_head_col,
         "perlin_colsel_save" : args.colsel_save,
         "perlin_partial_attention_scaler" : not args.no_partial_scaler
+        'perlin_predictor_length': args.predictor_length,
+        'perlin_predictor_backend': args.predictor_backend,
+        'perlin_n_hashs': args.n_hashs,
+        'perlin_enc_per_layer': args.enc_per_layer,
     }
     return kwargs
 
@@ -76,7 +104,7 @@ class BaseTrainer:
         perlin_k_flatten = True,
         perlin_k_flatten_dim = 'batch',
         perlin_layerwise = False,
-        perlin_lora = True,
+        perlin_lora = False,
         attention_method = 'perlin',
         perlin_attention_predictor_method = 'mlp',
         perlin_performer_nb_feature_factor = 1,
@@ -91,6 +119,11 @@ class BaseTrainer:
         perlin_colsel_per_head_col = -1,
         perlin_colsel_save = False,
         perlin_partial_attention_scaler = True,
+        perlin_predictor_length = 128,
+        perlin_predictor_backend = 'performer',
+        perlin_n_hashs = 8,
+        perlin_enc_per_layer = False,
+        compile = False,
         **kwargs,
     ) -> None:
         self.attention_method = attention_method
@@ -103,6 +136,7 @@ class BaseTrainer:
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
+        self.perlin_enc_per_layer = perlin_enc_per_layer
         
         self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
@@ -116,9 +150,13 @@ class BaseTrainer:
         self.perlin_colsel_save = perlin_colsel_save
 
         self.partial_attention_scaler = perlin_partial_attention_scaler
+        self.perlin_predictor_length = perlin_predictor_length
+        self.perlin_predictor_backend = perlin_predictor_backend
+        self.perlin_n_hashs = perlin_n_hashs
         
         # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
+            reformer_n_hashs = perlin_n_hashs,
             performer_nb_factor = perlin_performer_nb_feature_factor,
             k = perlin_k,
             k_flatten = perlin_k_flatten,
@@ -126,6 +164,9 @@ class BaseTrainer:
             random_lookup = perlin_random_lookup,
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
+            attention_predictor_length=perlin_predictor_length,
+            attention_predictor_backend=perlin_predictor_backend,
+            attention_predictor_enc_per_layer=perlin_enc_per_layer,
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
             # NOTE JIN added colsel
@@ -135,6 +176,7 @@ class BaseTrainer:
             colsel_per_head_cnt_limit = self.perlin_colsel_per_head_col,
             colsel_save = self.perlin_colsel_save,
             partial_attention_scaler = self.partial_attention_scaler
+            compile = compile,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -149,18 +191,31 @@ class BaseTrainer:
                 assert not self.perlin_token_merging, "opt does not support this!"
                 module.attention_method = self.attention_method
         
-        if self.perlin_layerwise:
-            for name, param in model.named_parameters():
-                if 'perlin' in name:
-                    param.requires_grad = True
-                else:
-                    param.requires_grad = False
+        # if self.perlin_layerwise:
+        #     for name, param in model.named_parameters():
+        #         if 'perlin' in name:
+        #             param.requires_grad = True
+        #         else:
+        #             param.requires_grad = False
 
+        #     for module in model.modules():
+        #         if isinstance(module, perlin_attention.PerlinSelfAttention):
+        #             if not self.perlin_lora: # activate QKV
+        #                 for p in module.parameters():
+        #                     p.requires_grad = True
+        
+        if self.perlin_layerwise:
             for module in model.modules():
-                if isinstance(module, perlin_attention.PerlinSelfAttention):
-                    if not self.perlin_lora: # activate QKV
-                        for p in module.parameters():
-                            p.requires_grad = True
+                if isinstance(module, perlin_opt.OPTDecoderLayer):
+                    module.train_layerwise = True
+                    print('layerwise patch', type(module))
+            if self.perlin_lora:
+                for name, param in model.named_parameters():
+                    if 'perlin' in name:
+                        param.requires_grad = True
+                    else:
+                        param.requires_grad = False
+                    # print(name, param.requires_grad)
         if self.attention_method == 'bigbird':
             global BIGBIRD_LAYER_ID
             for module in model.modules():
@@ -180,11 +235,14 @@ class BaseTrainer:
         name_colsel = f"_colsel_{self.perlin_colsel_method}_maskp{bool2int(self.perlin_colsel_mask_in_probs)}" if self.perlin_colsel else ''
         name_colsel += f"_perhead{self.perlin_colsel_per_head_col}" if (self.perlin_colsel_per_head_col>-1) else ''
         name_scaler = f"pscaler{bool2int(self.partial_attention_scaler)}" if not self.partial_attention_scaler else ''
+        name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
+        name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
+        name_predictor_backend = f'_pw{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else ''
+        name_enc_per_layer = f'_epl' if self.perlin_enc_per_layer else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_colsel}{name_scaler}'
-
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_colsel}{name_scaler}{name_nhash}{name_predictor_length}{name_predictor_backend}{name_enc_per_layer}'
         return name
 
     def get_global_config(self):
@@ -287,13 +345,20 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         model: str = 'opt',
         subset: str = 'wikitext2',
         disable_amp: bool = False,
+        disable_compile: bool = False,
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
         epochs: int = None,
+        num_steps: int = None,
         max_seq_len: int = None,
+        eval_steps: int = None,
+        wandb_steps: int = None,
+        cmd_args: object = None,
+        deepspeed: bool = False,
+        kd_checkpointing: bool = False,
         **kwargs
     ):
-        BaseTrainer.__init__(self, **kwargs)
+        BaseTrainer.__init__(self, compile=not disable_compile, **kwargs)
         
         model = {
             'opt': 'opt-125m',
@@ -302,23 +367,72 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         model_config = {
             'opt-125m': {
                 'wikitext2': 'Aalaa/opt-125m-wikitext2'
+            },
+            'opt-350m': {
+                'wikitext2': 'lnair/opt-350m-wikitext2'
+            },
+            'opt-1.3b': {
+                'wikitext2': 'lnair/opt-1.3b-wikitext2'
+            },
+            'opt-2.7b': {
+                'wikitext2': 'lnair/opt-2.7b-wikitext2'
             }
         }[model][subset]
         
-        BaseOptTrainer.__init__(self, OptTrainerConfig(
-            experiment_name=self.format_exp(f'{model}_{subset}'),
-            model_cls=perlin_opt.OPTForCausalLM,
-            model_config=model_config,
-            amp_enabled=not disable_amp,
-            epochs=epochs if epochs is not None else 100,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            gradient_checkpointing=gradient_checkpointing,
-            max_seq_len=max_seq_len,
-            lr_low_scale=0.1 if self.attention_method == 'perlin' else 1.0,
-            additional_config=perlin_attention.get_default_config().to_json(),
-        ))
+        if eval_steps is None:
+            eval_steps = {
+                'opt-125m': 150,
+                'opt-350m': 100,
+                'opt-1.3b': 100,
+                'opt-2.7b': 100,
+                # 'opt-125m': 1,
+                # 'opt-350m': 1,
+                # 'opt-1.3b': 1,
+                # 'opt-2.7b': 1,
+            }[model]
+        if wandb_steps is None:
+            # NOTE: freqenct wandb step is okay, because we use 32 batchsize on deepspeed
+            wandb_steps = {
+                'opt-125m': 1,
+                'opt-350m': 1,
+                'opt-1.3b': 1,
+                'opt-2.7b': 1,
+            }[model]
+        if num_steps is None:
+            num_steps = {
+                'wikitext2': 10000,
+            }[subset]
+        
+        def on_model_init():
+            print('on model init')
+            self.apply_model_options(self.model)
+        
+        BaseOptTrainer.__init__(self, 
+            OptTrainerConfig(
+                experiment_name=self.format_exp(f'{model}_{subset}'),
+                model_cls=perlin_opt.OPTForCausalLM,
+                model_config=model_config,
+                amp_enabled=not disable_amp,
+                num_steps=num_steps,
+                gradient_accumulation_steps=gradient_accumulation_steps,
+                gradient_checkpointing=gradient_checkpointing,
+                max_seq_len=max_seq_len,
+                lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
+                lr_low_scale=0.2 if self.attention_method == 'perlin' else 1.0,
+                additional_config=perlin_attention.get_default_config().to_json(),
+                eval_steps=eval_steps,
+                wandb_steps=wandb_steps,
+                kd_checkpointing=kd_checkpointing,
+                on_model_init=on_model_init,
+            ), 
+            skip_init_loaders=kwargs.get('skip_init_loaders', False), 
+            deepspeed=deepspeed,
+            cmd_args=cmd_args,
+        )
         
         self.apply_model_options(self.model)
+
+OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b']
 
 if __name__ == '__main__':
 
@@ -332,15 +446,23 @@ if __name__ == '__main__':
     parser.add_argument('--model', default='bert', type=str)
     parser.add_argument('--subset', default=None, type=str)
     parser.add_argument('--epochs', default=None, type=int)
+    parser.add_argument('--num-steps', default=None, type=int)
     parser.add_argument('--max-seq-len', default=32000, type=int)
     parser.add_argument('--load-checkpoint', default=None, type=str)
     parser.add_argument('--load-only-additionals', action='store_true')
     
+    parser.add_argument('--deepspeed-enable', action='store_true', default=False)
     parser.add_argument('--gradient-checkpointing', action='store_true', default=False)
     parser.add_argument('--gradient-accumulation-steps', default=None, type=int)
     parser.add_argument('--disable-amp', action='store_true', default=False)
+    parser.add_argument('--disable-compile', action='store_true', default=False)
+    parser.add_argument('--eval-steps', default=None, type=int)
+    parser.add_argument('--local_rank', default=-1, type=int)
+    parser.add_argument('--kd-checkpointing', action='store_true', default=False)
     
     add_perlin_model_options(parser)
+    
+    parser = deepspeed.add_config_arguments(parser)
     
     args = parser.parse_args()
     
@@ -363,7 +485,7 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         assert args.model in ['bert']
     elif args.dataset == 'wikitext2':
-        assert args.model in ['opt']
+        assert args.model in OPT_MODELS
     else:
         raise Exception()
     
@@ -371,10 +493,15 @@ if __name__ == '__main__':
         'model': args.model,
         'subset':args.subset,
         'epochs': args.epochs,
+        'num_steps': args.num_steps,
         'gradient_checkpointing':args.gradient_checkpointing,
         'gradient_accumulation_steps':args.gradient_accumulation_steps,
         'disable_amp': args.disable_amp,
+        'disable_compile': args.disable_compile,
         'max_seq_len': args.max_seq_len,
+        'eval_steps': args.eval_steps,
+        'deepspeed': args.deepspeed_enable,
+        'kd_checkpointing': args.kd_checkpointing,
     }
     kwargs.update(parse_perlin_model_options(args))
     
@@ -384,9 +511,10 @@ if __name__ == '__main__':
     elif args.dataset == 'lra':
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 1)
         trainer = LraTrainer(**kwargs)
-    elif args.model in ['opt']:
+    elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
         assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
+        kwargs['cmd_args'] = args
         trainer = OptTrainer(**kwargs)
     else:
         raise Exception()

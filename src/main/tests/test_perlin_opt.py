@@ -1,4 +1,4 @@
-from ...models import perlin_opt
+from ...models import perlin_opt, perlin_attention
 import transformers
 import torch
 import os
@@ -10,11 +10,13 @@ from matplotlib import cm
 
 model_config = 'facebook/opt-125m'
 
+perlin_attention.get_default_config().k = 64
 model = perlin_opt.OPTForCausalLM.from_pretrained(model_config)
 for module in model.modules():
     if isinstance(module, perlin_opt.OPTAttention):
-        module.attention_method = 'none'
+        # module.attention_method = 'none'
         # module.attention_method = 'reformer'
+        module.attention_method = 'perlin'
 
 tokenizer = transformers.AutoTokenizer.from_pretrained(model_config)
 input_ids = tokenizer(
@@ -94,14 +96,14 @@ def imsave(img: torch.Tensor, filename):
     
     print('saved', path)
 
-render_attention = False
+render_attention = True
 if render_attention:
     for ilayer, atten_layer in enumerate(output.attentions):
         for ihead, atten_head in enumerate(atten_layer[0]):
             os.makedirs(os.path.join(root, f'attention/l{ilayer}'), exist_ok=True)
             imsave(atten_head, f'attention/l{ilayer}/h{ihead}.png')
 
-test_generation = True
+test_generation = False
 if test_generation:
     prompt = "Hey, are you conscious? Can you talk to me?"
     inputs = tokenizer(prompt, return_tensors="pt")

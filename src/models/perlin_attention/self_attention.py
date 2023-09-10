@@ -16,6 +16,8 @@ from ..common.lora import (
 from ..hf_bert import BertConfig
 from .attention import PerlinAttention, PerlinAttentionOutput
 from .config import PerlinAttentionConfig, get_default_config
+# import torch.utils.checkpoint
+from ...utils import checkpoint
 
 default_lazy = lambda x, d: d() if x is None else x
 
@@ -52,6 +54,14 @@ class PerlinSelfAttention(nn.Module):
             config=config,
             perlin_config=perlin_config,
         )
+        # if self.pconfig.compile:
+        #     self._attention_unwrap = self.attention
+        #     # self.attention = torch.compile(self.attention)
+        
+        self._gradient_checkpointing = False
+        
+        self.checkout_last_attention_probs = False
+        self.last_attention_probs = None
 
     def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim == 4: return x
@@ -76,14 +86,18 @@ class PerlinSelfAttention(nn.Module):
         last_state: object = None,
     ) -> Tuple[torch.Tensor]:
         if self.pconfig.layerwise and self.training:
-            hidden_states = hidden_states.detach()
+            if hidden_states is not None:
+                hidden_states = hidden_states.detach()
+            else:
+                assert query_layer is not None
         
         t_key_layer = default_lazy(key_layer, lambda: lora_forward_linear(key, hidden_states))
+        # print('ff', t_key_layer.dtype, key_layer.dtype)
         key_layer = self.transpose_for_scores(lora_forward_lora(
             linear=key, 
             linear_x=t_key_layer, 
             lora=self.key_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_key_layer), 
             enabled=self.pconfig.lora_enabed
         ))
         if self.pconfig.lora_in_approx_enabled:
@@ -109,7 +123,7 @@ class PerlinSelfAttention(nn.Module):
             linear=value, 
             linear_x=t_value_layer, 
             lora=self.value_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_value_layer), 
             enabled=self.pconfig.lora_enabed
         ))
         if self.pconfig.lora_in_approx_enabled:
@@ -124,13 +138,21 @@ class PerlinSelfAttention(nn.Module):
             value_layer_for_atten = value_layer
         
         t_mixed_query_layer = default_lazy(query_layer, lambda: lora_forward_linear(query, hidden_states))
+        if self.pconfig.causal and self.pconfig.lora_enabed:
+            warnings.warn("causal opt does not use scaling in attention operator. it applied in query")
+            t_mixed_query_layer = t_mixed_query_layer * torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
         query_layer = self.transpose_for_scores(lora_forward_lora(
             linear=query, 
             linear_x=t_mixed_query_layer, 
             lora=self.query_lora, 
-            x=hidden_states, 
+            x=default_lazy(hidden_states, lambda: t_mixed_query_layer), 
             enabled=self.pconfig.lora_enabed
         ))
+        if self.pconfig.causal and self.pconfig.lora_enabed:
+            t_mixed_query_layer = t_mixed_query_layer / torch.tensor(self.attention_head_size**0.5, dtype=t_mixed_query_layer.dtype, device=t_mixed_query_layer.device)
+        # assert self.pconfig.lora_enabed
+        # assert self.query_lora.lora_a.requires_grad
+        # assert query_layer.requires_grad
         if self.pconfig.lora_in_approx_enabled:
             query_layer_for_atten = self.transpose_for_scores(lora_forward_lora(
                 linear=query, 
@@ -149,24 +171,90 @@ class PerlinSelfAttention(nn.Module):
         else:
             query_layer_for_atten = query_layer_for_score = query_layer
         
-        output = self.attention(
-            q=query_layer,
-            k=key_layer,
-            v=value_layer,
-            q_for_atten=query_layer_for_atten,
-            k_for_atten=key_layer_for_atten,
-            v_for_atten=value_layer_for_atten,
-            q_for_score=query_layer_for_score,
-            k_for_score=key_layer_for_score,
-            attention_mask=attention_mask,
-            attention_scores_truth=attention_scores_truth,
-            context_layer_truth=context_layer_truth,
-            last_state=last_state,
-        ) #type: PerlinAttentionOutput
-        self.last_attention_probs = output.partial_attention_probs
+        if self._gradient_checkpointing and self.training:
+            def custom_forward(
+                query_layer, key_layer, value_layer, 
+                query_layer_for_atten, key_layer_for_atten, value_layer_for_atten, 
+                query_layer_for_score, key_layer_for_score, 
+                attention_mask, attention_scores_truth, context_layer_truth, 
+                last_state
+            ):
+                output = self.attention(
+                    q=query_layer,
+                    k=key_layer,
+                    v=value_layer,
+                    q_for_atten=query_layer_for_atten,
+                    k_for_atten=key_layer_for_atten,
+                    v_for_atten=value_layer_for_atten,
+                    q_for_score=query_layer_for_score,
+                    k_for_score=key_layer_for_score,
+                    attention_mask=attention_mask,
+                    attention_scores_truth=attention_scores_truth,
+                    context_layer_truth=context_layer_truth,
+                    last_state=last_state,
+                ) #type: PerlinAttentionOutput
+                return (
+                    output.context_layer, 
+                    output.dense_attention_probs, 
+                    output.estimated_attention_probs, 
+                    output.estimated_attention_probs_m,
+                    output.key_for_score, 
+                    output.loss, 
+                    output.partial_attention_mask, 
+                    output.partial_attention_probs, 
+                    output.state,
+                )
+            (
+                context_layer, 
+                dense_attention_probs, 
+                estimated_attention_probs, 
+                estimated_attention_probs_m,
+                key_for_score, 
+                loss, 
+                partial_attention_mask, 
+                partial_attention_probs, 
+                state,
+            ) = checkpoint.checkpoint(custom_forward, 
+                query_layer, key_layer, value_layer, 
+                query_layer_for_atten, key_layer_for_atten, value_layer_for_atten, 
+                query_layer_for_score, key_layer_for_score, 
+                attention_mask, attention_scores_truth, context_layer_truth, 
+                last_state, 
+                use_reentrant=True,
+                preserve_rng_state=True,
+            )
+            output = PerlinAttentionOutput(
+                loss=loss,
+                context_layer=context_layer,
+                partial_attention_probs=partial_attention_probs,
+                partial_attention_mask=partial_attention_mask,
+                estimated_attention_probs=estimated_attention_probs,
+                estimated_attention_probs_m=estimated_attention_probs_m,
+                dense_attention_probs=dense_attention_probs,
+                key_for_score=key_for_score,
+                state=state
+            )
+        else:
+            output = self.attention(
+                q=query_layer,
+                k=key_layer,
+                v=value_layer,
+                q_for_atten=query_layer_for_atten,
+                k_for_atten=key_layer_for_atten,
+                v_for_atten=value_layer_for_atten,
+                q_for_score=query_layer_for_score,
+                k_for_score=key_layer_for_score,
+                attention_mask=attention_mask,
+                attention_scores_truth=attention_scores_truth,
+                context_layer_truth=context_layer_truth,
+                last_state=last_state,
+            ) #type: PerlinAttentionOutput
+            
+        if self.checkout_last_attention_probs:
+            self.last_attention_probs = output.partial_attention_probs
         
-        if self.pconfig.layerwise and self.training:
-            output.partial_attention_probs = output.partial_attention_probs.detach()
-            output.context_layer = output.context_layer.detach()
+        if self.pconfig.layerwise and self.pconfig.lora_enabed and self.training:
+            output._replace(partial_attention_probs = output.partial_attention_probs.detach())
+            output._replace(context_layer = output.context_layer.detach())
         
         return output

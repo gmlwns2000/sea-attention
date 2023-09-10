@@ -33,10 +33,6 @@ register_default_config(PerlinAttentionConfig(
 perlin = BertModel(config).to(device).eval()
 for module in perlin.modules():
     if isinstance(module, BertSelfAttention):
-        module.perlin_token_merging = False
-        module.perlin_token_merging_preserve_ratio = 0.2
-        module.perlin_token_merging_ratio = 0.5
-        module.perlin_token_merging_score_source = 'probs'
         module.attention_method = 'perlin'
 
 def set_benchmark(model, v):

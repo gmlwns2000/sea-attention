@@ -266,6 +266,7 @@ class Trainer:
 
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
+        # print(loss, flush=True)
         
         if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
             self.scaler.unscale_(self.optimizer)

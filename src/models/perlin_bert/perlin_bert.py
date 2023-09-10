@@ -353,6 +353,15 @@ class BertSelfAttention(nn.Module):
             n_hashes=8,
             return_attn=False,
         )
+        
+        ### Cosformer
+        from ..cosformer import CosformerAttention
+        self.perlin_cosformer_atten = CosformerAttention(
+            embed_dim=self.all_head_size,
+            num_heads=self.num_attention_heads,
+            has_outproj=False,
+            causal=False,
+        )
 
         ### Longformer
         from ...models.perlin_bert.longformer_bert import BertLongformerSelfAttention
@@ -390,6 +399,36 @@ class BertSelfAttention(nn.Module):
         # self.perlin_performer_proj_updater.redraw_projections(q.device)
         with torch.autocast('cuda', torch.float32):
             performer_context_layer = self.perlin_self_attention.attention.performer(q, k, v)
+        performer_context_layer = performer_context_layer.to(q.dtype)
+        
+        if not self.benchmarking:
+            attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
+        else:
+            attention_probs = None
+        
+        performer_context_layer = performer_context_layer.permute(0, 2, 1, 3).contiguous()
+        new_context_layer_shape = performer_context_layer.size()[:-2] + (self.all_head_size,)
+        performer_context_layer = performer_context_layer.view(new_context_layer_shape)
+        
+        context_layer = performer_context_layer
+        
+        return context_layer, attention_probs
+
+    def forward_cosformer(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, attention_mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        N, H, T, HID = q.shape
+        v = v * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        k = k * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        q = q * (attention_mask[:,:,:1,:].transpose(-1, -2) > -1)
+        
+        # self.perlin_performer_proj_updater.redraw_projections(q.device)
+        with torch.autocast('cuda', torch.float32):
+            t = self.perlin_cosformer_atten(
+                q.permute(0, 2, 1, 3).reshape(N, T, H*HID).permute(1, 0, 2).to(torch.float32), 
+                k.permute(0, 2, 1, 3).reshape(N, T, H*HID).permute(1, 0, 2).to(torch.float32), 
+                v.permute(0, 2, 1, 3).reshape(N, T, H*HID).permute(1, 0, 2).to(torch.float32)
+            )
+            performer_context_layer = t.reshape(T, N, H, HID).permute(1, 2, 0, 3)
+        performer_context_layer = performer_context_layer.to(q.dtype)
         
         if not self.benchmarking:
             attention_probs = torch.zeros((N, H, T, T), dtype=performer_context_layer.dtype, device=performer_context_layer.device)
@@ -585,6 +624,7 @@ class BertSelfAttention(nn.Module):
                     value_layer,
                     mask = binary_mask
                 )
+            synthesizer_context_layer = synthesizer_context_layer.to(query_layer.dtype)
             
             synthesizer_context_layer = synthesizer_context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = synthesizer_context_layer.size()[:-2] + (self.all_head_size,)
@@ -889,6 +929,15 @@ class BertSelfAttention(nn.Module):
             context_layer = cosformer_context_layer
             attention_probs = cosformer_attn_probs
 
+        elif self.attention_method == 'cosformer':
+            context_layer, attention_probs = self.forward_cosformer(
+                q=query_layer, 
+                k=key_layer, 
+                v=value_layer, 
+                attention_mask=attention_mask,
+            )
+            
+            self.perlin_token_merging_attention_probs = None
             self.last_loss = 0
         elif self.attention_method == 'none':
             use_cache = past_key_value is not None
