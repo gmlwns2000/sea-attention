@@ -1,10 +1,12 @@
 import os
+import traceback
 import warnings
 from matplotlib import pyplot as plt
 import numpy as np
 import tqdm
 import transformers
 from datasets import load_dataset, load_metric
+from ..dataset.glue import get_dataloader, TASK_TO_VALID
 import random, copy
 import torch
 
@@ -15,20 +17,9 @@ from ..models import hf_bert as berts
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to, seed
 from ..dataset.wikitext import WikitextBatchLoader
+import torch.nn.functional as F
 
 import wandb
-
-task_to_keys = {
-    "cola": ("sentence", None),
-    "mnli": ("premise", "hypothesis"),
-    "mrpc": ("sentence1", "sentence2"),
-    "qnli": ("question", "sentence"),
-    "qqp": ("question1", "question2"),
-    "rte": ("sentence1", "sentence2"),
-    "sst2": ("sentence", None),
-    "stsb": ("sentence1", "sentence2"),
-    "wnli": ("sentence1", "sentence2"),
-}
 
 task_to_epochs = {
     "cola": 100,
@@ -55,53 +46,6 @@ task_to_batch_size = {
     "wnli": 32,
     "bert": 4,
 }
-
-task_to_valid = {
-    "cola": "validation",
-    "mnli": "validation_matched",
-    "mrpc": "test",
-    "qnli": "validation",
-    "qqp": "validation",
-    "rte": "validation",
-    "sst2": "validation",
-    "stsb": "validation",
-    "wnli": "validation",
-    "bert": "validation",
-}
-
-def get_dataloader(subset, tokenizer, batch_size, split='train'):
-    if subset == 'bert':
-        subset = "cola" #return dummy set
-    
-    dataset = load_dataset('glue', subset, split=split, cache_dir='./cache/datasets')
-    
-    sentence1_key, sentence2_key = task_to_keys[subset]
-
-    def encode(examples):
-        # Tokenize the texts
-        args = (
-            (examples[sentence1_key],) if sentence2_key is None else (examples[sentence1_key], examples[sentence2_key])
-        )
-        result = tokenizer(*args, padding=True, max_length=256, truncation=True)
-        # result = tokenizer(*args, padding="max_length", max_length=512, truncation=True)
-        # Map labels to IDs (not necessary for GLUE tasks)
-        # if label_to_id is not None and "label" in examples:
-        #     result["label"] = [(label_to_id[l] if l != -1 else -1) for l in examples["label"]]
-        return result
-    
-    if split.startswith('train'): #shuffle when train set
-        dataset = dataset.sort('label')
-        dataset = dataset.shuffle(seed=random.randint(0, 10000))
-    dataset = dataset.map(lambda examples: {'labels': examples['label']}, batched=True, batch_size=384)
-    dataset = dataset.map(encode, batched=True, batch_size=384)
-    dataset.set_format(type='torch', columns=['input_ids', 'token_type_ids', 'attention_mask', 'labels'])
-
-    dataloader = torch.utils.data.DataLoader(
-        dataset, 
-        batch_size=batch_size, 
-        num_workers=0,
-    )
-    return dataloader
 
 def get_base_model(dataset, only_tokenizer=False):
     checkpoint = {
@@ -139,7 +83,7 @@ def get_base_model(dataset, only_tokenizer=False):
     bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
     return bert, tokenizer
 
-BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+BF16 = torch.float16 if torch.cuda.is_bf16_supported() else torch.float16
 from ..utils import Metric
 
 class Trainer:
@@ -159,6 +103,7 @@ class Trainer:
         load_ignore_keys = ['perlin', 'pbert', 'permute'],
         gradient_checkpointing = False,
         gradient_accumulation_steps = 1,
+        wandb_configs = {}
     ) -> None:
         seed()
         
@@ -170,6 +115,7 @@ class Trainer:
         self.high_lr_names = high_lr_names
         self.using_kd = using_kd
         self.using_loss = using_loss
+        self.wandb_configs = wandb_configs
         
         self.amp_enabled = amp_enabled
         self.device = 0
@@ -185,7 +131,7 @@ class Trainer:
         self.base_model.to(self.device)
         
         self.reset_trainloader()
-        self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=task_to_valid[self.subset])
+        self.valid_loader = get_dataloader(subset, self.tokenizer, self.batch_size, split=TASK_TO_VALID[self.subset])
         
         assert model_cls is not None
         self.model = model_cls(self.base_model.config)
@@ -237,19 +183,22 @@ class Trainer:
         high_lr = self.high_lr_names
         if no_decay_keywords is not None and len(no_decay_keywords) > 0:
             no_decay += no_decay_keywords
-        set_normal = set([p for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
-        set_normal_no_wd = set([p for n, p in param_optimizer if any(nd in n for nd in no_decay)])
-        set_high = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
-        set_high_no_wd = set([p for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
+        set_normal = set([(n, p) for n, p in param_optimizer if (not any(nd in n for nd in no_decay))])
+        set_normal_no_wd = set([(n, p) for n, p in param_optimizer if any(nd in n for nd in no_decay)])
+        set_high = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and (not any(nd in n for nd in no_decay))])
+        set_high_no_wd = set([(n, p) for n, p in param_optimizer if any(nk in n for nk in high_lr) and any(nd in n for nd in no_decay)])
         set_normal = set_normal - set_high
         set_normal_no_wd = set_normal_no_wd - set_high_no_wd
+        
+        psort = lambda lst: list([item[1] for item in sorted(list(lst), key=lambda it: it[0])])
+        
         params = [
-            {'params': list(set_normal), 'weight_decay': weight_decay, 'lr': lr},
-            {'params': list(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
-            {'params': list(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
-            {'params': list(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
+            {'params': psort(set_normal), 'weight_decay': weight_decay, 'lr': lr},
+            {'params': psort(set_normal_no_wd), 'weight_decay': 0.0, 'lr': lr},
+            {'params': psort(set_high), 'weight_decay': weight_decay, 'lr': lr*10},
+            {'params': psort(set_high_no_wd), 'weight_decay': 0.0, 'lr': lr*10},
         ]
-
+        
         kwargs = {
             'lr':lr,
             'weight_decay':weight_decay,
@@ -283,9 +232,14 @@ class Trainer:
         loss_kd = 0
         if self.using_kd:
             for ilayer in range(len(output_base.hidden_states)):
-                loss_kd += torch.nn.functional.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
+                loss_kd += F.mse_loss(output_base.hidden_states[ilayer], output.hidden_states[ilayer])
             loss_kd = loss_kd / len(output_base.hidden_states) * 10
             assert len(output_base.hidden_states) > 0
+            loss_kd = loss_kd + F.kl_div(
+                F.log_softmax(output.logits, dim=-1), 
+                F.softmax(output_base.logits, dim=-1),
+                reduction='batchmean',
+            ) * 0.1
         
         loss_special = 0
         if hasattr(self.model, 'calc_loss_special'):
@@ -296,17 +250,18 @@ class Trainer:
         
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
-        # self.scaler.unscale_(self.optimizer)
-        # torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        # print(loss, flush=True)
         
-        if ((self.step + 1) % self.gradient_accumulation_steps) == 0:
+        if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
             self.scaler.step(self.optimizer)
             self.optimizer.zero_grad()
             self.scaler.update()
         
-        for module in self.model.modules():
-            if hasattr(module, 'redraw_projections'):
-                module.redraw_projections(self.device)
+            for module in self.model.modules():
+                if hasattr(module, 'redraw_projections'):
+                    module.redraw_projections(self.device)
         
         self.loss = loss.item()
         self.loss_details = {
@@ -345,7 +300,6 @@ class Trainer:
                     f'Lkd:{m.update(self.loss_details["loss_kd"], "loss_kd"):.4f}'
                 )
                 
-                
                 if ((istep+1) % self.eval_steps) == 0:
                     score = self.evaluate()
                     self.save()
@@ -353,16 +307,16 @@ class Trainer:
                     self.base_model.eval()
                     m = Metric()
                     
-                    wandb.log({'eval/score': score}, step=self.step)
+                    wandb.log({'eval/score': score}, step=int(self.step))
                 
                 if ((istep + 1) % 15) == 0:
                     wandb_data = {}
                     for k, v in self.loss_details.items():
                         wandb_data[f'train/{k}'] = v
                     wandb_data['train/epoch'] = (istep / len(pbar)) + self.epoch
-                    wandb.log(wandb_data, step=self.step)
+                    wandb.log(wandb_data, step=int(self.step))
                 
-                self.step += 1
+                self.step += 1 / self.gradient_accumulation_steps
     
     def evaluate(self, max_step=123456789, show_messages=True, model=None, split='valid'):
         if self.subset == 'bert':
@@ -416,17 +370,28 @@ class Trainer:
             'model': self.model.state_dict(),
             'base_model': self.base_model.state_dict(),
             'optimizer': self.optimizer.state_dict(),
+            'scaler': self.scaler.state_dict(),
+            'step': self.step,
         }, path)
+    
+    def migrate_state_dict(self, state_dict):
+        pass
     
     def load(self, path=None):
         try:
             if path is None:
                 path = self.checkpoint_path()
-            print(f'Trainer: load {path}')
             state = torch.load(path, map_location='cpu')
-            self.model.load_state_dict(state['model'])
+            print(f'Trainer: load {path} @ {state["step"] if "step" in state else None}')
+            model_state_dict = state['model']
+            model_state_dict = self.migrate_state_dict(model_state_dict)
+            self.model.load_state_dict(model_state_dict)
             self.base_model.load_state_dict(state['base_model'])
-            # self.optimizer.load_state_dict(state['optimizer'])
+            try:
+                self.optimizer.load_state_dict(state['optimizer'])
+            except Exception as ex:
+                traceback.print_exc()
+                warnings.warn(f"optimizer load is failed due to {ex}, however we will just ignore it")
             del state
         except Exception as ex:
             print('error while load', ex)
@@ -446,9 +411,10 @@ class Trainer:
                 "batch_size": self.batch_size,
                 "subset": self.subset,
                 "epochs": self.epochs,
+                "global_configs": self.wandb_configs,
             }
         )
-        wandb.watch(self.model, log='all')
+        # wandb.watch(self.model, log='all')
         
         for epoch in range(self.epochs):
             self.epoch = epoch
@@ -458,7 +424,7 @@ class Trainer:
             wandb.log({
                 'eval/score': valid_score,
                 'train/score': train_score,
-            }, step=self.step)
+            }, step=int(self.step))
             self.save()
 
 if __name__ == '__main__':

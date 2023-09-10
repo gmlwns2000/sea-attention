@@ -52,8 +52,8 @@ torch.cuda.synchronize()
 t_teacher = time.time() - t
 
 print(
-    output.last_hidden_state.shape, 
-    output_teacher.last_hidden_state.shape, 
+    output.last_hidden_state.shape,
+    output_teacher.last_hidden_state.shape,
     t_teacher, 
     t_bert, 
     t_bert / t_teacher,

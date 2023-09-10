@@ -27,3 +27,4 @@ wandb/
 *.csv
 
 src/utils/secrets.*
+plots/
