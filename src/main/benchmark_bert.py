@@ -1,4 +1,6 @@
+import copy
 from dataclasses import dataclass
+import math
 from matplotlib import pyplot as plt
 import torch.multiprocessing as mp
 import os, tqdm, gc
@@ -19,6 +21,7 @@ from torch import nn
 import json
 
 plt.style.use('seaborn-bright')
+plt.rcParams['font.family'] = 'Noto Sans'
 
 @dataclass
 class BenchConfig:
@@ -101,15 +104,15 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     device = torch.device('cuda')
 
     if bench_config.w is None:
-        pred_len = 128
+        pred_len = 64
         if bench_config.seq_len >= 2048:
-            pred_len = 256
+            pred_len = 128
         elif bench_config.seq_len >= 4096:
-            pred_len = 256
+            pred_len = 128
         elif bench_config.seq_len >= 8192:
-            pred_len = 512
+            pred_len = 256
         elif bench_config.seq_len >= 16384:
-            pred_len = 1024
+            pred_len = 512
     else:
         pred_len = bench_config.w
 
@@ -210,6 +213,7 @@ def exam_config(config: BenchConfig):
     proc.join()
     return q.get()
 
+# BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 
 def main_methods():
@@ -224,7 +228,7 @@ def measure_and_dump():
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
     ks = [2**x for x in range(3, 8)]
-    ks = [32,64,128,]
+    ks = [32, 64, 128,]
     # ts = [2048]
     # ks = [8]
     # ts = [2**x for x in range(13, 13)]
@@ -236,7 +240,8 @@ def measure_and_dump():
                 precision=precision,
                 method='perlin',
                 seq_len=t,
-                k=k
+                k=k,
+                trace=False,
             ))
             for t in ts
         ]
@@ -249,6 +254,7 @@ def measure_and_dump():
                 precision=precision,
                 method=method,
                 seq_len=t,
+                trace=False,
             ))
             for t in ts
         ]
@@ -301,7 +307,28 @@ def load_and_plot():
     ks = data['ks']
     
     def plot(filename, title, ylabel, baselines, perlins, ts, ks):
-        plt.clf()
+        plt.figure(figsize=(4.5,3.5))
+        
+        NAMES = {
+            'none': 'None',
+            'cosformer': 'Cosformer',
+            'performer': 'Performer',
+            'reformer': 'Reformer',
+            'scatterbrain': 'ScatterBrain',
+            'sinkhorn': 'Sinkhorn',
+            'synthesizer': 'Synthesizer',
+        }
+        
+        LINESTYLE = {
+            'none': '--',
+            'cosformer': ':',
+            'performer': ':',
+            'reformer': ':',
+            'scatterbrain': ':',
+            'sinkhorn': ':',
+            'synthesizer': ':',
+            'perlin': '-',
+        }
         
         MARKERS = {
             'none': '>',
@@ -310,34 +337,84 @@ def load_and_plot():
             'reformer': '^',
             'scatterbrain': 'x',
             'sinkhorn': 'h',
-            'synthesizer': '.',
+            'synthesizer': 'd',
         }
+        
+        MARKER_SIZE = {
+            'none': 5,
+            'cosformer': 5,
+            'performer': 5,
+            'reformer': 5,
+            'scatterbrain': 5,
+            'sinkhorn': 5,
+            'synthesizer': 3,
+            'perlin': 7,
+        }
+        
+        COLORS = {
+            'none': 'mediumslateblue',
+            'cosformer': 'gray',
+            'performer': 'lightcoral',
+            'reformer': 'greenyellow',
+            'scatterbrain': 'turquoise',
+            'sinkhorn': 'lightskyblue',
+            'synthesizer': 'gold',
+            'perlin_0': 'red',
+            'perlin_1': 'darkorange',
+            'perlin_2': 'limegreen',
+        }
+        
+        xs_est = ts
+        ys_est = copy.deepcopy(baselines[BASELINES.index('none')])
+        y_slope = ys_est[1] / ys_est[0]
+        y_last = ys_est[1]
+        assert not math.isnan(y_last)
+        for i in range(2, len(ys_est)):
+            if math.isnan(ys_est[i]):
+                ys_est[i] = ys_est[i-1] * y_slope
+            y_slope = ys_est[i] / y_last
+            y_last = ys_est[i]
+        
+        plt.plot(
+            xs_est, 
+            ys_est, 
+            linestyle=LINESTYLE['none'], 
+            linewidth=0.75,
+            label='None (Trend)',
+            marker='4',
+            markersize = MARKER_SIZE['none'],
+            color=COLORS['none'],
+        )
         
         for iy, ys in enumerate(baselines):
             plt.plot(
                 ts, 
                 ys, 
-                label=baseline_methods[iy], 
-                linestyle='--', 
+                label=NAMES[baseline_methods[iy]], 
+                linestyle=LINESTYLE[baseline_methods[iy]], 
                 linewidth=0.75,
                 marker=MARKERS[baseline_methods[iy]],
+                markersize=MARKER_SIZE[baseline_methods[iy]],
+                color=COLORS[baseline_methods[iy]],
             )
         for ik, k in enumerate(ks):
             plt.plot(
                 ts, 
                 perlins[ik], 
                 label=f'Ours (k={k})', 
-                linewidth=0.75,
+                linewidth=1.0,
                 marker='*',
+                markersize=MARKER_SIZE['perlin'],
+                color=COLORS[f'perlin_{ik}'],
             )
         
-        plt.title(f'{title}')
-        plt.xlabel(f'tokens')
-        plt.ylabel(f'{ylabel}')
+        plt.title(f'{title}', fontweight=500)
+        plt.xlabel(f'Seq. Len.', fontweight=500)
+        plt.ylabel(f'{ylabel}', fontweight=500)
         plt.yscale('log', base=2)
         plt.xscale('log', base=2)
         plt.grid()
-        plt.legend(fontsize=8)
+        plt.legend(fontsize=6, ncols=2)
         
         path = os.path.join(root, f'{filename}.png')
         plt.savefig(path, dpi=300, bbox_inches='tight')
@@ -348,7 +425,7 @@ def load_and_plot():
     
     plot(
         'exp_latency', 
-        'Latency Comparison', 'ms/it', 
+        'Latency', 'ms/it', 
         latencies_baseline, 
         latencies_perlin, 
         ts, 
@@ -356,7 +433,7 @@ def load_and_plot():
     )
     plot(
         'exp_vram', 
-        'Peak VRAM Usage Comparison', 
+        'Peak VRAM Usage', 
         'MB', 
         vram_baseline, 
         vram_perlin, 

@@ -100,7 +100,7 @@ for imethod, method in enumerate(methods):
         for i in plot_data 
     ]
     data = np.array(data)
-    data[1,0,:] = data[1,0,:]*10
+    data[1,0,:] = data[1,0,:]*50
     data = data.mean(0)
     # print(method, data)
     xs = data[0, :]
@@ -114,7 +114,7 @@ for imethod, method in enumerate(methods):
         label=METHOD_NAMES[method]
     )
     ax.grid(True)
-    ax.set_xlabel('10*Lat.+Mem.', fontweight=500)
+    ax.set_xlabel('50*Lat.+Mem.', fontweight=500)
     ax.set_ylabel('PPL. (Lower is better)', fontweight=500)
 
 handles, labels = ax.get_legend_handles_labels()
