@@ -35,11 +35,12 @@ def resize_from_m_to_t(
     mask_cs = mask.cumsum(-1)
     token_length = mask_cs[:, :, :, -1].unsqueeze(-1) 
     if training:
-        mask_cs = torch.clamp(
-            mask_cs + (torch.rand_like(mask_cs) * 4 - 2), 
-            torch.ones((1,1,1,1,), device=x.device), 
-            mask_cs.max(dim=-1, keepdim=True)[1]
-        )
+        if random.random() < 0.1:
+            mask_cs = torch.clamp(
+                mask_cs + (torch.rand_like(mask_cs) * 1.5 - 0.75), 
+                torch.ones((1,1,1,1,), device=x.device), 
+                mask_cs.max(dim=-1, keepdim=True)[1]
+            )
     token_index_x = torch.floor(((mask_cs - 1) + 0.5) / token_length * T_M - 1e-4).to(torch.long) + ((1 - mask) * T_M).to(torch.long)
     token_index_x = torch.clamp(token_index_x, 0, T_M)
     token_index_x = token_index_x.expand(N, H, T1, T2)
