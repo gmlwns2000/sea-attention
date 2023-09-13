@@ -413,6 +413,8 @@ if __name__ == '__main__':
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--kd-checkpointing', action='store_true', default=False)
     
+    parser.add_argument('--eval', action='store_true', default=False)
+    
     add_perlin_model_options(parser)
     
     parser = deepspeed.add_config_arguments(parser)
@@ -481,4 +483,7 @@ if __name__ == '__main__':
     if args.load_only_additionals:
         trainer.load_state_from_base()
 
-    trainer.main()
+    if not args.eval:
+        trainer.main()
+    else:
+        trainer.evaluate()

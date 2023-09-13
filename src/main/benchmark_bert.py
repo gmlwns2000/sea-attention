@@ -241,7 +241,7 @@ def measure_and_dump():
                 method='perlin',
                 seq_len=t,
                 k=k,
-                trace=False,
+                trace=True,
             ))
             for t in ts
         ]
