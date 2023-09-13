@@ -229,7 +229,9 @@ class PerlinAttention(nn.Module):
             # )
         else:
             is_causal = self.pconfig.causal
-            inner_ch = 2
+            inner_ch = int(os.environ.get("PERLIN_HOTFIX_OPT_INNER_CH", "2"))
+            if inner_ch != 2:
+                print('WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_INNER_CH', inner_ch)
             self.attention_predictor_dec_row_down_scale = 4
             self.attention_predictor_dec_row_splits = inner_ch
             self.attention_predictor_dec_row_out_ch = (self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale) * self.attention_predictor_dec_row_splits
@@ -237,22 +239,42 @@ class PerlinAttention(nn.Module):
                 nn.Linear(self.attention_head_size*2, self.attention_predictor_dec_row_out_ch),
                 ChannelSplit(self.attention_predictor_dec_row_splits),
             )
-            self.attention_predictor_cnn = nn.Sequential(
-                ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
-                ModuleBenchmark('cnn.keepres', KeepRes(
-                    # ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
-                    # nn.ReLU(),
-                    ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
-                    nn.ReLU(),
-                    ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
-                    nn.ReLU(),
-                    ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
-                    ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal)),
-                    output_width=self.pconfig.attention_predictor_length
-                )),
-                # this prevent model explode within causal setting...
-                ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length))
-            )
+            deeper_layer = int(os.environ.get("PERLIN_HOTFIX_OPT_DEEPER", "0")) == 1
+            if deeper_layer:
+                print('WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_DEEPER', deeper_layer)
+                self.attention_predictor_cnn = nn.Sequential(
+                    ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
+                    ModuleBenchmark('cnn.keepres', KeepRes(
+                        ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.conv3', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
+                        ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal)),
+                        output_width=self.pconfig.attention_predictor_length
+                    )),
+                    # this prevent model explode within causal setting...
+                    ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length))
+                )
+            else:
+                self.attention_predictor_cnn = nn.Sequential(
+                    ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
+                    ModuleBenchmark('cnn.keepres', KeepRes(
+                        # ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
+                        # nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        nn.ReLU(),
+                        ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
+                        ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal)),
+                        output_width=self.pconfig.attention_predictor_length
+                    )),
+                    # this prevent model explode within causal setting...
+                    ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length))
+                )
             # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, mode='reduce-overhead')
         # self.attention_predictor_cnn = nn.Identity()
         self.attention_predictor_dec_scaler = nn.Sequential(
