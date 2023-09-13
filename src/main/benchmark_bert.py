@@ -33,7 +33,7 @@ class BenchConfig:
     seq_len: int = 4096
     k: int = 64
     w: int = None
-    nbf: float = 1
+    nbf: float = 8
     trace: bool = True
     causal: bool = False
     n_hash: int = 8
