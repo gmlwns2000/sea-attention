@@ -144,6 +144,8 @@ class PerlinAttention(nn.Module):
         self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
         self.all_head_size = self.num_attention_heads * self.attention_head_size
         
+        self._warning_messages = ""
+        
         ### Perlin
         #- configs
         self.benchmarking = False
@@ -231,7 +233,7 @@ class PerlinAttention(nn.Module):
             is_causal = self.pconfig.causal
             inner_ch = int(os.environ.get("PERLIN_HOTFIX_OPT_INNER_CH", "2"))
             if inner_ch != 2:
-                print('WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_INNER_CH', inner_ch)
+                self._warning_messages += f'WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_INNER_CH {inner_ch}\n'
             self.attention_predictor_dec_row_down_scale = 4
             self.attention_predictor_dec_row_splits = inner_ch
             self.attention_predictor_dec_row_out_ch = (self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale) * self.attention_predictor_dec_row_splits
@@ -241,7 +243,7 @@ class PerlinAttention(nn.Module):
             )
             deeper_layer = int(os.environ.get("PERLIN_HOTFIX_OPT_DEEPER", "0")) == 1
             if deeper_layer:
-                print('WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_DEEPER', deeper_layer)
+                self._warning_messages += 'WARN, you are using hotfix backend. PERLIN_HOTFIX_OPT_DEEPER\n'
                 self.attention_predictor_cnn = nn.Sequential(
                     ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
                     ModuleBenchmark('cnn.keepres', KeepRes(
@@ -334,6 +336,10 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
         last_state: PerlinAttentionState = None,
     ):
+        if len(self._warning_messages) > 0:
+            print(self._warning_messages)
+            self._warning_messages = ''
+        
         if context_layer_truth is not None and context_layer_truth.device != q.device:
             context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
             attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
