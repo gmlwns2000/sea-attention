@@ -713,7 +713,33 @@ class PerlinAttention(nn.Module):
                     training=self.training and self.pconfig.causal,
                     is_causal=self.pconfig.causal,
                 )
-            
+            def resize_from_t_to_m(x, T_M):
+                if self.pconfig.causal: raise Exception()
+                
+                N, H, T1, T2 = x.shape
+                with timer("resize"):
+                    with timer("resize.grid"):
+                        mask = zero_one_attention_mask.view(N, 1, T2)
+                        token_length = mask.sum(-1, keepdim=True)
+                        token_index_x = ((torch.arange(T_M, device=q.device, dtype=q.dtype).view(1, 1, T_M) / (T_M - 1)) * ((token_length - 1) / (T2 -1)))
+                        token_index_x = (token_index_x * 2 - 1).expand(N, T1, T_M)
+                        token_index_y = (
+                            torch.arange(T1, dtype=token_index_x.dtype, device=token_index_x.device)\
+                                .view(1, T1, 1) / T1 * 2 - 1)\
+                                .expand(N, T1, T_M) #type: torch.Tensor
+                        token_index = torch.cat([
+                            token_index_x.unsqueeze(-1), 
+                            token_index_y.unsqueeze(-1)
+                        ], dim=-1)
+                    
+                    with timer("resize.sample"):
+                        return grid_sample_bf16(
+                            input=x,
+                            grid=token_index,
+                            mode='nearest',
+                            align_corners=True,
+                            padding_mode='border'
+                        )
             loss = 0
             estimated_attention_probs_resized = estimated_attention_score_resized = None
             if not self.benchmarking and not use_cache and attention_scores_truth is not None:

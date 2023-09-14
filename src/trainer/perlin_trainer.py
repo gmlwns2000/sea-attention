@@ -89,7 +89,7 @@ def parse_perlin_model_options(args):
         "perlin_colsel_mask_in_probs": not args.colsel_mask_in_scores,
         "perlin_colsel_per_head_col" : args.colsel_per_head_col,
         "perlin_colsel_save" : args.colsel_save,
-        "perlin_partial_attention_scaler" : not args.no_partial_scaler
+        "perlin_partial_attention_scaler" : not args.no_partial_scaler,
         'perlin_predictor_length': args.predictor_length,
         'perlin_predictor_backend': args.predictor_backend,
         'perlin_n_hashs': args.n_hashs,
@@ -175,7 +175,7 @@ class BaseTrainer:
             colsel_mask_in_probs = perlin_colsel_mask_in_probs,
             colsel_per_head_cnt_limit = self.perlin_colsel_per_head_col,
             colsel_save = self.perlin_colsel_save,
-            partial_attention_scaler = self.partial_attention_scaler
+            partial_attention_scaler = self.partial_attention_scaler,
             compile = compile,
         )
         perlin_attention.register_default_config(self.perlin_config)
