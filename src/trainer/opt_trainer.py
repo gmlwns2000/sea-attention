@@ -222,8 +222,8 @@ class Trainer:
     
     def init_model(self):
         teacher = self.config.teacher_model_cls.from_pretrained(
-            self.config.model_config, cache_dir='/d1/jinakim/.cache/huggingface/metrics'
-        ).eval()
+            self.config.model_config, 
+        ).eval() # cache_dir='/d1/jinakim/.cache/huggingface/metrics'
         
         student = self.config.model_cls(teacher.config)
         try:
@@ -254,7 +254,7 @@ class Trainer:
                 if hasattr(m, 'use_deepspeed'):
                     m.use_deepspeed = self.deepspeed
         
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config, cache_dir='/d1/jinakim/.cache/huggingface/metrics')
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config, ) # cache_dir='/d1/jinakim/.cache/huggingface/metrics'
         
         self.kd_model = KDWrapperModel(
             self.config, 
