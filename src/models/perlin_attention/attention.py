@@ -359,7 +359,7 @@ class PerlinAttention(nn.Module):
         use_cache = self.pconfig.use_cache
         
         if q.dtype in [torch.float16, torch.bfloat16]:
-            # NOTE HJ even if we are in bfloat16, we have to use fp16 minimum because of F.interpolate
+            # NOTE even if we are in bfloat16, we have to use fp16 minimum because of F.interpolate
             FP_MIN = torch.finfo(torch.float16).min / 2
         elif q.dtype in [torch.float32]:
             FP_MIN = torch.finfo(torch.float32).min / 2
@@ -1021,7 +1021,7 @@ class PerlinAttention(nn.Module):
                     attention_probs_dense = partial_attention_probs = attention_scores_dense = None
                     partial_context_layer = q_for_score
                     
-                    # TODO HJ Apply probs scaler!
+                    # TODO Apply probs scaler!
                     
                     # NOTE: print avg k per batch
                     # avg_k_per_batch = (((partial_attention_mask.to_dense() > 0).view(N, -1).long().sum(-1) / (attention_mask > -1).long().view(N, -1).sum(-1)).mean() / H).item()

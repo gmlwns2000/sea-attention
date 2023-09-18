@@ -62,7 +62,7 @@ def get_base_model(dataset, only_tokenizer=False):
         "bert": "bert-base-uncased",
     }[dataset]
 
-    # NOTE(HJ): this bert models has special hooks
+    # NOTE: this bert models has special hooks
     model = {
         "cola": berts.BertForSequenceClassification,
         "mnli": berts.BertForSequenceClassification,

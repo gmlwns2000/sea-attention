@@ -65,7 +65,7 @@ def parse_perlin_model_options(args):
         'perlin_k_flatten':not args.k_colwise,
         'perlin_k_flatten_dim': args.k_flatten_dim,
         'perlin_layerwise':args.layerwise,
-        # NOTE HJ now lora is disable by default
+        # NOTE now lora is disable by default
         # 'perlin_lora':not args.disable_lora, 
         'perlin_lora':args.enable_lora,
         'perlin_attention_predictor_method':args.attention_predictor_method,
@@ -125,7 +125,7 @@ class BaseTrainer:
         self.perlin_predictor_backend = perlin_predictor_backend
         self.perlin_n_hashs = perlin_n_hashs
         
-        # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
+        # NOTE default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
             reformer_n_hashs = perlin_n_hashs,
             performer_nb_factor = perlin_performer_nb_feature_factor,
@@ -218,7 +218,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
     ):
         BaseTrainer.__init__(self, **kwargs)
         
-        # NOTE HJ origimal batch sizes
+        # NOTE origimal batch sizes
         # task_to_batch_size = {
         #     "cola": 64,
         #     "mnli": 4,
