@@ -170,32 +170,55 @@ plt.savefig(os.path.join(root, 'plot_baseline_glue.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue.pdf'), bbox_inches='tight')
 
 plt.clf()
-plt.figure(figsize=(4,4))
-for imethod, method in enumerate(methods):
-    data = [
-        [
-            j[imethod]
-            for j in i # for memory and latency
+nrows = 2
+ncols = 1
+fig, axs = plt.subplots(nrows, ncols)
+fig.set_figwidth(3.5*ncols)
+fig.set_figheight(2.7*nrows+1)
+# plt.figure(figsize=(4,4))
+def render_merged(ax, axis, xlabel, title):
+    for imethod, method in enumerate(methods):
+        data = [
+            [
+                j[imethod]
+                for j in i # for memory and latency
+            ]
+            for i in all_plot_data # for each subset
         ]
-        for i in all_plot_data # for each subset
-    ]
-    # print(imethod, method, data)
-    try:
-        data = np.array(data)
-    except ValueError:
-        print(method, data)
-    print(data.shape)
-    # scale latency x axis
-    data[:,1,0,:] = data[:,1,0,:] * 10
-    data = data.mean(0).mean(0)
-    xs = data[0]
-    ys = data[1]
-    print(data)
-    plt.scatter(xs, ys, s=MARKER_SIZE.get(method, MARKER_SIZE['default']), label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'))
+        # print(imethod, method, data)
+        try:
+            data = np.array(data)
+        except ValueError:
+            print(method, data)
+        # print(data.shape)
+        # scale latency x axis
+        # data[:,1,0,:] = data[:,1,0,:] * 10
+        data = data[:,axis:axis+1,:,:]
+        weights = [{
+            'mnli': 433000,
+            'cola': 10657,
+            'mrpc': 5801,
+        }[k] for k in metrics.keys()]
+        for i in range(len(weights)):
+            w = weights[i] / sum(weights)
+            data[i] = data[i] * w
+        data = data.sum(0).mean(0)
+        xs = data[0]
+        ys = data[1]
+        # print(data)
+        ax.scatter(xs, ys, s=MARKER_SIZE.get(method, MARKER_SIZE['default']), label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'))
 
-# plt.legend()
-plt.grid()
-plt.xlabel('Average 10*Lat.+Mem.', fontsize=12, fontweight=500)
-plt.ylabel('Average Metric', fontsize=12, fontweight=500)
+    # plt.legend()
+    ax.grid(True)
+    ax.set_title(title, fontsize=13, fontweight=500)
+    ax.set_xlabel(xlabel, fontsize=11, fontweight=500)
+    ax.set_ylabel('Average Metric', fontsize=11, fontweight=500)
+
+render_merged(axs[0], 0, 'MB', 'Memory')
+render_merged(axs[1], 1, 'ms', 'Latency')
+fig.subplots_adjust(hspace=0.36, top=0.90)
+fig.suptitle("Averaged Among Subsets", fontsize=14, fontweight=500)
+
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.pdf'), bbox_inches='tight')
+print(os.path.join(root, 'plot_baseline_glue_all.png'))

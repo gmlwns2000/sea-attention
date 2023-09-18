@@ -378,8 +378,8 @@ def load_and_plot():
         plt.plot(
             xs_est, 
             ys_est, 
-            linestyle=LINESTYLE['none'], 
-            linewidth=0.75,
+            linestyle=':', 
+            linewidth=0.5,
             label='None (Trend)',
             marker='4',
             markersize = MARKER_SIZE['none'],
