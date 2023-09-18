@@ -552,8 +552,8 @@ class Trainer:
         return ppl
     
     def checkpoint_path(self):
-        os.makedirs(f'./saves/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
-        path = f'./saves/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
+        os.makedirs(f'./saves/trainer/opt_trainer/{self.config.experiment_name}_copy/', exist_ok=True)
+        path = f'./saves/trainer/opt_trainer/{self.config.experiment_name}_copy/checkpoint.pth'
         return path
     
     def save(self, path=None):

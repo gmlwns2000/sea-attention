@@ -183,7 +183,7 @@ class BaseTrainer:
         
         return model
 
-    def format_exp(self, name: str):
+    def format_exp(self, name: str, model: str=None):
         name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
         name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten_dim}' if self.perlin_k_flatten_dim != 'batch' else ''
         name_lora = '_full' if not self.perlin_lora else ''
@@ -192,7 +192,12 @@ class BaseTrainer:
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
-        name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
+        if model == 'bert':
+            name_predictor_length = f'_predlen{self.perlin_predictor_length}' if self.perlin_predictor_length!=128 else ''
+        elif model=='opt':
+            name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
+        else:
+            raise Exception()
         name_predictor_backend = f'_pw{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else ''
         name_enc_per_layer = f'_epl' if self.perlin_enc_per_layer else ''
         name = f'{name}'\
@@ -249,7 +254,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             subset=subset,
             model_cls=perlin_bert.BertForSequenceClassification,
             amp_enabled=not disable_amp,
-            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
+            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}', model='bert'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
             eval_steps=2000,
@@ -365,7 +370,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
-                experiment_name=self.format_exp(f'{model}_{subset}'),
+                experiment_name=self.format_exp(f'{model}_{subset}', model='opt'),
                 model_cls=perlin_opt.OPTForCausalLM,
                 model_config=model_config,
                 amp_enabled=not disable_amp,

@@ -84,6 +84,8 @@ def main(
                 estimated_attn = module.last_perlin_output.estimated_attention_probs.cpu()
                 dense_attn = module.last_perlin_output.dense_attention_probs.cpu()
                 partial_attn = module.last_perlin_output.partial_attention_probs.cpu()
+                torch.save({'estimated_attn':estimated_attn}, "./debug/opt_viz.pth")
+                breakpoint()
                 mini_attentions.append({
                     'teacher_attn': teacher_attn,
                     'estimated_attn': estimated_attn,
@@ -106,7 +108,7 @@ def main(
         # token_length = batch['input_ids'].shape[-1]
         common.POOL = 8
         img = process_batch_index(attentions, i, token_length, gs=[0.2,0.2,0.2,0.2])
-        layer_dir = f"./plots/visualize_opt/{dataset}_{i}"
+        layer_dir = f"./plots/visualize_opt_125m/{dataset}_{i}"
         os.makedirs(layer_dir, exist_ok=True)
         assert (img.shape[0] % num_layers) == 0, f"{img.shape}"
         for j in range(num_layers):
