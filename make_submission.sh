@@ -16,6 +16,7 @@ rm -rf submission/plots/main/figure_visualization_opt/wikitext2_0
 rm -rf submission/plots/main/figure_visualization_opt/wikitext2_1
 rm -rf submission/plots/main/figure_visualization_opt/wikitext2_2
 rm -rf submission/plots/main/figure_visualization_opt/wikitext2_3
+rm -rf submission/plots/main/figure_visualization_opt/*.png
 
 # zip the submission
 timestamp=$(date +'%m_%d_%Y')
