@@ -101,6 +101,10 @@ def calc_attention():
     flops += X[0] * X[1]
     #sdbmm
     flops += X[0] * X[1] * d
+    X = (T, d)
+    
+    # weighted pool
+    flops += X[0] * X[1] * 4
     
     return flops * H
 
