@@ -51,7 +51,8 @@ def main(
                 'dense_attn': dense_attn.cpu(),
                 'partial_attn': partial_attn.cpu(),
             })
-    
+    # torch.save({'estimated_attn':attentions[1]['estimated_attn'],  'dense_attn': attentions[1]['dense_attn'], 'token_length': batch['attention_mask'][7].sum().item()}, './debug/bert_viz.pth') # layer1 'estimated_attn_m':attentions[1]['estimated_attn_m'],
+    # breakpoint()
     os.makedirs(f"./plots/visualize_glue/k{kwargs['perlin_k']}", exist_ok=True)
     for i in range(len(batch['input_ids'])):
         token_length = int(batch['attention_mask'][i].sum().item())
