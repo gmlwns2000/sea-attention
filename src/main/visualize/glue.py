@@ -43,15 +43,30 @@ def main(
         if isinstance(module, perlin_bert.BertSelfAttention):
             teacher_attn = module.teacher_attention_prob
             estimated_attn = module.last_perlin_estimated_probs
+            # estimated_attn_m = module.perlin_output.estimated_attention_probs_m
             dense_attn = module.last_perlin_dense_probs
             partial_attn = module.last_perlin_partial_probs
+            # partial_attention_mask=module.perlin_output.partial_attention_mask
+            # partial_attention_mask_m=module.perlin_output.partial_attention_mask_m
             attentions.append({
                 'teacher_attn': teacher_attn.cpu(),
                 'estimated_attn': estimated_attn.cpu(),
                 'dense_attn': dense_attn.cpu(),
                 'partial_attn': partial_attn.cpu(),
+                # 'estimated_attn_m':estimated_attn_m.cpu(),
+                # 'partial_attention_mask':partial_attention_mask.cpu(),
+                # 'partial_attention_mask_m':partial_attention_mask_m.cpu()
             })
-    # torch.save({'estimated_attn':attentions[1]['estimated_attn'],  'dense_attn': attentions[1]['dense_attn'], 'token_length': batch['attention_mask'][7].sum().item()}, './debug/bert_viz.pth') # layer1 'estimated_attn_m':attentions[1]['estimated_attn_m'],
+    # torch.save({
+    #     'teacher_attn': attentions[1]['teacher_attn'],
+    #     'estimated_attn':attentions[1]['estimated_attn'],
+    #     'estimated_attn_m':attentions[1]['estimated_attn_m'],
+    #     'dense_attn': attentions[1]['dense_attn'], 
+    #     'partial_attn':attentions[1]['partial_attn'], 
+    #     'partial_attention_mask':attentions[1]['partial_attention_mask'], 
+    #     'partial_attention_mask_m':attentions[1]['partial_attention_mask_m'],
+    #     'token_length': batch['attention_mask'][7].sum().item()}, 
+    #     './debug/bert_viz.pth') # layer1 'estimated_attn_m':attentions[1]['estimated_attn_m'],
     # breakpoint()
     os.makedirs(f"./plots/visualize_glue/k{kwargs['perlin_k']}", exist_ok=True)
     for i in range(len(batch['input_ids'])):
