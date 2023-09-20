@@ -38,6 +38,7 @@ parser.add_argument('--max-seq-len', type=int, default=-1)
 parser.add_argument('--layerwise', action='store_true')
 parser.add_argument('--enable-lora', action='store_true')
 parser.add_argument('--load-checkpoint', type=str, default=None)
+parser.add_argument('--k-colwise', action='store_true', default=False)
 
 args = parser.parse_args()
 
@@ -139,6 +140,8 @@ if args.n_hashs > 0:
 if args.n_steps > 0:
     cmd.append('--num-steps')
     cmd.append(str(int(args.n_steps)))
+if args.k_colwise:
+    cmd.append('--k-colwise')
 
 print('cmd:', ' '.join(cmd))
 

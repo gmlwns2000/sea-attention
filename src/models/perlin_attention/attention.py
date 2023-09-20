@@ -653,6 +653,8 @@ class PerlinAttention(nn.Module):
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
                 top_k = min(max(int(round(self.pconfig.k * (T_M / torch.min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
+                warnings.warn(f"!!!!k_flatten {k_flatten}")
+
                 if not k_flatten:
                     with timer("mask.topk"):
                         _, indices = torch.topk(
