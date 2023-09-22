@@ -1,4 +1,5 @@
 import json
+import math
 import matplotlib.pyplot as plt
 import os
 import matplotlib
@@ -6,10 +7,11 @@ import matplotlib
 import numpy as np
 plt.style.use('seaborn-bright')
 
-matplotlib.rcParams['font.family'] = 'Noto Sans'
+matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
+# plt.rcParams['text.usetex'] = True
 
 COLORS = {
-    'perlin': 'magenta',
+    'perlin': 'pink',
     'performer': 'blue',
     'reformer': 'purple',
     'scatterbrain': 'gray',
@@ -108,8 +110,8 @@ data_cola = import_jn_format('./plots/main/bert_cola_ablation.json')
 data_mrpc = import_jn_format('./plots/main/bert_mrpc_ablation.json')
 data_mnli = import_jn_format('./plots/main/bert_mnli_ablation.json')
 metrics = {
-    'cola': data_cola,
     'mrpc': data_mrpc,
+    'cola': data_cola,
     'mnli': data_mnli,
 }
 benchmarks = import_benchmark('./plots/main/benchmark_bert_ablation/data.json')
@@ -122,23 +124,72 @@ methods.insert(0, 'perlin')
 root = './plots/main/figure_baseline_glue'
 os.makedirs(root, exist_ok=True)
 
-def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms'):
+PERLIN_MARKERS = []
+PERLIN_COLORS = []
+PERLIN_ZORDERS = []
+SUBMARKERS = {
+    'k:7': '^',
+    'k:13': 'v',
+    'k:25': '<',
+}
+SUBCOLORS = {
+    'w:32': ('magenta', 10000),
+    'w:64': ('#933', 1000),
+    'w:128': ('#90e', 100),
+}
+
+def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_label='Acc.'):
     plot_data = []
     for method in methods:
-        xs = []
-        ys = []
-        for k, v in data.items():
-            if v['method'] == method:
-                y = v['metric']
-                assert k in benchmark, k
-                x = benchmark[k][benchmark_metric]
-                xs.append(x)
-                ys.append(y)
-        
-        ax.scatter(xs, ys, label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'), s=MARKER_SIZE.get(method, MARKER_SIZE['default']))
-        plot_data.append([xs, ys])
+        if method == 'perlin':
+            xs = []
+            ys = []
+            for k, v in data.items():
+                if v['method'] == method:
+                    y = v['metric']
+                    assert k in benchmark, k
+                    x = benchmark[k][benchmark_metric]
+                    for _k, _v in SUBMARKERS.items():
+                        if _k in k:
+                            sub_marker = _v
+                            break
+                    for _k, _v in SUBCOLORS.items():
+                        if _k in k:
+                            sub_color, zorder = _v
+                            break
+                    PERLIN_COLORS.append(sub_color)
+                    PERLIN_MARKERS.append(sub_marker)
+                    PERLIN_ZORDERS.append(zorder)
+                    ax.scatter(
+                        x, 
+                        y, 
+                        label=METHOD_NAMES[method], 
+                        edgecolor=sub_color, 
+                        lw=1.5,
+                        color=COLORS[method],
+                        marker=sub_marker, 
+                        s=MARKER_SIZE.get(method, MARKER_SIZE['default']) * 1.5,
+                        zorder=zorder,
+                    )
+                    xs.append(x)
+                    ys.append(y)
+            plot_data.append([xs, ys])
+        else:
+            xs = []
+            ys = []
+            for k, v in data.items():
+                if v['method'] == method:
+                    y = v['metric']
+                    assert k in benchmark, k
+                    x = benchmark[k][benchmark_metric]
+                    xs.append(x)
+                    ys.append(y)
+            
+            ax.scatter(xs, ys, label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'), s=MARKER_SIZE.get(method, MARKER_SIZE['default']))
+            plot_data.append([xs, ys])
     ax.grid(True)
-    # ax.set_xlabel(x_label, fontweight=500)
+    ax.set_ylabel(y_label, fontweight=500)
+    ax.set_xlabel(x_label, fontweight=500)
     return plot_data
 
 ncols = len(metrics.keys())
@@ -146,28 +197,75 @@ nrows = 2
 
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.5*ncols)
-fig.set_figheight(2.2*nrows+1)
+fig.set_figheight(2.5*nrows+1)
 # fig.set_facecolor('black')
 fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy', fontsize=14, fontweight=500)
 
 all_plot_data = []
 for isubset, subset in enumerate(metrics.keys()):
+    ylabel = {
+        'mrpc': 'F1↑',
+        'cola': "Matthew's Corr.↑",
+        'mnli': 'Acc.↑'
+    }[subset]
     ax = axs[0, isubset]
-    ax.set_title(f'Memory (MB) ({NAMES[subset]})', fontsize=12, fontweight=500)
-    plot_data_memory = render_fig(ax, metrics[subset], benchmarks, 'mem', 'MB')
+    ax.set_title(f'Memory ({NAMES[subset]})', fontsize=12, fontweight=500)
+    plot_data_memory = render_fig(ax, metrics[subset], benchmarks, 'mem', 'MB↓', ylabel)
     
     ax = axs[1, isubset]
-    ax.set_title(f'Latency (ms) ({NAMES[subset]})', fontsize=12, fontweight=500)
-    plot_data_latency = render_fig(ax, metrics[subset], benchmarks, 'latency', 'ms')
+    ax.set_title(f'Latency ({NAMES[subset]})', fontsize=12, fontweight=500)
+    plot_data_latency = render_fig(ax, metrics[subset], benchmarks, 'latency', 'ms↓', ylabel)
     all_plot_data.append([plot_data_memory, plot_data_latency])
 
+fig.subplots_adjust(bottom=0.14, hspace=0.45, wspace=0.25)
 handles, labels = ax.get_legend_handles_labels()
-fig.subplots_adjust(bottom=0.115, hspace=0.32)
-fig.legend(handles, labels, loc='lower center', ncol=len(labels))
+label_clip = sum([1 if x == 'Ours' else 0 for x in labels])
+labels = labels[label_clip:]
+handles = handles[label_clip:]
+from matplotlib.legend_handler import HandlerTuple
+from matplotlib.lines import Line2D
+our_labels = []
+our_handles = []
+for k in [7, 13, 25]:
+    our_labels.append(f'Ours ($k$={k})')
+    markers = []
+    for c in SUBCOLORS.values():
+        markers.append(Line2D(
+            [0], [0],
+            color='w',
+            markeredgecolor=c[0],
+            markerfacecolor=COLORS['perlin'],
+            marker=SUBMARKERS[f'k:{k}'],
+            markersize=8,
+        ))
+    our_handles.append(tuple(markers))
+for w in [32, 64, 128]:
+    our_labels.append(f'Ours ($T_m$={k})')
+    markers = []
+    for m in SUBMARKERS.values():
+        markers.append(Line2D(
+            [0], [0],
+            color='w',
+            markeredgecolor=SUBCOLORS[f'w:{w}'][0],
+            markerfacecolor=COLORS['perlin'],
+            marker=m,
+            markersize=8,
+        ))
+    our_handles.append(tuple(markers))
+handles = our_handles + handles
+labels = our_labels + labels
+import itertools
+ncols = math.ceil(len(labels)/2)
+def flip(items, ncol):
+    return itertools.chain(*[items[i::ncol] for i in range(ncol)])
+fig.legend(
+    flip(handles, ncols), flip(labels, ncols), 
+    loc='lower center', ncol=ncols, handler_map={tuple: HandlerTuple(ndivide=None)})
 # fig.tight_layout()
 
 plt.savefig(os.path.join(root, 'plot_baseline_glue.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue.pdf'), bbox_inches='tight')
+print(os.path.join(root, 'plot_baseline_glue.png'))
 
 plt.clf()
 nrows = 2
@@ -206,18 +304,38 @@ def render_merged(ax, axis, xlabel, title):
         xs = data[0]
         ys = data[1]
         # print(data)
-        ax.scatter(xs, ys, s=MARKER_SIZE.get(method, MARKER_SIZE['default']), label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'))
+        if method == 'perlin':
+            for i, (x, y) in enumerate(zip(xs, ys)):
+                ax.scatter(
+                    x, y, 
+                    s=MARKER_SIZE.get(method, MARKER_SIZE['default']) * 2, 
+                    label=METHOD_NAMES[method], 
+                    edgecolor=PERLIN_COLORS[i], 
+                    marker=PERLIN_MARKERS[i],
+                    zorder=PERLIN_ZORDERS[i],
+                    lw=1.5,
+                    color=COLORS[method],
+                )
+        else:
+            ax.scatter(
+                xs, 
+                ys, 
+                s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
+                label=METHOD_NAMES[method], 
+                color=COLORS[method], 
+                marker=MARKERS.get(method, 'o')
+            )
 
     # plt.legend()
     ax.grid(True)
     ax.set_title(title, fontsize=13, fontweight=500)
     ax.set_xlabel(xlabel, fontsize=11, fontweight=500)
-    ax.set_ylabel('Average Metric', fontsize=11, fontweight=500)
+    ax.set_ylabel('Average Metric↑', fontsize=11, fontweight=500)
 
-render_merged(axs[0], 0, 'MB', 'Memory')
-render_merged(axs[1], 1, 'ms', 'Latency')
+render_merged(axs[0], 0, 'MB↓', 'Memory')
+render_merged(axs[1], 1, 'ms↓', 'Latency')
 fig.subplots_adjust(hspace=0.36, top=0.90)
-fig.suptitle("Averaged Among Subsets", fontsize=14, fontweight=500)
+fig.suptitle("Averaged Among Subsets", fontsize=15, fontweight=500)
 
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.pdf'), bbox_inches='tight')
