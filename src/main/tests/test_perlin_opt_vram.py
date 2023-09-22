@@ -1,3 +1,9 @@
+"""
+Simple script for measuring memory. Just for testing purpose
+
+Usage: python -m src.main.tests.test_perlin_opt_vram --k 64 --predictor-length 256
+"""
+
 from ...models import perlin_attention, perlin_opt
 from .common_opt import init
 import torch
