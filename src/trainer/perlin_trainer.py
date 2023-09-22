@@ -53,6 +53,8 @@ def add_perlin_model_options(parser):
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
     parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--output-method', default='merge', type=str) # merge, cnorm, cmix corigin
+
     return parser
 
 def parse_perlin_model_options(args):
@@ -72,7 +74,9 @@ def parse_perlin_model_options(args):
         'perlin_token_merging': args.token_merging,
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
-        'perlin_predictor_length': args.predictor_length
+        'perlin_predictor_length': args.predictor_length,
+        'perlin_output_method': args.output_method,
+
     }
     return kwargs
 
@@ -93,6 +97,7 @@ class BaseTrainer:
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
         perlin_predictor_length = 128,
+        perlin_output_method = 'merge',
         compile = False,
         **kwargs,
     ) -> None:
@@ -107,7 +112,7 @@ class BaseTrainer:
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
         
-        self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
+        self.perlin_output_method = perlin_output_method
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
@@ -126,6 +131,7 @@ class BaseTrainer:
             layerwise = perlin_layerwise,
             lora_enabed = perlin_lora,
             compile = compile,
+            output_method=perlin_output_method,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -177,10 +183,11 @@ class BaseTrainer:
         name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
         name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
         name_predictor_len = f'_predlen{self.perlin_predictor_length}' if self.perlin_predictor_length!=128 else ''
+        name_output_method=f'_{self.perlin_output_method}' if self.perlin_output_method!='merge' else ''
         name = f'{name}'\
             f'_kf{bool2int(self.perlin_k_flatten)}'\
             f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_predictor_len}'
+            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_predictor_len}{name_output_method}'
         return name
 
     def get_global_config(self):
