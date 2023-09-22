@@ -217,7 +217,7 @@ for isubset, subset in enumerate(metrics.keys()):
     plot_data_latency = render_fig(ax, metrics[subset], benchmarks, 'latency', 'ms↓', ylabel)
     all_plot_data.append([plot_data_memory, plot_data_latency])
 
-fig.subplots_adjust(bottom=0.14, hspace=0.45, wspace=0.25)
+fig.subplots_adjust(bottom=0.18, hspace=0.45, wspace=0.25)
 handles, labels = ax.get_legend_handles_labels()
 label_clip = sum([1 if x == 'Ours' else 0 for x in labels])
 labels = labels[label_clip:]
