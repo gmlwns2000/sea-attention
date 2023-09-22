@@ -143,7 +143,7 @@ class StatefulCausalCNN:
         
         y = cnn(x_window)
         # assert y.shape == x_window.shape, f"{y.shape} == {x_window.shape}"
-        print('cnn dbg', len(self.xs), x.shape, y.shape, x_window.shape, x_start, self.xs_len)
+        # print('cnn dbg', len(self.xs), x.shape, y.shape, x_window.shape, x_start, self.xs_len)
         output = y[...,-x.shape[-2]:,:]
         return output
     

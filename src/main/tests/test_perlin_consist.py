@@ -1,3 +1,11 @@
+"""
+Check consistency between optimized implementation (for testing) and non optimized implementation (for training)
+
+Usage: python -m src.main.tests.test_perlin_consist
+
+NOTE: this test script is outdated. if you want to test causal, please use .test_perlin_opt_consist
+"""
+
 import os, tqdm, gc
 os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
 from transformers import logging

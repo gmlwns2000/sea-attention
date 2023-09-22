@@ -42,3 +42,9 @@ python -m src.trainer.perlin_trainer --dataset glue --subset mrpc --method none
 # evaluate only
 python -m src.trainer.perlin_trainer --dataset glue --subset mrpc --method none --eval
 ```
+
+- Development Test Codes
+
+Located on `src.main.tests.*`.
+
+Note that test codes may not compatible with updated source code, because some test codes are not maintained a while... :D

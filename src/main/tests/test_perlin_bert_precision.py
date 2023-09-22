@@ -1,3 +1,19 @@
+"""
+Run perlin in different precisions (FP32 FP16 BF16), and print error matrix.
+
+Usage: python -m src.main.tests.test_perlin_bert_precision
+
+Example Output:
+...
+compare: partial_context_layer_2                        <-- buffer name. find definition by Ctrl+Shift+F "register_temp_buffer"
+ - id 0
+    torch.float16, torch.float32, torch.bfloat16,       <-- error matrix. for example right top entry means error (FP16 <-> BF16)
+          0.000000,       0.000007,       0.000298, 
+          0.000007,       0.000000,       0.000302, 
+          0.000298,       0.000302,       0.000000, 
+...
+"""
+
 import torch
 import cv2
 import os
@@ -111,6 +127,7 @@ if __name__ == '__main__':
     parser.add_argument('--subset', type=str, default='mnli')
     parser.add_argument('--checkpoint', type=str, default=None)
     parser.add_argument('--evaluate', action='store_true')
+    parser.add_argument('--max-seq-len', type=int, default=256)
     add_perlin_model_options(parser)
     
     args = parser.parse_args()

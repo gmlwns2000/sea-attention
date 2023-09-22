@@ -1,3 +1,8 @@
+"""
+Check the avearge $k$ (not $k_m$) on given dataset.
+Usage: python -m src.main.tests.test_perlin_avg_k --subset mnli --k 7
+"""
+
 from ...models import perlin_bert
 from transformers import AutoConfig, AutoTokenizer
 from ...dataset.glue import get_dataloader, TASK_TO_VALID

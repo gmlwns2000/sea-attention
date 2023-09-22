@@ -1,3 +1,11 @@
+"""
+Talk to perlin opt
+
+Usage: src.main.opt_generate
+
+NOTE: this script is WIP.
+"""
+
 import gc
 import time
 import torch

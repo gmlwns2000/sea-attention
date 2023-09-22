@@ -1,3 +1,11 @@
+"""
+Dump attention estimation intermediates
+
+Usage: python -m src.main.tests.test_perlin_est_atten
+
+NOTE: this test script is outdated, may malfunctioning
+"""
+
 from ...utils import get_bench
 from ..visualize.glue import main as visualize_main
 from ..visualize.glue import add_perlin_model_options, parse_perlin_model_options

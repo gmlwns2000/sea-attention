@@ -1,3 +1,37 @@
+"""
+Validate token gernations between using cache or not. 
+Please do not use this script to benchmark generation speed. generation optimization is WIP
+
+Usage: python -m src.main.tests.test_perlin_opt_cache --k 32 --predictor-length 64
+            ^ put proper k and predictor length
+
+Example Output:
+
+accuracy 1.0  <-- this means the token accuracy. how many tokens are same with non-cached output. this should be 1.0 or 0.9x (enougly high)
+                                                         vvv Error @ sequence index INDEX. this should be lower than 0 or -0.5 for safety.
+   vvv Checked temp_buffer names                             However error in here are acceptable.
+   ERROR=(x-y).abs().sum().log10()      | INDEX:            0,           1,           2,          10,          20,          30,          40,          -1
+ - q                                    | ERROR:      -5.0280,     -4.8412,     -4.8891,     -4.8618,     -4.9202,     -4.9735,     -4.9047,     -4.9767
+ - k                                    | ERROR:      -4.0735,     -3.8530,     -3.8873,     -3.8861,     -3.9289,     -3.9863,     -3.9259,     -4.0593
+ - v_for_atten                          | ERROR:      -5.0252,     -4.9480,     -4.9437,     -4.9292,     -4.9208,     -4.9448,     -4.8942,     -4.9337
+ - performer_context_layer              | ERROR:      -3.9410,     -4.1299,     -4.1825,     -4.5160,     -4.6093,     -4.6535,     -4.6473,     -4.7752
+ - performer_value                      | ERROR:      -3.9067,     -4.0685,     -4.1131,     -4.3742,     -4.4367,     -4.4741,     -4.4524,     -4.5462
+ - t_attention_predictor                | ERROR:      -3.8124,     -3.8011,     -3.7459,     -3.7808,     -3.8090,     -3.8025,     -3.7881,     -3.7606
+ - estimated_attention_score_dec_row    | ERROR:      -4.8571,     -4.8560,     -4.8414,     -4.8523,     -4.8864,     -4.8495,     -4.8496,     -4.8470
+ - estimated_attention_score            | ERROR:      -3.3189,     -3.3498,     -3.3077,     -3.3108,     -3.5085,     -3.5438,     -3.4404,     -3.5651
+ - estimated_attention_probs            | ERROR:      -5.1139,     -5.1358,     -5.1781,     -5.1314,     -5.3887,     -5.3652,     -5.3033,     -5.3355
+ - partial_attention_mask_before_interp | ERROR:         -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf
+ - partial_attention_mask               | ERROR:         -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf
+ - partial_attention_scores             | ERROR:         -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf,        -inf
+ - estimated_scales                     | ERROR:      -6.1501,     -6.0072,     -5.9879,     -6.1224,     -6.0011,     -6.1958,     -6.2234,     -6.0134
+ - average_scale                        | ERROR:      -6.7476,     -7.2247,     -7.0486,     -6.5257,     -6.9237,     -7.2247,     -7.5257,     -6.7476
+ - average_context_layer                | ERROR:      -5.0252,     -5.1285,     -5.2015,     -5.4289,     -5.5386,     -5.5839,     -5.6234,     -5.6636
+ - partial_context_layer_sparse         | ERROR:      -5.1280,     -5.2156,     -5.2653,     -5.4711,     -5.4849,     -5.6106,     -5.5324,     -5.5906
+ - normalized_partial_context_layer     | ERROR:      -3.8719,     -3.8293,     -3.8622,     -3.8867,     -3.9708,     -4.0119,     -3.9690,     -3.9888
+ - partial_context_layer                | ERROR:      -3.8543,     -3.8112,     -3.8469,     -3.8767,     -3.9594,     -4.0033,     -3.9517,     -3.9767
+ - logits                               | ERROR:      -1.0928,     -1.1591,     -1.1043,     -1.2141,     -1.2202,     -1.2087,     -1.2146,     -1.2232
+"""
+
 import os, tqdm, gc
 import flax
 os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
