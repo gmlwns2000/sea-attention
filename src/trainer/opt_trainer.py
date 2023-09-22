@@ -594,10 +594,16 @@ class Trainer:
                     print('error during load optimizer', ex)
                 if 'step' in state:
                     step = state['step']
+                else:
+                    step = -1
                 if 'epoch' in state:
                     epoch = state['epoch']
+                else:
+                    epoch = -1
                 if 'epochs' in state:
                     epochs = state['config']['epochs']
+                else:
+                    epochs = -1
                 del state
                 print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
             else:
