@@ -121,7 +121,7 @@ class StatefulCausalCNN:
         self.xs_len = 0
         
     def __call__(self, cnn: torch.nn.Module, x: torch.Tensor, x_len: int):
-        assert x.shape[-2] == x_len, f"{x.shape} == {x_len}"
+        assert x.shape[-2] == x_len, f"{x.shape}[-2] == {x_len}"
         # x = x[...,-x_len:,:]
         
         self.xs.append(x)

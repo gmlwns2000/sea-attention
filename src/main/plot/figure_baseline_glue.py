@@ -11,6 +11,7 @@ matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
 # plt.rcParams['text.usetex'] = True
 
 COLORS = {
+    'none': 'green',
     'perlin': 'pink',
     'performer': 'blue',
     'reformer': 'purple',
@@ -20,6 +21,7 @@ COLORS = {
     'cosformer': 'skyblue',
 }
 METHOD_NAMES = {
+    'none': 'Vanilla',
     'perlin': 'Ours',
     'performer': 'Performer',
     'reformer': 'Reformer',
@@ -29,10 +31,12 @@ METHOD_NAMES = {
     'cosformer': 'Cosformer',
 }
 MARKERS = {
+    'none': 'x',
     'perlin': '*'
 }
 MARKER_SIZE = {
     'perlin': 40,
+    'none': 40,
     'default': 20
 }
 NAMES = {
@@ -185,7 +189,14 @@ def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_
                     xs.append(x)
                     ys.append(y)
             
-            ax.scatter(xs, ys, label=METHOD_NAMES[method], color=COLORS[method], marker=MARKERS.get(method, 'o'), s=MARKER_SIZE.get(method, MARKER_SIZE['default']))
+            ax.scatter(
+                xs, ys, 
+                label=METHOD_NAMES[method], 
+                color=COLORS[method], 
+                marker=MARKERS.get(method, 'o'), 
+                s=MARKER_SIZE.get(method, MARKER_SIZE['default']),
+                zorder=100000 if method == 'none' else 0,
+            )
             plot_data.append([xs, ys])
     ax.grid(True)
     ax.set_ylabel(y_label, fontweight=500)
@@ -233,11 +244,12 @@ for k in [7, 13, 25]:
         markers.append(Line2D(
             [0], [0],
             color='w',
-            markeredgecolor=c[0],
-            markerfacecolor=COLORS['perlin'],
+            markeredgecolor='w',
+            markerfacecolor='#f99',
             marker=SUBMARKERS[f'k:{k}'],
             markersize=8,
         ))
+        break
     our_handles.append(tuple(markers))
 for w in [32, 64, 128]:
     our_labels.append(f'Ours ($T_m$={k})')
@@ -247,10 +259,11 @@ for w in [32, 64, 128]:
             [0], [0],
             color='w',
             markeredgecolor=SUBCOLORS[f'w:{w}'][0],
-            markerfacecolor=COLORS['perlin'],
+            markerfacecolor='w',
             marker=m,
             markersize=8,
         ))
+        break
     our_handles.append(tuple(markers))
 handles = our_handles + handles
 labels = our_labels + labels
@@ -323,7 +336,8 @@ def render_merged(ax, axis, xlabel, title):
                 s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
                 label=METHOD_NAMES[method], 
                 color=COLORS[method], 
-                marker=MARKERS.get(method, 'o')
+                marker=MARKERS.get(method, 'o'),
+                zorder=100000 if method == 'none' else 0,
             )
 
     # plt.legend()

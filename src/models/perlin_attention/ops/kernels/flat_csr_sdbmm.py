@@ -55,7 +55,7 @@ def __flat_csr_sdbmm_compute(
     TEMP_COUNT_HEAD,
     stride_tch_n, stride_tch_r, stride_tch_h,
     N, R, Z, H, T_DST, T_SRC, HID,
-    MAX_ROW_Z: tl.constexpr, MAX_ROW_T: tl.constexpr, BLOCK_HID: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_R: tl.constexpr
+    MAX_ROW_Z: tl.constexpr, MAX_ROW_T: tl.constexpr, BLOCK_HID: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_COL_HEAD: tl.constexpr, GRID_COL_HEAD: tl.constexpr
 ):
     n = tl.program_id(0)
     pid_ir = tl.program_id(1)
@@ -83,18 +83,34 @@ def __flat_csr_sdbmm_compute(
         
         # compute head counts
         
-        col_indices = tl.load(
-            COL_INDICES\
-                + n*stride_col_n\
-                + (tl.arange(0, MAX_ROW_Z) + crow_start) * stride_col_z,
-            mask=((tl.arange(0, MAX_ROW_Z) + crow_start) < crow_end) & ir_mask,
-            other=T_SRC*BLOCK_H*2,
-        )
+        # col_indices = tl.load(
+        #     COL_INDICES\
+        #         + n*stride_col_n\
+        #         + (tl.arange(0, MAX_ROW_Z) + crow_start) * stride_col_z,
+        #     mask=((tl.arange(0, MAX_ROW_Z) + crow_start) < crow_end) & ir_mask,
+        #     other=T_SRC*BLOCK_H*2,
+        # )
         
-        index_heads = col_indices // T_SRC
+        # index_heads = col_indices // T_SRC
         
-        count_heads = (index_heads[None,:] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32)
-        count_heads_sum = tl.sum(count_heads, axis=1) # (BLOCK_H)
+        # count_heads = (index_heads[None,:] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32)
+        # count_heads_sum = tl.sum(count_heads, axis=1) # (BLOCK_H)
+        
+        count_heads_sum = tl.zeros((BLOCK_H,), dtype=tl.int32)
+        for i in range(GRID_COL_HEAD):
+            # t = index_heads[i*BLOCK_COL_HEAD:i*BLOCK_COL_HEAD + BLOCK_COL_HEAD]
+            _col_indices = tl.load(
+                COL_INDICES\
+                    + n*stride_col_n\
+                    + (tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) * stride_col_z,
+                mask=((tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) < crow_end) & ir_mask,
+                other=T_SRC*BLOCK_H*2,
+            )
+            
+            t = _col_indices // T_SRC
+            
+            count_heads_sum += tl.sum((t[None, :] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32), axis=1)
+        
         count_heads_cumsum = tl.cumsum(count_heads_sum)
         tl.store(
             TEMP_COUNT_HEAD\
@@ -278,6 +294,7 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
             temp_count_head = torch.zeros((N, triton.cdiv(R, BLOCK_R), H), dtype=torch.int32, device=values.device)
         
         with timer("flat_csr_sdbmm.compute"):
+            BLOCK_COL_HEAD = min(MAX_ROW_Z, 1024)
             __flat_csr_sdbmm_compute[grid](
                 crow_indices,
                 crow_indices.stride(0),crow_indices.stride(1),
@@ -292,7 +309,7 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
                 temp_count_head,
                 temp_count_head.stride(0), temp_count_head.stride(1), temp_count_head.stride(2),
                 N, R, Z, H, T_DST, T_SRC, HID,
-                MAX_ROW_Z, MAX_ROW_T, BLOCK_HID, BLOCK_H, BLOCK_R,
+                MAX_ROW_Z, MAX_ROW_T, BLOCK_HID, BLOCK_H, BLOCK_R, BLOCK_COL_HEAD=BLOCK_COL_HEAD, GRID_COL_HEAD=triton.cdiv(MAX_ROW_Z, BLOCK_COL_HEAD)
             )
         
         del temp_count_head

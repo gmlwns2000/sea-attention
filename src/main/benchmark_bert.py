@@ -37,6 +37,7 @@ class BenchConfig:
     trace: bool = True
     causal: bool = False
     n_hash: int = 8
+    opt_model: str = 'facebook/opt-125m'
 
 def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
@@ -130,7 +131,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         config.max_position_embeddings = SEQ_LEN
         perlin = BertModel(config).eval()
     else:
-        config = AutoConfig.from_pretrained('facebook/opt-125m')
+        config = AutoConfig.from_pretrained(bench_config.opt_model)
         # config.max_position_embeddings = SEQ_LEN
         perlin = OPTModel(config).eval()
     for module in perlin.modules():

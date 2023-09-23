@@ -10,6 +10,7 @@ import matplotlib
 matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
 
 METHOD_NAMES = {
+    'none': 'Vanilla',
     'perlin': 'Ours',
     'performer': 'Performer',
     'reformer': 'Reformer',
@@ -18,7 +19,8 @@ METHOD_NAMES = {
     'synthesizer': 'Synthesizer',
 }
 COLORS = {
-    'perlin': 'magenta',
+    'none': 'green',
+    'perlin': 'pink',
     'performer': 'blue',
     'reformer': 'purple',
     'scatterbrain': 'gray',
@@ -26,10 +28,12 @@ COLORS = {
     'synthesizer': 'yellow',
 }
 MARKERS = {
+    'none': 'x',
     'perlin': '*'
 }
 MARKER_SIZE = {
     'perlin': 40,
+    'none': 40,
     'default': 20
 }
 
@@ -46,7 +50,7 @@ def load_benchmark(path):
 
 metrics = load_metrics('./plots/main/opt_albation.json')
 benchmarks = load_benchmark('./plots/main/benchmark_opt_ablation/data.json')
-methods = ['perlin', 'reformer', 'performer']
+methods = ['perlin', 'none', 'reformer', 'performer']
 
 PERLIN_MARKERS = []
 PERLIN_COLORS = []
@@ -115,7 +119,8 @@ def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
                 s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
                 marker=MARKERS.get(method, 'o'), 
                 color=COLORS.get(method, 'gray'),
-                label=METHOD_NAMES[method]
+                label=METHOD_NAMES[method],
+                zorder=100000 if method == 'none' else 0,
             )
             plot_data.append([xs, ys])
     ax.grid(True)
@@ -183,11 +188,12 @@ for k in [32, 64, 128]:
         markers.append(Line2D(
             [0], [0],
             color='w',
-            markeredgecolor=c[0],
-            markerfacecolor=COLORS['perlin'],
+            markeredgecolor='w',
+            markerfacecolor='#f99',
             marker=SUBMARKERS[f'k:{k}'],
             markersize=8,
         ))
+        break
     our_handles.append(tuple(markers))
 for w in [128, 256, 384]:
     our_labels.append(f'Ours ($T_m$={k})')
@@ -197,10 +203,11 @@ for w in [128, 256, 384]:
             [0], [0],
             color='w',
             markeredgecolor=SUBCOLORS[f'w:{w}'][0],
-            markerfacecolor=COLORS['perlin'],
+            markerfacecolor='w',
             marker=m,
             markersize=8,
         ))
+        break
     our_handles.append(tuple(markers))
 handles = our_handles + handles
 labels = our_labels + labels

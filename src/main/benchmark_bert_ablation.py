@@ -7,6 +7,21 @@ def main():
     
     data = {}
     
+    latency, mem = exam_config(BenchConfig(
+        method='none',
+        bsize=32,
+        seq_len=256,
+        k=7,
+        w=128,
+        nbf=1,
+        trace=False,
+    ))
+    data[f'none'] = {
+        'method': 'none',
+        'latency': latency * 1000, 
+        'mem': mem / (1024 ** 2),
+    }
+    
     for nbf in nbfs:
         for k in ks:
             for w in ws:

@@ -138,6 +138,7 @@ def main():
     past_key_values = None
     output_ids = []
     perlin_attention.get_default_config().use_cache = use_cache
+    # os.environ['PERLIN_HOTFIX_STATEFUL'] = '1'
     # for module in model.modules():
     #     if hasattr(module, 'benchmarking'):
     #         module.benchmarking = True

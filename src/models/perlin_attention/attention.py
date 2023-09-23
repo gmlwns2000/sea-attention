@@ -520,11 +520,21 @@ class PerlinAttention(nn.Module):
                     # print('pcl', strify(performer_context_layer), strify(q), strify(k), strify(v))
                 else:
                     # TODO: fix numerical stability...
-                    performer_context_layer = self.performer(
-                        q_for_atten, 
-                        k_for_atten, 
-                        v_for_atten
-                    )
+                    if os.environ.get("PERLIN_HOTFIX_STATEFUL", "0") == "1":
+                        last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
+                            last_state,
+                            "performer->performer_context_layer",
+                            self.performer,
+                            q_for_atten, 
+                            k_for_atten, 
+                            v_for_atten,
+                        )
+                    else:
+                        performer_context_layer = self.performer(
+                            q_for_atten, 
+                            k_for_atten, 
+                            v_for_atten
+                        )
                 get_bench().register_temp_buffer('performer_context_layer', performer_context_layer)
             
             # return DUMMY_OUTPUT #119

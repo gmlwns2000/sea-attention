@@ -2,6 +2,7 @@
 Validate output of OPT. Check error between on testing and on training (self.benchmark)
 
 Usage: python -m src.main.tests.test_perlin_opt_consist --k 64 --predictor-length 256
+NOTE: you should load trained weight for this consistent check.
 
 Example Output:
 > exam temp.q[0]                                   
