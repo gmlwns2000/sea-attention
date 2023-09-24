@@ -651,6 +651,7 @@ class PerlinAttention(nn.Module):
                 N, H, T, T_M = estimated_attention_probs.shape
                 assert T == T_DST, f"{T}=={T_DST}, {estimated_attention_probs.shape} {not_padded}"
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
+                warnings.warn(f"k in attention.py: {self.pconfig.k}")
                 top_k = min(max(int(round(self.pconfig.k * (T_M / torch.min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
                 if not k_flatten:
