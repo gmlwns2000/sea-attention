@@ -136,7 +136,7 @@ ncols = 2
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.2*ncols+0.5)
 fig.set_figheight(2.25)
-fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2', fontsize=13, fontweight=500)
+# fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy on Wikitext2', fontsize=13, fontweight=500)
 
 ax = axs[-2]
 ax.set_title(f'Memory', fontsize=11, fontweight=500)
