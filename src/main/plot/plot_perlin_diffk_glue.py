@@ -1,16 +1,16 @@
 # x: different k values
 # y: accuracy    
+import warnings
 from matplotlib import pyplot as plt
 import torch
-from ..utils import seed
+from ...utils import seed
+import random
+import argparse
+from ...trainer.perlin_trainer import add_perlin_model_options, parse_perlin_model_options
+from ...trainer.perlin_trainer import GlueTrainer
+import os
 
 plt.style.use('seaborn-bright')
-
-k_acc_bucket = {}
-seed()
-for i in range(21):
-    k_acc_bucket[3+3*i] = torch.randn*100
-print(f'k_acc_bucket {k_acc_bucket}')
 
 def load_and_plot(
     subset = 'mnli',
@@ -23,74 +23,58 @@ def load_and_plot(
         trained_k = [7, 13, 25]
     elif 'opt' in model:
         trained_k = [32, 64, 128]
-    for t_k in trained_k:
-        kwargs['perlin_k'] = t_k
-        trainer = GlueTrainer(
-                subset=subset,
-                **kwargs
-            )
-        path = f'./saves/tests/k_acc_bucket/{trainer.checkpoint_path}/k_{trained_k}.pth'
-        # state = torch.load(path)
-        # k_acc_bucket = state['k_acc_bucket'] # dict with k:acc form
-
-        ks = list(k_acc_bucket.keys())
-        metrics = list(k_acc_bucket.values())
         
-        def plot(filename, title, ylabel, trained_k, ks, metrics):
-            plt.clf()
-            
-            MARKERS = {
-                'none': '>',
-                'performer': 'v',
-                'reformer': '^',
-                'scatterbrain': 'x',
-                'sinkhorn': 'h',
-                'synthesizer': '.',
-            }
-            
-            for itk, tks in enumerate(trained_k):
-                plt.plot(
-                    ks, 
-                    metrics, 
-                    label=f'k={tks}', 
-                    linestyle='--', 
-                    linewidth=0.75,
-                    marker='*',
+    def plot(filename, title, ylabel):
+        plt.clf()
+        
+        for itk, tk in enumerate(trained_k):
+            kwargs['perlin_k'] = tk
+            trainer = GlueTrainer(
+                    subset=subset,
+                    **kwargs
                 )
-            # for ik, k in enumerate(ks):
-            #     plt.plot(
-            #         ts, 
-            #         perlins[ik], 
-            #         label=f'Ours (k={k})', 
-            #         linewidth=0.75,
-            #         marker='*',
-            #     )
+            path = f'./saves/tests/k_acc_bucket/k_{tk}.pth'
+            state = torch.load(path, map_location='cpu')
+            k_acc_bucket = state['k_acc_bucket'] # dict with k:acc form
+            del state
             
-            plt.title(f'{title}')
-            plt.xlabel(f'hyperparameter k')
-            plt.ylabel(f'{ylabel}')
-            plt.grid()
-            plt.legend(fontsize=8)
-            
-            root = './plots/main/eval_diffk_bert'
-            os.makedirs(root, exist_ok=True)
-            path = os.path.join(root, f'{filename}.png')
-            plt.savefig(path, dpi=300, bbox_inches='tight')
-            print('saved', path)
-            path = os.path.join(root, f'{filename}.pdf')
-            plt.savefig(path, dpi=300, bbox_inches='tight')
-            print('saved', path)
+            print(f'test_k {tk}')
+            print(f'k_acc_bucket {k_acc_bucket}')
+            ks = list(k_acc_bucket.keys())
+            metrics = list(k_acc_bucket.values())
+            plt.plot(
+                ks, 
+                metrics, 
+                label=f'k={tk}', 
+                linestyle='--', 
+                linewidth=0.75,
+                marker='*',
+            )
         
-        plot(
-            f'{model}_test_diffk', 
-            'Evaluation with different k (SEA)', 'accuracy (%)', 
-            ks, 
-            metrics,
-        )            
+        plt.title(f'{title}')
+        plt.xlabel(f'Hyperparameter k')
+        plt.ylabel(f'{ylabel}')
+        plt.grid()
+        plt.legend(fontsize=8)
+        
+        root = f'./plots/main/eval_diffk_{model}'
+        os.makedirs(root, exist_ok=True)
+        path = os.path.join(root, f'{filename}.png')
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        print('saved', path)
+        path = os.path.join(root, f'{filename}.pdf')
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        print('saved', path)
+    
+    plot(
+        f'{model}_diffk', 
+        'Test time performance of adjusted k  (Glue-MNLI)', 'Acc. \u2191', 
+    )            
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
         
+    parser.add_argument('--model', type=str, default='bert')
     parser.add_argument('--subset', type=str, default='mnli')
     parser.add_argument('--checkpoint', type=str, default=None)
     parser.add_argument('--evaluate', action='store_true')
@@ -101,9 +85,9 @@ if __name__ == '__main__':
 
     kwargs = parse_perlin_model_options(args)
     kwargs.update({
+        'model': args.model,
         'subset': args.subset,
         'checkpoint_path': args.checkpoint,
         'evaluate': args.evaluate
     })
-
     load_and_plot(**kwargs)
