@@ -23,10 +23,10 @@ def render_table(key_baseline, key_perlin):
     for ib, name in enumerate(BASELINES):
         cell_data.append([name]+data[key_baseline][ib]+[avg(data[key_baseline][ib])])
         if name == 'none':
-            cell_data.append('\\hline\n')
+            cell_data.append('\\midrule\n')
     N_XFORMERS = (len(BASELINES)-1)
     cell_data[-N_XFORMERS:] = sorted(cell_data[-N_XFORMERS:], key=lambda row: row[-1])
-    cell_data.append('\\hline\n')
+    cell_data.append('\\midrule\n')
     for ik, k in enumerate(ks):
         cell_data.append([f'Ours (k={int(k)})'] + data[key_perlin][ik]+[avg(data[key_perlin][ik])])
 
@@ -52,7 +52,7 @@ def render_table(key_baseline, key_perlin):
     f"\\begin{{center}}\n"\
     f"\\begin{{tabular}}{{{table_cells}}}\n"\
     f"{table_header}\\\\\n"\
-    f"\\hline\n"\
+    f"\\midrule\n"\
     f"{table_data}"\
     f"\\end{{tabular}}\n"\
     f"\\end{{center}}\n"\
