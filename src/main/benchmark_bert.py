@@ -200,7 +200,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     get_bench().disabled = True
     get_bench().synchronize = False
     
-    result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}', test_layer, bench_config)
+    result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}{f",{bench_config.nbf}" if method == "perlin" else ""}{f",{bench_config.w}" if method == "perlin" else ""}', test_layer, bench_config)
     # print(result_interval, BSIZE)
     result_interval = result_interval / BSIZE
     result_mem = result_mem / BSIZE

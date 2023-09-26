@@ -3,6 +3,8 @@ from .benchmark_bert import *
 def main():
     TRACE = True
     
+    BSIZE = 128
+    
     nbfs = [1, 2, 4, 8]
     ks = [7, 13, 25]
     ws = [32, 64, 128]
@@ -11,7 +13,7 @@ def main():
     
     latency, mem = exam_config(BenchConfig(
         method='none',
-        bsize=32,
+        bsize=BSIZE,
         seq_len=256,
         k=7,
         w=128,
@@ -29,7 +31,7 @@ def main():
             for w in ws:
                 latency, mem = exam_config(BenchConfig(
                     method='perlin',
-                    bsize=32,
+                    bsize=BSIZE,
                     seq_len=256,
                     k=k,
                     w=w,
@@ -47,7 +49,7 @@ def main():
             for nbf in nbfs:
                 latency, mem = exam_config(BenchConfig(
                     method=baseline,
-                    bsize=32,
+                    bsize=BSIZE,
                     seq_len=256,
                     k=7,
                     w=128,
@@ -62,7 +64,7 @@ def main():
         elif baseline == 'cosformer':
             latency, mem = exam_config(BenchConfig(
                 method=baseline,
-                bsize=32,
+                bsize=BSIZE,
                 seq_len=256,
                 k=7,
                 w=128,
@@ -78,7 +80,7 @@ def main():
             for k in ks:
                 latency, mem = exam_config(BenchConfig(
                     method=baseline,
-                    bsize=32,
+                    bsize=BSIZE,
                     seq_len=256,
                     k=k,
                     w=128,

@@ -607,7 +607,8 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
     assert target_width.shape == (T_DST,)
     scales = target_width / original_width
     
-    METHOD = 2 if target_width_max <= 2048 else 1
+    # METHOD = 2 if target_width_max <= 2048 else 1
+    METHOD = 1
     
     # for high sparsity
     if METHOD == 1:

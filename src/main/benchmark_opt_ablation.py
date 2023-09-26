@@ -111,9 +111,9 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
         json.dump(data, f)
 
 def main():
-    exam('data_1.3b.json', 'facebook/opt-1.3b')
-    exam('data_350m.json', 'facebook/opt-350m')
     exam('data.json', 'facebook/opt-125m')
+    exam('data_350m.json', 'facebook/opt-350m')
+    exam('data_1.3b.json', 'facebook/opt-1.3b')
 
 if __name__ == '__main__':
     main()
