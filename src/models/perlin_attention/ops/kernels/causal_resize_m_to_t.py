@@ -468,6 +468,16 @@ def __scan_col_3_compute(
             mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
         )
 
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['TARGET_WIDTH_MAX', 'MAX_INTERP', 'BLOCK_N_ZERO']
+)
 @triton.jit
 def __scan_col_4_compute(
     NON_ZERO_PIXELS,

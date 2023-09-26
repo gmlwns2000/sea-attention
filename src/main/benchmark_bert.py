@@ -226,7 +226,7 @@ def main_methods():
         ))
     
 def measure_and_dump():
-    TRACE = False
+    TRACE = True
     precision = torch.float32
     
     baseline_methods = BASELINES
@@ -234,8 +234,8 @@ def measure_and_dump():
     # ks = [2**x for x in range(3, 8)]
     ks = [32, 64, 128,]
     # ks = [32]
-    # ts = [2048]
-    # ks = [8]
+    # ts = [1024*32]
+    # ks = [32]
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
     
