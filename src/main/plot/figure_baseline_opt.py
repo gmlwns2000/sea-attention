@@ -56,14 +56,14 @@ PERLIN_MARKERS = []
 PERLIN_COLORS = []
 PERLIN_ZORDERS = []
 SUBMARKERS = {
-    'k:32': '^',
-    'k:64': 'v',
-    'k:128': '<',
+    'k:32': 'D',
+    'k:64': 's',
+    'k:128': 'X',
 }
 SUBCOLORS = {
-    'w:128': ('magenta', 10000),
-    'w:256': ('#933', 1000),
-    'w:384': ('#90e', 100),
+    'w:128': ('#f03', 10000),
+    'w:256': ('#603', 1000),
+    'w:384': ('#30f', 100),
 }
 
 def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
@@ -196,7 +196,7 @@ for k in [32, 64, 128]:
         break
     our_handles.append(tuple(markers))
 for w in [128, 256, 384]:
-    our_labels.append(f'Ours ($T_m$={k})')
+    our_labels.append(f'Ours ($K$={w})')
     markers = []
     for m in SUBMARKERS.values():
         markers.append(Line2D(
@@ -204,7 +204,7 @@ for w in [128, 256, 384]:
             color='w',
             markeredgecolor=SUBCOLORS[f'w:{w}'][0],
             markerfacecolor='w',
-            marker=m,
+            marker='o',
             markersize=8,
         ))
         break

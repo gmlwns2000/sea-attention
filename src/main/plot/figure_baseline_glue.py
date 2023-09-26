@@ -132,14 +132,14 @@ PERLIN_MARKERS = []
 PERLIN_COLORS = []
 PERLIN_ZORDERS = []
 SUBMARKERS = {
-    'k:7': '^',
-    'k:13': 'v',
-    'k:25': '<',
+    'k:7': 'D',
+    'k:13': 's',
+    'k:25': 'X',
 }
 SUBCOLORS = {
-    'w:32': ('magenta', 10000),
-    'w:64': ('#933', 1000),
-    'w:128': ('#90e', 100),
+    'w:32': ('#f03', 10000),
+    'w:64': ('#603', 1000),
+    'w:128': ('#30f', 100),
 }
 
 def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_label='Acc.'):
@@ -252,7 +252,7 @@ for k in [7, 13, 25]:
         break
     our_handles.append(tuple(markers))
 for w in [32, 64, 128]:
-    our_labels.append(f'Ours ($T_m$={k})')
+    our_labels.append(f'Ours ($K$={w})')
     markers = []
     for m in SUBMARKERS.values():
         markers.append(Line2D(
@@ -260,7 +260,7 @@ for w in [32, 64, 128]:
             color='w',
             markeredgecolor=SUBCOLORS[f'w:{w}'][0],
             markerfacecolor='w',
-            marker=m,
+            marker='o',
             markersize=8,
         ))
         break

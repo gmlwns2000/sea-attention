@@ -383,120 +383,379 @@ def __scan_col_2_compute(
                 mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
             )
 
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['BLOCK_N_ZERO', 'BLOCK_ROW', 'MAX_INTERP']
+)
+@triton.jit
+def __scan_col_3_compute(
+    NON_ZERO_ROWS,
+    stride_nzr_n, stride_nzr_d,
+    PIXEL_INDICES,
+    stride_pixel_n, stride_pixel_m,
+    V_STARTS,
+    stride_vs_tdst, stride_vs_tm,
+    COL_INDICES,
+    stride_col_n, stride_col_z,
+    N, M, H, T_M, 
+    TARGET_WIDTH_MAX: tl.constexpr, MAX_INTERP: tl.constexpr, 
+    NZR_N, NZR_D, BLOCK_N_ZERO: tl.constexpr, 
+    NCOL_PER_ROW, BLOCK_ROW: tl.constexpr,
+):
+    pid_nzr = tl.program_id(0)
+    pid_col = tl.program_id(1)
+    
+    for _i_nzr in range(BLOCK_N_ZERO):
+        i_nzr = pid_nzr * BLOCK_N_ZERO + _i_nzr
+        mask_nzr = i_nzr < NZR_N
+        
+        i_batch = tl.load(
+            NON_ZERO_ROWS +\
+                i_nzr * stride_nzr_n +\
+                0 * stride_nzr_d,
+            mask=mask_nzr
+        )
+        i_row = tl.load(
+            NON_ZERO_ROWS +\
+                i_nzr * stride_nzr_n +\
+                1 * stride_nzr_d,
+            mask=mask_nzr
+        )
+        
+        n = i_batch
+        ms = pid_col * BLOCK_ROW + tl.arange(0, BLOCK_ROW) + i_row * NCOL_PER_ROW
+        ms_mask = (pid_col * BLOCK_ROW + tl.arange(0, BLOCK_ROW)) < NCOL_PER_ROW
+        
+        idx_tdst = ms // (H*T_M)
+        idx_h = (ms % (H*T_M)) // T_M
+        idx_tm = ms % T_M
+        
+        v_start = tl.load(
+            V_STARTS\
+                + idx_tdst * stride_vs_tdst\
+                + idx_tm * stride_vs_tm,
+            mask = ms_mask
+        )
+        
+        col_start = tl.load(
+            PIXEL_INDICES\
+                + n * stride_pixel_n\
+                + (ms - 1) * stride_pixel_m,
+            mask=(((ms - 1) >= 0) and (ms < M)) and ms_mask,
+        )
+        
+        col_end = tl.load(
+            PIXEL_INDICES\
+                + n * stride_pixel_n\
+                + ms * stride_pixel_m,
+            mask=((ms >= 0) and (ms < M)) and ms_mask,
+        )
+        
+        col_len = col_end - col_start
+        
+        range_start = v_start + (idx_h * TARGET_WIDTH_MAX)
+        tl.store(
+            COL_INDICES\
+                + n * stride_col_n\
+                + (tl.arange(0, MAX_INTERP)[None, :] + col_start[:, None]) * stride_col_z,
+            tl.arange(0, MAX_INTERP)[None, :] + range_start[:, None],
+            mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
+        )
+
+@triton.jit
+def __scan_col_4_compute(
+    NON_ZERO_PIXELS,
+    stride_nzp_n, stride_nzp_d,
+    PIXEL_INDICES,
+    stride_pixel_n, stride_pixel_m,
+    V_STARTS,
+    stride_vs_tdst, stride_vs_tm,
+    COL_INDICES,
+    stride_col_n, stride_col_z,
+    N, M, H, T_M, 
+    TARGET_WIDTH_MAX: tl.constexpr, MAX_INTERP: tl.constexpr, 
+    NZR_N, NZR_D, BLOCK_N_ZERO: tl.constexpr,
+):
+    pid_nzp = tl.program_id(0)
+    
+    i_nzp_n = pid_nzp * BLOCK_N_ZERO + tl.arange(0, BLOCK_N_ZERO)
+    mask_i_nzp = i_nzp_n < NZR_N
+    is_batch = tl.load(
+        NON_ZERO_PIXELS +\
+            i_nzp_n * stride_nzp_n+\
+            0 * stride_nzp_d,
+        mask = mask_i_nzp
+    )
+    is_col = tl.load(
+        NON_ZERO_PIXELS +\
+            i_nzp_n * stride_nzp_n+\
+            1 * stride_nzp_d,
+        mask = mask_i_nzp
+    )
+    
+    idx_tdst = is_col // (H*T_M)
+    idx_h = (is_col % (H*T_M)) // T_M
+    idx_tm = is_col % T_M
+    
+    v_start = tl.load(
+        V_STARTS\
+            + idx_tdst * stride_vs_tdst\
+            + idx_tm * stride_vs_tm,
+        mask = mask_i_nzp
+    )
+    
+    col_start = tl.load(
+        PIXEL_INDICES\
+            + is_batch * stride_pixel_n\
+            + (is_col - 1) * stride_pixel_m,
+        mask=(((is_col - 1) >= 0) and (is_col < M)) and mask_i_nzp,
+    )
+    
+    col_end = tl.load(
+        PIXEL_INDICES\
+            + is_batch * stride_pixel_n\
+            + is_col * stride_pixel_m,
+        mask=((is_col >= 0) and (is_col < M)) and mask_i_nzp,
+    )
+    
+    col_len = col_end - col_start
+    
+    range_start = v_start + (idx_h * TARGET_WIDTH_MAX)
+    tl.store(
+        COL_INDICES\
+            + is_batch[:, None] * stride_col_n\
+            + (tl.arange(0, MAX_INTERP)[None, :] + col_start[:, None]) * stride_col_z,
+        tl.arange(0, MAX_INTERP)[None, :] + range_start[:, None],
+        mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (mask_i_nzp[:, None])
+    )
+    
+    # for _i_nzr in range(BLOCK_N_ZERO):
+    #     i_nzr = pid_nzr * BLOCK_N_ZERO + _i_nzr
+    #     mask_nzr = i_nzr < NZR_N
+        
+    #     i_batch = tl.load(
+    #         NON_ZERO_ROWS +\
+    #             i_nzr * stride_nzr_n +\
+    #             0 * stride_nzr_d,
+    #         mask=mask_nzr
+    #     )
+    #     i_row = tl.load(
+    #         NON_ZERO_ROWS +\
+    #             i_nzr * stride_nzr_n +\
+    #             1 * stride_nzr_d,
+    #         mask=mask_nzr
+    #     )
+        
+    #     n = i_batch
+    #     ms = pid_col * BLOCK_ROW + tl.arange(0, BLOCK_ROW) + i_row * NCOL_PER_ROW
+    #     ms_mask = (pid_col * BLOCK_ROW + tl.arange(0, BLOCK_ROW)) < NCOL_PER_ROW
+        
+    #     idx_tdst = ms // (H*T_M)
+    #     idx_h = (ms % (H*T_M)) // T_M
+    #     idx_tm = ms % T_M
+        
+    #     v_start = tl.load(
+    #         V_STARTS\
+    #             + idx_tdst * stride_vs_tdst\
+    #             + idx_tm * stride_vs_tm,
+    #         mask = ms_mask
+    #     )
+        
+    #     col_start = tl.load(
+    #         PIXEL_INDICES\
+    #             + n * stride_pixel_n\
+    #             + (ms - 1) * stride_pixel_m,
+    #         mask=(((ms - 1) >= 0) and (ms < M)) and ms_mask,
+    #     )
+        
+    #     col_end = tl.load(
+    #         PIXEL_INDICES\
+    #             + n * stride_pixel_n\
+    #             + ms * stride_pixel_m,
+    #         mask=((ms >= 0) and (ms < M)) and ms_mask,
+    #     )
+        
+    #     col_len = col_end - col_start
+        
+    #     range_start = v_start + (idx_h * TARGET_WIDTH_MAX)
+    #     tl.store(
+    #         COL_INDICES\
+    #             + n * stride_col_n\
+    #             + (tl.arange(0, MAX_INTERP)[None, :] + col_start[:, None]) * stride_col_z,
+    #         tl.arange(0, MAX_INTERP)[None, :] + range_start[:, None],
+    #         mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
+    #     )
+
 def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target_width: torch.Tensor, max_col_z: int):
     N, T_DST, H_T = x.shape # N, T_DST, H*T_M
     assert target_width.shape == (T_DST,)
     scales = target_width / original_width
     
-    # ##### Took 28ms
+    METHOD = 2 if target_width_max <= 2048 else 1
     
-    # with get_bench().region("scan_col.setup"):
-    #     T_M = original_width
-    #     H = H_T // T_M
-    #     b = torch.arange(0, T_M, device=x.device).view(1, T_M)
-    #     with get_bench().region("scan_col.triton_round"):
-    #         v_starts = triton_round(b*scales.view(T_DST, 1))
-    #         v_ends = triton_round((b + 1)*scales.view(T_DST, 1))
-    #     with get_bench().region("scan_col.npixels"):
-    #         n_pixels = ((v_ends - v_starts).view(1, T_DST, 1, T_M).to(torch.int32) * x.view(N, T_DST, H, T_M).to(torch.int32))
+    # for high sparsity
+    if METHOD == 1:
+        with get_bench().region("scan_col.setup"):
+            T_M = original_width
+            H = H_T // T_M
+            b = torch.arange(0, T_M, device=x.device).view(1, T_M)
+            with get_bench().region("scan_col.triton_round"):
+                v_starts = triton_round(b*scales.view(T_DST, 1))
+                v_ends = triton_round((b + 1)*scales.view(T_DST, 1))
+            with get_bench().region("scan_col.npixels"):
+                n_pixels = ((v_ends - v_starts).view(1, T_DST, 1, T_M).to(torch.int32) * x.view(N, T_DST, H, T_M).to(torch.int32))
+            
+            with get_bench().region("scan_col.cumsum"):
+                # TODO fusing kernel
+                pixel_indices = n_pixels.view(N, -1).cumsum(-1) # N, M
+            M = pixel_indices.shape[-1]
+            
+            Z = pixel_indices.view(N, T_DST, -1)[:, :, -1].max().item()
+            crow_indices = torch.zeros((N, T_DST+1), dtype=torch.long, device=x.device)
+            col_indices = torch.zeros((N, Z), dtype=torch.long, device=x.device)
+            values = torch.ones_like(col_indices, dtype=x.dtype)
+            
+            crow_indices[:, 1:] = pixel_indices.view(N, T_DST, -1)[:,:,-1]
         
-    #     with get_bench().region("scan_col.cumsum"):
-    #         pixel_indices = n_pixels.view(N, -1).cumsum(-1) # N, M
-    #     M = pixel_indices.shape[-1]
+        # with get_bench().region("scan_col.compute"):
+        #     BLOCK_N = 1
+        #     GROUP_M = 256
+        #     BLOCK_M = triton.next_power_of_2(triton.cdiv(triton.cdiv(M, GROUP_M), 4096))
+        #     # BLOCK_M = 64
+        #     num_warps = min(32, BLOCK_M // 32)
+        #     MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
+        #     grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M*GROUP_M))
+        #     # print(grid, num_warps, GROUP_M, BLOCK_M, MAX_INTERP)
+        #     __scan_col_2_compute[grid](
+        #         pixel_indices,
+        #         pixel_indices.stride(0),pixel_indices.stride(1),
+        #         v_starts,
+        #         v_starts.stride(0), v_starts.stride(1),
+        #         col_indices,
+        #         col_indices.stride(0), col_indices.stride(1),
+        #         N, M, H, T_M, target_width_max,
+        #         BLOCK_N, GROUP_M, BLOCK_M, MAX_INTERP,
+        #         # num_warps=num_warps,
+        #     )
         
-    #     Z = pixel_indices.view(N, T_DST, -1)[:, :, -1].max().item()
-    #     crow_indices = torch.zeros((N, T_DST+1), dtype=torch.long, device=x.device)
-    #     col_indices = torch.zeros((N, Z), dtype=torch.long, device=x.device)
-    #     values = torch.ones_like(col_indices)
+        # skiping non zero rows
+        # with get_bench().region("scan_col.compute"):
+        #     non_zero_rows = (crow_indices[:, 1:] - crow_indices[:, :-1]).nonzero()
+            
+        #     NZR_N, NZR_D = non_zero_rows.shape # (idx_batch, idx_row)
+        #     BLOCK_N_ZERO = 1
+        #     NCOLS_PER_ROW = pixel_indices.numel() // N // T_DST
+        #     BLOCK_ROW = 16
+        #     MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
+        #     grid = (triton.cdiv(NZR_N, BLOCK_N_ZERO), triton.cdiv(NCOLS_PER_ROW, BLOCK_ROW))
+        #     # print(grid)
+        #     __scan_col_3_compute[grid](
+        #         non_zero_rows,
+        #         non_zero_rows.stride(0), non_zero_rows.stride(1),
+        #         pixel_indices,
+        #         pixel_indices.stride(0), pixel_indices.stride(1),
+        #         v_starts,
+        #         v_starts.stride(0), v_starts.stride(1),
+        #         col_indices,
+        #         col_indices.stride(0), col_indices.stride(1),
+        #         N, M, H, T_M, 
+        #         target_width_max, MAX_INTERP, 
+        #         NZR_N, NZR_D, BLOCK_N_ZERO, 
+        #         NCOLS_PER_ROW, BLOCK_ROW
+        #     )
         
-    #     crow_indices[:, 1:] = pixel_indices.view(N, T_DST, -1)[:,:,-1]
-    #     # print(crow_indices[0])
+        # skiping non zero entries
+        with get_bench().region("scan_col.compute"):
+            # crow_indices[:, 1:] = pixel_indices.view(N, T_DST, -1)[:,:,-1]
+            non_zero_pixels = (n_pixels.view(N, -1)[:, :-1]).nonzero()
+            
+            NZP_N, NZP_D = non_zero_pixels.shape # (idx_batch, idx_row)
+            BLOCK_N_ZERO = 128
+            MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
+            grid = (triton.cdiv(NZP_N, BLOCK_N_ZERO),)
+            # print(grid)
+            __scan_col_4_compute[grid](
+                non_zero_pixels,
+                non_zero_pixels.stride(0), non_zero_pixels.stride(1),
+                pixel_indices,
+                pixel_indices.stride(0), pixel_indices.stride(1),
+                v_starts,
+                v_starts.stride(0), v_starts.stride(1),
+                col_indices,
+                col_indices.stride(0), col_indices.stride(1),
+                N, M, H, T_M, 
+                target_width_max, MAX_INTERP, 
+                NZP_N, NZP_D, BLOCK_N_ZERO, 
+            )
+            
+            # print(crow_indices)
+            # print(col_indices)
+            # exit()
         
-    #     # __scal_col_2_py(
-    #     #     pixel_indices,
-    #     #     v_starts,
-    #     #     col_indices,
-    #     #     N, M, H, T_M, target_width_max
-    #     # )
-    
-    # with get_bench().region("scan_col.compute"):
-    #     BLOCK_N = 1
-    #     GROUP_M = 256
-    #     BLOCK_M = triton.next_power_of_2(triton.cdiv(triton.cdiv(M, GROUP_M), 4096))
-    #     # BLOCK_M = 64
-    #     num_warps = min(32, BLOCK_M // 32)
-    #     MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
-    #     grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(M, BLOCK_M*GROUP_M))
-    #     # print(grid, num_warps, GROUP_M, BLOCK_M, MAX_INTERP)
-    #     __scan_col_2_compute[grid](
-    #         pixel_indices,
-    #         pixel_indices.stride(0),pixel_indices.stride(1),
-    #         v_starts,
-    #         v_starts.stride(0), v_starts.stride(1), 
-    #         col_indices,
-    #         col_indices.stride(0), col_indices.stride(1),
-    #         N, M, H, T_M, target_width_max,
-    #         BLOCK_N, GROUP_M, BLOCK_M, MAX_INTERP,
-    #         # num_warps=num_warps,
-    #     )
-    
-    # return torch.sparse_csr_tensor(
-    #     crow_indices=crow_indices,
-    #     col_indices=col_indices,
-    #     values=values,
-    #     size=(N, T_DST, H*target_width_max)
-    # )
-    
-    ##### Took 16 ms
-    
-    # npixels_debug = torch.zeros_like(x, dtype=torch.float32)
-    ncols = torch.zeros((N, T_DST), dtype=torch.long, device=x.device)
-    col_indices = torch.zeros((N, T_DST, max_col_z), device=x.device, dtype=torch.long)
-    
-    # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
-    # return truth
-    
-    # BLOCK_A = 1
-    # if T_DST < 256:
-    #     BLOCK_A = 1
-    # elif T_DST < 1024:
-    #     BLOCK_A = 2
-    # elif T_DST < 2048:
-    #     BLOCK_A = 4
-    # elif T_DST < 4096:
-    #     BLOCK_A = 8
-    # elif T_DST < 8192:
-    #     BLOCK_A = 16
-    # elif T_DST < 16384:
-    #     BLOCK_A = 16
-    # else:
-    #     BLOCK_A = 32
-    MAX_INTERP = triton.next_power_of_2(int(math.ceil(target_width_max / original_width)))
-    grid = lambda META: (N, triton.cdiv(T_DST, META['BLOCK_A']),)
-    __scan_col_compute[grid](
-        x, 
-        x.stride(0), x.stride(1), x.stride(2),
-        N, T_DST, H_T, #BLOCK_A,
-        scales, 
-        scales.stride(0),
-        ncols, 
-        ncols.stride(0), ncols.stride(1), 
-        col_indices, 
-        col_indices.stride(0), col_indices.stride(1), col_indices.stride(2), 
-        max_col_z, 
-        # npixels_debug,
-        # npixels_debug.stride(0), npixels_debug.stride(1), npixels_debug.stride(2),
-        MAX_INTERP, original_width, target_width_max, 
-    )
-    
-    # print(ncols[0].cumsum(0))
-    # print('np', n_pixels[0, 7].view(-1))
-    # print('vs', v_starts[7])
-    # print('ve', v_ends[7])
-    # print('bs', (b*scales.view(T_DST, 1))[7])
-    # print('dg', npixels_debug[0, 7])
-    
-    return ncols, col_indices
+        return torch.sparse_csr_tensor(
+            crow_indices=crow_indices,
+            col_indices=col_indices,
+            values=values,
+            size=(N, T_DST, H*target_width_max)
+        )
+    elif METHOD == 2:
+        # for low sparsity. somehow allow quadratic thread allocation
+        
+        # npixels_debug = torch.zeros_like(x, dtype=torch.float32)
+        ncols = torch.zeros((N, T_DST), dtype=torch.long, device=x.device)
+        col_indices = torch.zeros((N, T_DST, max_col_z), device=x.device, dtype=torch.long)
+        
+        # truth = scan_col_py(x, original_width=original_width, target_width=target_width, max_col_z=max_col_z)
+        # return truth
+        
+        # BLOCK_A = 1
+        # if T_DST < 256:
+        #     BLOCK_A = 1
+        # elif T_DST < 1024:
+        #     BLOCK_A = 2
+        # elif T_DST < 2048:
+        #     BLOCK_A = 4
+        # elif T_DST < 4096:
+        #     BLOCK_A = 8
+        # elif T_DST < 8192:
+        #     BLOCK_A = 16
+        # elif T_DST < 16384:
+        #     BLOCK_A = 16
+        # else:
+        #     BLOCK_A = 32
+        MAX_INTERP = triton.next_power_of_2(int(math.ceil(target_width_max / original_width)))
+        grid = lambda META: (N, triton.cdiv(T_DST, META['BLOCK_A']),)
+        __scan_col_compute[grid](
+            x, 
+            x.stride(0), x.stride(1), x.stride(2),
+            N, T_DST, H_T, #BLOCK_A,
+            scales, 
+            scales.stride(0),
+            ncols, 
+            ncols.stride(0), ncols.stride(1), 
+            col_indices, 
+            col_indices.stride(0), col_indices.stride(1), col_indices.stride(2), 
+            max_col_z, 
+            # npixels_debug,
+            # npixels_debug.stride(0), npixels_debug.stride(1), npixels_debug.stride(2),
+            MAX_INTERP, original_width, target_width_max, 
+        )
+        
+        # print(ncols[0].cumsum(0))
+        # print('np', n_pixels[0, 7].view(-1))
+        # print('vs', v_starts[7])
+        # print('ve', v_ends[7])
+        # print('bs', (b*scales.view(T_DST, 1))[7])
+        # print('dg', npixels_debug[0, 7])
+        return ncols, col_indices
+        
+    raise Exception()
 
 def compact_cols_py(ncols_cs, col_indices, out_col_indices):
     N, A, _ = col_indices.shape
@@ -814,12 +1073,13 @@ def test_main():
     N = 1
     H = 12
     T = 4096
+    T = 1024*32
     T_DST = T
     T_M = 128
-    K = 64
+    K = 32
     
     test_config(
-        IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=False
+        IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=T > 4096
     )
     
     # for t in [2048, 4096, 8192]:

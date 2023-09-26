@@ -105,15 +105,16 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     device = torch.device('cuda')
 
     if bench_config.w is None:
-        pred_len = 64
-        if bench_config.seq_len >= 2048:
-            pred_len = 128
-        elif bench_config.seq_len >= 4096:
-            pred_len = 128
-        elif bench_config.seq_len >= 8192:
-            pred_len = 256
-        elif bench_config.seq_len >= 16384:
-            pred_len = 512
+        pred_len = 128
+        # pred_len = 64
+        # if bench_config.seq_len >= 2048:
+        #     pred_len = 128
+        # elif bench_config.seq_len >= 4096:
+        #     pred_len = 256
+        # elif bench_config.seq_len >= 8192:
+        #     pred_len = 256
+        # elif bench_config.seq_len >= 16384:
+        #     pred_len = 256
     else:
         pred_len = bench_config.w
 
@@ -216,6 +217,7 @@ def exam_config(config: BenchConfig):
 
 # BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+# BASELINES = ['none',]
 
 def main_methods():
     for method in BASELINES:
@@ -224,12 +226,14 @@ def main_methods():
         ))
     
 def measure_and_dump():
+    TRACE = False
     precision = torch.float32
     
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
-    ks = [2**x for x in range(3, 8)]
+    # ks = [2**x for x in range(3, 8)]
     ks = [32, 64, 128,]
+    # ks = [32]
     # ts = [2048]
     # ks = [8]
     # ts = [2**x for x in range(13, 13)]
@@ -242,7 +246,7 @@ def measure_and_dump():
                 method='perlin',
                 seq_len=t,
                 k=k,
-                trace=True,
+                trace=TRACE,
             ))
             for t in ts
         ]

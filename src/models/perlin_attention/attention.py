@@ -721,7 +721,13 @@ class PerlinAttention(nn.Module):
                 token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
                 top_k = min(max(int(round(self.pconfig.k * (T_M / torch.min(token_length).item()))), 1), T_M)
                 k_flatten = self.pconfig.k_flatten
+                k_flatten_dim = self.pconfig.k_flatten_dim
                 if not k_flatten:
+                    k_flatten = True
+                    k_flatten_dim = 'query'
+                
+                if not k_flatten:
+                    raise Exception()
                     with timer("mask.topk"):
                         _, indices = torch.topk(
                             estimated_attention_probs, # estimation gradient is cut here
@@ -739,11 +745,12 @@ class PerlinAttention(nn.Module):
                         partial_attention_mask.fill_(FP_MIN)
                     with timer("mask.scatter"):
                         partial_attention_mask.scatter_(dim=-1, index=indices, value=0)
+                    with timer("mask.mask_per_item"):
+                        per_item_top_k = token_length * H * (self.pconfig.k * T_M / token_length)
                 else:
                     top_k_elems = None
                     per_item_top_k = None 
-                    k_flatten_dim = self.pconfig.k_flatten_dim
-                    assert k_flatten_dim in ['head', 'batch', 'causal_batch']
+                    assert k_flatten_dim in ['head', 'batch', 'causal_batch', 'query']
                     with timer("mask.view"):
                         masked_estimated_attention_probs = (estimated_attention_probs * (dst_attention_mask > -1))
                         
@@ -754,29 +761,63 @@ class PerlinAttention(nn.Module):
                         else:
                             causal_token_length = (causal_attention_mask > -1).long().sum(-1).view(1, 1, T_DST, 1)
                         
+                        # if k_flatten_dim == 'batch':
+                        #     assert not self.pconfig.causal
+                        #     t = masked_estimated_attention_probs.view(N, H*T*T_M)
+                        #     # top_k_elems = top_k*T*H
+                        #     per_item_top_k = token_length * H * torch.round(self.pconfig.k * T_M / token_length)
+                        # elif k_flatten_dim == 'head':
+                        #     assert not self.pconfig.causal
+                        #     t = masked_estimated_attention_probs.view(N, H, T*T_M)
+                        #     # top_k_elems = top_k*T
+                        #     per_item_top_k = token_length * torch.round(self.pconfig.k * T_M / token_length)
+                        # elif k_flatten_dim == 'causal_batch':
+                        #     t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
+                        #     # top_k_elems = top_k*H
+                        #     # per_item_top_k = (H * self.pconfig.k)
+                        #     if not self.pconfig.causal:
+                        #         per_item_top_k = (H * torch.round(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
+                        #     else:
+                        #         # NOTE consider causal token length
+                        #         per_item_top_k = torch.clamp((H * torch.round(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
+                        # else: raise Exception()
+                        
                         if k_flatten_dim == 'batch':
                             assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H*T*T_M)
                             # top_k_elems = top_k*T*H
-                            per_item_top_k = token_length * H * torch.round(self.pconfig.k * T_M / token_length)
+                            per_item_top_k = token_length * H * (self.pconfig.k * T_M / token_length)
                         elif k_flatten_dim == 'head':
                             assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H, T*T_M)
                             # top_k_elems = top_k*T
-                            per_item_top_k = token_length * torch.round(self.pconfig.k * T_M / token_length)
+                            per_item_top_k = token_length * (self.pconfig.k * T_M / token_length)
                         elif k_flatten_dim == 'causal_batch':
                             t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
                             # top_k_elems = top_k*H
                             # per_item_top_k = (H * self.pconfig.k)
                             if not self.pconfig.causal:
-                                per_item_top_k = (H * torch.round(self.pconfig.k * T_M / token_length)).view(N, 1, 1)
+                                per_item_top_k = (H * (self.pconfig.k * T_M / token_length)).view(N, 1, 1)
                             else:
                                 # NOTE consider causal token length
-                                per_item_top_k = torch.clamp((H * torch.round(self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1), 1, H*T_M)
+                                per_item_top_k = (H * (self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1) #, 1, H*T_M)
+                        elif k_flatten_dim == 'query':
+                            assert not self.pconfig.causal
+                            t = masked_estimated_attention_probs.view(N, H, T, T_M)
+                            # top_k_elems = top_k*T
+                            per_item_top_k = (self.pconfig.k * T_M / token_length).view(N, 1, 1, 1)
+                            # print(per_item_top_k)
                         else: raise Exception()
                         
-                        # NOTE to prevent 0 top-k when large T and small T_m
-                        per_item_top_k = torch.clamp_min(per_item_top_k, 1)
+                        # per_item_top_k_rounded = torch.round(per_item_top_k)
+                        per_item_top_k_floored = torch.floor(per_item_top_k)
+                        per_item_top_k_ceil_prob = per_item_top_k - per_item_top_k_floored
+                        per_item_top_k_prob_rounded = per_item_top_k_floored + (torch.rand_like(per_item_top_k_ceil_prob) < per_item_top_k_ceil_prob) * 1
+                        per_item_top_k = per_item_top_k_prob_rounded
+                        # per_item_top_k = per_item_top_k_rounded * (per_item_top_k_rounded >= 1) + per_item_top_k_lower * (per_item_top_k_rounded < 1)
+                        
+                        # NOTE this is not unnecesoary NOTE to prevent 0 top-k when large T and small T_m
+                        # per_item_top_k = torch.clamp_min(per_item_top_k, 1)
                         
                         top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)
@@ -830,11 +871,30 @@ class PerlinAttention(nn.Module):
                             partial_attention_mask = t_alive_mask.float()
                     
                     if k_flatten_dim == 'causal_batch':
+                        # need to mask time dimension
                         partial_attention_mask = partial_attention_mask.view(N, T, H, T_M).transpose(1, 2)
-                        partial_attention_mask.masked_fill_(
-                            mask=dst_attention_mask < -1,
-                            value=FP_MIN
-                        )
+                        if not self.benchmarking:
+                            partial_attention_mask.masked_fill_(
+                                mask=dst_attention_mask < -1,
+                                value=FP_MIN
+                            )
+                        else:
+                            partial_attention_mask.masked_fill_(
+                                mask=dst_attention_mask < -1,
+                                value=0
+                            )
+                    elif k_flatten_dim == 'query':
+                        partial_attention_mask = partial_attention_mask.view(N, H, T, T_M)
+                        if not self.benchmarking:
+                            partial_attention_mask.masked_fill_(
+                                mask=dst_attention_mask < -1,
+                                value=FP_MIN
+                            )
+                        else:
+                            partial_attention_mask.masked_fill_(
+                                mask=dst_attention_mask < -1,
+                                value=0
+                            )
                     elif k_flatten_dim in ['batch', 'head']:
                         pass
                     else: raise Exception()

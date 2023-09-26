@@ -2,89 +2,93 @@
 # y: accuracy    
 from matplotlib import pyplot as plt
 import torch
-from ...utils import seed
-import random
-import argparse
-from ...trainer.perlin_trainer import add_perlin_model_options, parse_perlin_model_options
-from ...trainer.perlin_trainer import GlueTrainer
 import os
+import matplotlib
 
 plt.style.use('seaborn-bright')
+matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
 
-def load_and_plot(
-    subset = 'mnli',
-    checkpoint_path = None,
-    evaluate = False,
-    **kwargs,
-):  
-    model = kwargs['model']
-    if model=='bert':
-        trained_k = [7, 13, 25]
-    elif 'opt' in model:
-        trained_k = [32, 64, 128]
-        
-    def plot(filename, title, ylabel):
-        plt.clf()
-        
-        for itk, tk in enumerate(trained_k):
-            kwargs['perlin_k'] = tk
-            trainer = GlueTrainer(
-                subset=subset,
-                **kwargs
-            )
-            path = f'./saves/tests/k_acc_bucket/{trainer.checkpoint_path}/k_{trained_k}.pth'
-            state = torch.load(path, map_location='cpu')
-            k_acc_bucket = state['k_acc_bucket'] # dict with k:acc form
-            del state
-
-            ks = list(k_acc_bucket.keys())
-            metrics = list(k_acc_bucket.values())
-            plt.plot(
-                ks, 
-                metrics, 
-                label=f'k={tk}', 
-                linestyle='--', 
-                linewidth=0.75,
-                marker='*',
-            )
-        
-        plt.title(f'{title}')
-        plt.xlabel(f'hyperparameter k')
-        plt.ylabel(f'{ylabel}')
-        plt.grid()
-        plt.legend(fontsize=8)
-        
-        root = f'./plots/main/eval_diffk_{model}'
-        os.makedirs(root, exist_ok=True)
-        path = os.path.join(root, f'{filename}.png')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
-        path = os.path.join(root, f'{filename}.pdf')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
+model = 'bert'
+if model=='bert':
+    trained_k = [7, 13, 25]
+elif 'opt' in model:
+    trained_k = [32, 64, 128]
     
-    plot(
-        f'{model}_diffk', 
-        'Evaluation with different k (Glue-MNLI)', 'accuracy (%)', 
-    )            
+def main():
+    data = {}
+    for k in trained_k:
+        os.makedirs('./plots/main/figure_dynamic_k', exist_ok=True)
+        
+        path = f'./plots/main/figure_dynamic_k/k_{k}.pth'
+        state = torch.load(path, map_location='cpu')
+        k_acc_dict = state['k_acc_bucket']
+        
+        data[k] = k_acc_dict
+    
+    BASELINE = {7:0.8211, 13:0.8388, 25:0.8424}
+    COLORS = {7:'magenta', 13:'purple', 25:'blue'}
+    for k in trained_k:
+        data[k][k] = BASELINE[k]*100
+    
+    plt.figure(figsize=(3.5,3.0))
+    for k in trained_k:
+        k_acc_dict = data[k]
+        
+        ts = sorted(k_acc_dict.items(), key=lambda x: x[0])
+        xs = [t[0] for t in ts]
+        ys = [t[1] for t in ts]
+        plt.plot(
+            xs, ys,
+            label=f'Adjusted From $k$={k}', 
+            linestyle='--', 
+            linewidth=0.75,
+            marker='*',
+            color=COLORS[k]
+        )
+    
+    for k in trained_k:
+        k_acc_dict = data[k]
+        xs = [min(k_acc_dict.keys()), max(k_acc_dict.keys())]
+        ys = [k_acc_dict[k], ] * 2
+        
+        plt.plot(
+            xs, ys,
+            linestyle=':',
+            linewidth=1.5,
+            color=COLORS[k]
+        )
+        
+        if k < 25:
+            if k < 10:
+                plt.annotate(f"k={k}", (52, ys[0] + 0.1), fontweight=500, color='#444')
+            else:
+                plt.annotate(f"k={k}", (52, ys[0] - 0.3), fontweight=500, color='#444')
+        else:
+            plt.annotate(f"k={k}", (4, ys[0] + 0.1), fontweight=500, color='#444')
+        
+    plt.title(
+        f'Accuracy After Adjusting $k$', 
+        fontsize=12,
+        fontweight=500,
+        pad=8,
+    )
+    # plt.subplots_adjust(hspace=0.2)
+    plt.xlabel(f'$k$', fontsize=10,  fontweight=500)
+    plt.ylabel(f'Acc. ↑', fontsize=10, fontweight=500)
+    plt.ylim(80, 85.2)
+    plt.xlim(3, 60)
+    plt.grid()
+    plt.legend(fontsize=9)
+    
+    root = f'./plots/main/figure_dynamic_k/'
+    os.makedirs(root, exist_ok=True)
+    
+    path = os.path.join(root, f'plot_dynamic_k.png')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
+    path = os.path.join(root, f'plot_dynamic_k.pdf')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-        
-    parser.add_argument('--model', type=str, default='bert')
-    parser.add_argument('--subset', type=str, default='mnli')
-    parser.add_argument('--checkpoint', type=str, default=None)
-    parser.add_argument('--evaluate', action='store_true')
-    add_perlin_model_options(parser)
-
-    args = parser.parse_args()
-    print(args)
-
-    kwargs = parse_perlin_model_options(args)
-    kwargs.update({
-        'model': args.model,
-        'subset': args.subset,
-        'checkpoint_path': args.checkpoint,
-        'evaluate': args.evaluate
-    })
-    load_and_plot(**kwargs)
+    main()
