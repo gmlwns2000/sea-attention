@@ -4,6 +4,8 @@ from ..models.perlin_attention import modules as perlin_modules
 perlin_modules.CAUSAL_CONV_FORCE_NON_CAUSAL = True
 
 def exam(fname='data.json', opt_model='facebook/opt-125m'):
+    TRACE = True
+    
     nbfs = [1, 2, 4, 8]
     perlin_nbf = [8]
     ks = [32, 64, 128]
@@ -59,7 +61,7 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
                     k=k,
                     w=w,
                     nbf=nbf,
-                    trace=False,
+                    trace=TRACE,
                     causal=True,
                     opt_model=opt_model,
                 ))

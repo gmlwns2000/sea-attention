@@ -1,6 +1,8 @@
 from .benchmark_bert import *
 
 def main():
+    TRACE = True
+    
     nbfs = [1, 2, 4, 8]
     ks = [7, 13, 25]
     ws = [32, 64, 128]
@@ -32,7 +34,7 @@ def main():
                     k=k,
                     w=w,
                     nbf=nbf,
-                    trace=False,
+                    trace=TRACE,
                 ))
                 data[f'perlin,nbf:{nbf},k:{k},w:{w}'] = {
                     'method': 'perlin',
