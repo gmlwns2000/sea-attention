@@ -809,15 +809,17 @@ class PerlinAttention(nn.Module):
                             # print(per_item_top_k)
                         else: raise Exception()
                         
+                        per_item_top_k = torch.round(per_item_top_k)
+                        
                         # per_item_top_k_rounded = torch.round(per_item_top_k)
-                        per_item_top_k_floored = torch.floor(per_item_top_k)
-                        per_item_top_k_ceil_prob = per_item_top_k - per_item_top_k_floored
-                        per_item_top_k_prob_rounded = per_item_top_k_floored + (torch.rand_like(per_item_top_k_ceil_prob) < per_item_top_k_ceil_prob) * 1
-                        per_item_top_k = per_item_top_k_prob_rounded
+                        # per_item_top_k_floored = torch.floor(per_item_top_k)
+                        # per_item_top_k_ceil_prob = per_item_top_k - per_item_top_k_floored
+                        # per_item_top_k_prob_rounded = per_item_top_k_floored + (torch.rand_like(per_item_top_k_ceil_prob) < per_item_top_k_ceil_prob) * 1
+                        # per_item_top_k = per_item_top_k_prob_rounded
                         # per_item_top_k = per_item_top_k_rounded * (per_item_top_k_rounded >= 1) + per_item_top_k_lower * (per_item_top_k_rounded < 1)
                         
-                        # NOTE this is not unnecesoary NOTE to prevent 0 top-k when large T and small T_m
-                        # per_item_top_k = torch.clamp_min(per_item_top_k, 1)
+                        # NOTE to prevent 0 top-k when large T and small T_m, we take care of lower bound in kernel implemenation.
+                        per_item_top_k = torch.clamp_min(per_item_top_k, 1)
                         
                         top_k_elems = min(int(math.ceil(torch.max(per_item_top_k).item())), t.shape[-1])
                         get_bench().register_temp_buffer('per_item_top_k', per_item_top_k)

@@ -476,7 +476,7 @@ def __scan_col_3_compute(
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32),
     ],
-    key=['TARGET_WIDTH_MAX', 'MAX_INTERP', 'BLOCK_N_ZERO']
+    key=['TARGET_WIDTH_MAX', 'MAX_INTER_PADDED', 'BLOCK_N_ZERO']
 )
 @triton.jit
 def __scan_col_4_compute(
@@ -486,10 +486,12 @@ def __scan_col_4_compute(
     stride_pixel_n, stride_pixel_m,
     V_STARTS,
     stride_vs_tdst, stride_vs_tm,
+    V_ENDS,
+    stride_ve_tdst, stride_ve_tm,
     COL_INDICES,
     stride_col_n, stride_col_z,
     N, M, H, T_M, 
-    TARGET_WIDTH_MAX: tl.constexpr, MAX_INTERP: tl.constexpr, 
+    TARGET_WIDTH_MAX: tl.constexpr, MAX_INTER_PADDED: tl.constexpr, MAX_INTERP,
     NZR_N, NZR_D, BLOCK_N_ZERO: tl.constexpr,
 ):
     pid_nzp = tl.program_id(0)
@@ -520,11 +522,19 @@ def __scan_col_4_compute(
         mask = mask_i_nzp
     )
     
+    v_end = tl.load(
+        V_ENDS\
+            + idx_tdst * stride_ve_tdst\
+            + idx_tm * stride_ve_tm,
+        mask = mask_i_nzp
+    )
+    
     col_start = tl.load(
         PIXEL_INDICES\
             + is_batch * stride_pixel_n\
             + (is_col - 1) * stride_pixel_m,
         mask=(((is_col - 1) >= 0) and (is_col < M)) and mask_i_nzp,
+        other=0,
     )
     
     col_end = tl.load(
@@ -537,12 +547,16 @@ def __scan_col_4_compute(
     col_len = col_end - col_start
     
     range_start = v_start + (idx_h * TARGET_WIDTH_MAX)
+    range_end = v_end + (idx_h * TARGET_WIDTH_MAX)
     tl.store(
         COL_INDICES\
             + is_batch[:, None] * stride_col_n\
-            + (tl.arange(0, MAX_INTERP)[None, :] + col_start[:, None]) * stride_col_z,
-        tl.arange(0, MAX_INTERP)[None, :] + range_start[:, None],
-        mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (mask_i_nzp[:, None])
+            + (tl.arange(0, MAX_INTER_PADDED)[None, :] + col_start[:, None]) * stride_col_z,
+        # 77,
+        # (tl.arange(0, MAX_INTER_PADDED)[None, :] * ((range_end[:, None] - range_start[:, None]) / col_len[:, None])).to(tl.int32) + range_start[:, None],
+        range_end[:, None] - (tl.arange(0, MAX_INTER_PADDED)[None, :] * ((range_end[:, None] - range_start[:, None]) / col_len[:, None])).to(tl.int32) - 1,
+        # mask=((tl.arange(0, MAX_INTER_PADDED)[None, :] < col_len[:, None])) and (mask_i_nzp[:, None])
+        mask=((tl.arange(0, MAX_INTER_PADDED)[None, :] < col_len[:, None]) and (tl.arange(0, MAX_INTER_PADDED)[None, :] < MAX_INTERP)) and (mask_i_nzp[:, None])
     )
     
     # for _i_nzr in range(BLOCK_N_ZERO):
@@ -602,7 +616,7 @@ def __scan_col_4_compute(
     #         mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
     #     )
 
-def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target_width: torch.Tensor, max_col_z: int):
+def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target_width: torch.Tensor, max_col_z: int, max_k: int):
     N, T_DST, H_T = x.shape # N, T_DST, H*T_M
     assert target_width.shape == (T_DST,)
     scales = target_width / original_width
@@ -621,6 +635,9 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
                 v_ends = triton_round((b + 1)*scales.view(T_DST, 1))
             with get_bench().region("scan_col.npixels"):
                 n_pixels = ((v_ends - v_starts).view(1, T_DST, 1, T_M).to(torch.int32) * x.view(N, T_DST, H, T_M).to(torch.int32))
+                # NOTE we set upper bound of pixel duplication
+                n_pixels = torch.clamp_max(n_pixels, max_k)
+                # print(n_pixels.view(N, T_DST, -1)[0])
             
             with get_bench().region("scan_col.cumsum"):
                 # TODO fusing kernel
@@ -684,11 +701,15 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
         # skiping non zero entries
         with get_bench().region("scan_col.compute"):
             # crow_indices[:, 1:] = pixel_indices.view(N, T_DST, -1)[:,:,-1]
-            non_zero_pixels = (n_pixels.view(N, -1)[:, :-1]).nonzero()
+            non_zero_pixels = (n_pixels.view(N, -1)[:, :]).nonzero()
+            
+            # print('nzp', non_zero_pixels)
             
             NZP_N, NZP_D = non_zero_pixels.shape # (idx_batch, idx_row)
             BLOCK_N_ZERO = 128
-            MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
+            # MAX_INTERP = triton.next_power_of_2(triton.cdiv(target_width_max, original_width))
+            MAX_INTERP = min(triton.cdiv(target_width_max, original_width), max_k)
+            MAX_INTERP_PADDED = triton.next_power_of_2(MAX_INTERP)
             grid = (triton.cdiv(NZP_N, BLOCK_N_ZERO),)
             # print(grid)
             __scan_col_4_compute[grid](
@@ -698,13 +719,17 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
                 pixel_indices.stride(0), pixel_indices.stride(1),
                 v_starts,
                 v_starts.stride(0), v_starts.stride(1),
+                v_ends,
+                v_ends.stride(0), v_ends.stride(1),
                 col_indices,
                 col_indices.stride(0), col_indices.stride(1),
                 N, M, H, T_M, 
-                target_width_max, MAX_INTERP, 
+                target_width_max, MAX_INTERP_PADDED, MAX_INTERP, 
                 NZP_N, NZP_D, BLOCK_N_ZERO, 
             )
             
+            # print('pi', n_pixels.view(N, -1)[:, :-1])
+            # print('pi', pixel_indices)
             # print(crow_indices)
             # print(col_indices)
             # exit()
@@ -908,7 +933,8 @@ def resize_from_m_to_t_csr(
                 original_width=T_M, 
                 target_width_max=T_SRC, 
                 target_width=target_width, 
-                max_col_z=max_col_z
+                max_col_z=max_col_z,
+                max_k=k,
             )
             if isinstance(ret, torch.Tensor):
                 assert ret.is_sparse_csr
