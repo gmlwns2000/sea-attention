@@ -791,7 +791,7 @@ class PerlinAttention(nn.Module):
                             assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H, T*T_M)
                             # top_k_elems = top_k*T
-                            per_item_top_k = token_length * (self.pconfig.k * T_M / token_length)
+                            per_item_top_k = (token_length * (self.pconfig.k * T_M / token_length)).view(N, 1, 1)
                         elif k_flatten_dim == 'causal_batch':
                             t = masked_estimated_attention_probs.transpose(1, 2).reshape(N, T, H*T_M)
                             # top_k_elems = top_k*H
