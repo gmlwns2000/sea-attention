@@ -330,7 +330,7 @@ class Trainer:
         if self.subset == 'bert':
             metric = load_metric('glue', 'cola')
         else:
-            metric = load_metric('glue', self.subset)
+            metric = load_metric('glue', self.subset, cache_dir= '/d1/jinakim/.cache/huggingface/metrics')
         
         loader = self.valid_loader
         if split == 'train':
