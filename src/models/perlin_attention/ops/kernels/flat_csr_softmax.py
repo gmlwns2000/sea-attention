@@ -42,6 +42,16 @@ def __flat_csr_softmax_py(
                 
             out_values[n, crow_start:crow_end] = output
 
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['BLOCK_Z','BLOCK_R']
+)
 @triton.jit
 def __flat_csr_softmax_compute(
     CROW_INDICES,
@@ -152,7 +162,7 @@ def flat_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:int=N
         out_values.stride(0), out_values.stride(1),
         N, R, H, T_SRC,
         BLOCK_Z, BLOCK_R,
-        num_warps=num_warps,
+        # num_warps=num_warps,
     )
     
     return torch.sparse_csr_tensor(

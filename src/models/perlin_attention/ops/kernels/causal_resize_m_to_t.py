@@ -201,6 +201,16 @@ def __scan_col_compute(
     
     tl.store(NCOLS + n*stride_ncolsn + index_as*stride_ncolsa, last_index, mask=mask_as)
 
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['BLOCK_N']
+)
 @triton.jit
 def __triton_round_compute(
     X,
@@ -248,7 +258,7 @@ def triton_round(x: torch.Tensor, inline=False):
         y.stride(0),
         N,
         BLOCK_N,
-        num_warps=num_warps,
+        # num_warps=num_warps,
     )
     
     return y.view(x_shape).contiguous()

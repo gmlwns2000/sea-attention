@@ -481,7 +481,7 @@ def load_and_plot():
     print('saved', path)
 
 def main_plot():
-    # measure_and_dump()
+    measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':

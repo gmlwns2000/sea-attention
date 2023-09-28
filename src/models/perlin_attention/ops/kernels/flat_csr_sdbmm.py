@@ -1,6 +1,9 @@
+"""
+This kernel seems very inefficient...
+"""
+
 import random
 import warnings
-from cv2 import imreadmulti
 import torch
 import triton
 import triton.language as tl
@@ -30,6 +33,7 @@ def __flat_csr_sdbmm_py(
                 
                 # too complicate in python
 
+
 @triton.autotune(configs=[
         triton.Config({}, num_warps=1),
         triton.Config({}, num_warps=2),
@@ -38,7 +42,99 @@ def __flat_csr_sdbmm_py(
         triton.Config({}, num_warps=16),
         triton.Config({}, num_warps=32),
     ],
-    key=['BLOCK_H', 'BLOCK_HID', 'MAX_ROW_Z', 'MAX_ROW_T']
+    key=['BLOCK_H',]
+)
+@triton.jit
+def __flat_csr_sdbmm_tch_compute(
+    CROW_INDICES,
+    stride_crow_n, stride_crow_r,
+    COL_INDICES,
+    stride_col_n, stride_col_z,
+    VALUES,
+    stride_v_n, stride_v_z,
+    OTHER,
+    stride_other_n, stride_other_h, stride_other_t, stride_other_d,
+    OUTPUT,
+    stride_output_n, stride_output_h, stride_output_t, stride_output_d,
+    TEMP_COUNT_HEAD,
+    stride_tch_n, stride_tch_r, stride_tch_h,
+    N, R, Z, H, T_DST, T_SRC, HID,
+    MAX_ROW_Z: tl.constexpr, MAX_ROW_T: tl.constexpr, BLOCK_HID: tl.constexpr, BLOCK_H: tl.constexpr, BLOCK_R: tl.constexpr, BLOCK_COL_HEAD: tl.constexpr, GRID_COL_HEAD: tl.constexpr
+):
+    n = tl.program_id(0)
+    pid_ir = tl.program_id(1)
+    grid_ir = tl.num_programs(1)
+    # pid_hid = tl.program_id(2)
+    
+    for _ir in range(BLOCK_R):
+        # ir = pid_ir * BLOCK_R + _ir
+        ir = _ir * grid_ir + pid_ir
+        ir_mask = ir < R
+        
+        crow_start = tl.load(
+            CROW_INDICES\
+                + n*stride_crow_n\
+                + ir*stride_crow_r,
+            mask=ir_mask,
+        )
+        
+        crow_end = tl.load(
+            CROW_INDICES\
+                + n*stride_crow_n\
+                + (ir+1)*stride_crow_r,
+            mask=ir_mask,
+        )
+        
+        # compute head counts
+        
+        # col_indices = tl.load(
+        #     COL_INDICES\
+        #         + n*stride_col_n\
+        #         + (tl.arange(0, MAX_ROW_Z) + crow_start) * stride_col_z,
+        #     mask=((tl.arange(0, MAX_ROW_Z) + crow_start) < crow_end) & ir_mask,
+        #     other=T_SRC*BLOCK_H*2,
+        # )
+        
+        # index_heads = col_indices // T_SRC
+        
+        # count_heads = (index_heads[None,:] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32)
+        # count_heads_sum = tl.sum(count_heads, axis=1) # (BLOCK_H)
+        
+        count_heads_sum = tl.zeros((BLOCK_H,), dtype=tl.int32)
+        for i in range(GRID_COL_HEAD):
+            # t = index_heads[i*BLOCK_COL_HEAD:i*BLOCK_COL_HEAD + BLOCK_COL_HEAD]
+            _col_indices = tl.load(
+                COL_INDICES\
+                    + n*stride_col_n\
+                    + (tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) * stride_col_z,
+                mask=((tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) < crow_end) & ir_mask,
+                other=T_SRC*BLOCK_H*2,
+            )
+            
+            t = _col_indices // T_SRC
+            
+            count_heads_sum += tl.sum((t[None, :] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32), axis=1)
+        
+        count_heads_cumsum = tl.cumsum(count_heads_sum)
+        tl.store(
+            TEMP_COUNT_HEAD\
+                + n*stride_tch_n\
+                + ir*stride_tch_r\
+                + tl.arange(0, BLOCK_H)*stride_tch_h,
+            value=count_heads_cumsum,
+            mask=(tl.arange(0, BLOCK_H) < H) & ir_mask
+        )
+
+
+@triton.autotune(configs=[
+        triton.Config({}, num_warps=1),
+        triton.Config({}, num_warps=2),
+        triton.Config({}, num_warps=4),
+        triton.Config({}, num_warps=8),
+        triton.Config({}, num_warps=16),
+        triton.Config({}, num_warps=32),
+    ],
+    key=['BLOCK_HID', 'MAX_ROW_Z', 'MAX_ROW_T']
 )
 @triton.jit
 def __flat_csr_sdbmm_compute(
@@ -96,33 +192,33 @@ def __flat_csr_sdbmm_compute(
         # count_heads = (index_heads[None,:] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32)
         # count_heads_sum = tl.sum(count_heads, axis=1) # (BLOCK_H)
         
-        count_heads_sum = tl.zeros((BLOCK_H,), dtype=tl.int32)
-        for i in range(GRID_COL_HEAD):
-            # t = index_heads[i*BLOCK_COL_HEAD:i*BLOCK_COL_HEAD + BLOCK_COL_HEAD]
-            _col_indices = tl.load(
-                COL_INDICES\
-                    + n*stride_col_n\
-                    + (tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) * stride_col_z,
-                mask=((tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) < crow_end) & ir_mask,
-                other=T_SRC*BLOCK_H*2,
-            )
+        # count_heads_sum = tl.zeros((BLOCK_H,), dtype=tl.int32)
+        # for i in range(GRID_COL_HEAD):
+        #     # t = index_heads[i*BLOCK_COL_HEAD:i*BLOCK_COL_HEAD + BLOCK_COL_HEAD]
+        #     _col_indices = tl.load(
+        #         COL_INDICES\
+        #             + n*stride_col_n\
+        #             + (tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) * stride_col_z,
+        #         mask=((tl.arange(0, BLOCK_COL_HEAD) + crow_start + (i*BLOCK_COL_HEAD)) < crow_end) & ir_mask,
+        #         other=T_SRC*BLOCK_H*2,
+        #     )
             
-            t = _col_indices // T_SRC
+        #     t = _col_indices // T_SRC
             
-            count_heads_sum += tl.sum((t[None, :] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32), axis=1)
+        #     count_heads_sum += tl.sum((t[None, :] == tl.arange(0, BLOCK_H)[:, None]).to(tl.int32), axis=1)
         
-        count_heads_cumsum = tl.cumsum(count_heads_sum)
-        tl.store(
-            TEMP_COUNT_HEAD\
-                + n*stride_tch_n\
-                + pid_ir*stride_tch_r\
-                + tl.arange(0, BLOCK_H)*stride_tch_h,
-            value=count_heads_cumsum,
-            mask=(tl.arange(0, BLOCK_H) < H) & ir_mask
-        )
-        tl.static_assert(count_heads_cumsum.shape[0] == BLOCK_H)
+        # count_heads_cumsum = tl.cumsum(count_heads_sum)
+        # tl.store(
+        #     TEMP_COUNT_HEAD\
+        #         + n*stride_tch_n\
+        #         + ir*stride_tch_r\
+        #         + tl.arange(0, BLOCK_H)*stride_tch_h,
+        #     value=count_heads_cumsum,
+        #     mask=(tl.arange(0, BLOCK_H) < H) & ir_mask
+        # )
+        # tl.static_assert(count_heads_cumsum.shape[0] == BLOCK_H)
         
-        tl.debug_barrier()
+        # tl.debug_barrier()
         
         # perform per head column matmul
         
@@ -130,7 +226,7 @@ def __flat_csr_sdbmm_compute(
             ch_start = tl.load(
                 TEMP_COUNT_HEAD\
                     + n*stride_tch_n\
-                    + pid_ir*stride_tch_r\
+                    + ir*stride_tch_r\
                     + (ih-1)*stride_tch_h,
                 mask=((ih-1) >= 0) & ((ih-1) < H) & ir_mask,
                 other=0
@@ -138,7 +234,7 @@ def __flat_csr_sdbmm_compute(
             ch_end = tl.load(
                 TEMP_COUNT_HEAD\
                     + n*stride_tch_n\
-                    + pid_ir*stride_tch_r\
+                    + ir*stride_tch_r\
                     + ih*stride_tch_h,
                 mask=(ih < H) & ir_mask,
                 other=-1
@@ -226,7 +322,8 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
     if benchmarking:
         timer = lambda name: get_bench().region(name)
     else:
-        timer = lambda name: nullcontext()
+        timer = lambda name: get_bench().region(name)
+        # timer = lambda name: nullcontext()
     
     with timer("flat_csr_sdbmm"):
         with timer("flat_csr_sdbmm.setup"):
@@ -290,8 +387,29 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
             grid = (N, triton.cdiv(R, BLOCK_R), triton.cdiv(HID, BLOCK_HID))
             
             # TODO this canbe reduced by reducing number of program in R dim
-            # temp_count_head = torch.zeros((N, R, H), dtype=torch.int32, device=values.device)
-            temp_count_head = torch.zeros((N, triton.cdiv(R, BLOCK_R), H), dtype=torch.int32, device=values.device)
+            temp_count_head = torch.zeros((N, R, H), dtype=torch.int32, device=values.device)
+            # temp_count_head = torch.zeros((N, triton.cdiv(R, BLOCK_R), H), dtype=torch.int32, device=values.device)
+        
+        with timer("flat_csr_sdbmm.tch.compute"):
+            BLOCK_COL_HEAD = min(MAX_ROW_Z, 1024)
+            TCH_BLOCK_R = 1
+            grid_tch = (N, triton.cdiv(R, TCH_BLOCK_R))
+            __flat_csr_sdbmm_tch_compute[grid_tch](
+                crow_indices,
+                crow_indices.stride(0),crow_indices.stride(1),
+                col_indices,
+                col_indices.stride(0), col_indices.stride(1),
+                values,
+                values.stride(0), values.stride(1),
+                other,
+                other.stride(0), other.stride(1), other.stride(2), other.stride(3),
+                output,
+                output.stride(0), output.stride(1), output.stride(2), output.stride(3),
+                temp_count_head,
+                temp_count_head.stride(0), temp_count_head.stride(1), temp_count_head.stride(2),
+                N, R, Z, H, T_DST, T_SRC, HID,
+                MAX_ROW_Z, MAX_ROW_T, BLOCK_HID, BLOCK_H, TCH_BLOCK_R, BLOCK_COL_HEAD=BLOCK_COL_HEAD, GRID_COL_HEAD=triton.cdiv(MAX_ROW_Z, BLOCK_COL_HEAD)
+            )
         
         with timer("flat_csr_sdbmm.compute"):
             BLOCK_COL_HEAD = min(MAX_ROW_Z, 1024)
@@ -409,6 +527,8 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
                             print(i,j,k,m,err,context[i,j,k,m],context_sparse[i,j,k,m])
                             return False
     
+    # return True
+    
     if run_benchmark:
         bench('sparse_sdbmm (trace)', bench_sparse, 0.5, 3, 'ms', True)
         bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms', False)
@@ -429,8 +549,8 @@ def test_main():
     H = 12
     T = 4096
     T_DST = T
-    T_M = 512
-    K = 128
+    T_M = 256
+    K = 64
     HID = 64
     
     test_config(
