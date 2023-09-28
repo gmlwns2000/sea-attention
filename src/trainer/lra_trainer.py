@@ -15,6 +15,26 @@ from ..dataset.lra_benchmarks.image import get_tokenizer as get_tokenizer_image
 from ..utils import Metric, seed
 
 from xformers.benchmarks.LRA.code.dataset import LRADataset
+import argparse
+import json
+import logging
+import os
+from enum import Enum
+from pathlib import Path
+from typing import Dict, Tuple, cast
+
+import pytorch_lightning as pl
+import torch
+import torch.nn as nn
+from fvcore.nn import FlopCountAnalysis, flop_count_str
+from pytorch_lightning.callbacks import ModelCheckpoint, TQDMProgressBar
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.strategies import DDPStrategy
+from torch.utils.data import DataLoader
+
+from xformers.benchmarks.LRA.code.dataset import LRADataset
+from xformers.benchmarks.LRA.code.model_wrapper import ModelForSC, ModelForSCDual
+from xformers.components.attention import ATTENTION_REGISTRY
 
 BF16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -93,7 +113,7 @@ LRA_TASKS = {
             "test": 25000
         },
         "training": {
-            "mixed_precision": false,
+            "mixed_precision": False,
             "batch_size": 32,
             "learning_rate": 0.0001,
             "warmup": 8000,
@@ -114,7 +134,7 @@ LRA_TASKS = {
             hidden_dropout_prob=0.2,
             attention_probs_dropout_prob=0.2,
             vocab_size=512 # get_tokenizer_text().vocab_size,
-        )
+        ),
         "model": {
             "pooling_mode": "cls",
             "common": {
@@ -127,7 +147,7 @@ LRA_TASKS = {
             },
             "xformer": [
                 {
-                    "reversible": false,
+                    "reversible": False,
                     "block_type": "encoder",
                     "num_layers": 4,
                     "residual_norm_style": "pre",
@@ -138,7 +158,7 @@ LRA_TASKS = {
                         "residual_dropout": 0.1,
                         "attention": {
                             "name": "generic",
-                            "causal": false
+                            "causal": False
                         }
                     },
                     "feedforward_config": {
@@ -164,7 +184,7 @@ LRA_TASKS = {
     },
     "listops": {
         'wandb_steps': 10,
-        'epochs': 30, # TODO 3
+        'epochs': 30, # TODO 3.3
         "dataloader_fn": lambda bs: get_loaders('listops', bs),
         "dataset": {
             "train": 96000,
@@ -172,7 +192,7 @@ LRA_TASKS = {
             "test": 2000
         },
         "training": {
-            "mixed_precision": false,
+            "mixed_precision": False,
             "batch_size": 32,
             "learning_rate": 0.0001,
             "warmup": 1000,
@@ -204,7 +224,7 @@ LRA_TASKS = {
             },
             "xformer": [
                 {
-                    "reversible": false,
+                    "reversible": False,
                     "block_type": "encoder",
                     "num_layers": 2,
                     "residual_norm_style": "pre",
@@ -215,7 +235,7 @@ LRA_TASKS = {
                         "residual_dropout": 0.1,
                         "attention": {
                             "name": "generic",
-                            "causal": false
+                            "causal": False
                         }
                     },
                     "feedforward_config": {
@@ -240,6 +260,8 @@ LRA_TASKS = {
         }
     },
     "retrieval": {
+        'wandb_steps': 10,
+        'epochs': 30, # TODO 6.5
         "dataloader_fn": lambda bs: get_loaders('retrieval', bs),
         "dataset": {
             "train": 147086,
@@ -247,7 +269,7 @@ LRA_TASKS = {
             "test": 17437
         },
         "training": {
-            "mixed_precision": false,
+            "mixed_precision": False,
             "batch_size": 32,
             "learning_rate": 0.0001,
             "warmup": 800,
@@ -258,6 +280,17 @@ LRA_TASKS = {
             "num_eval_steps": 565,
             "gradient_accumulation": 2
         },
+        # 'config': berts.BertConfig(
+        #     max_position_embeddings=1024,
+        #     num_attention_heads=4,
+        #     num_hidden_layers=4,
+        #     hidden_size=256,
+        #     intermediate_size=1024,
+        #     num_labels=2,
+        #     hidden_dropout_prob=0.2,
+        #     attention_probs_dropout_prob=0.2,
+        #     vocab_size=512 # get_tokenizer_text().vocab_size,
+        # ),
         "model": {
             "pooling_mode": "mean",
             "common": {
@@ -270,7 +303,7 @@ LRA_TASKS = {
             },
             "xformer": [
                 {
-                    "reversible": true,
+                    "reversible": True,
                     "block_type": "encoder",
                     "num_layers": 2,
                     "residual_norm_style": "pre",
@@ -281,7 +314,7 @@ LRA_TASKS = {
                         "residual_dropout": 0.1,
                         "attention": {
                             "name": "generic",
-                            "causal": false
+                            "causal": False
                         }
                     },
                     "feedforward_config": {
@@ -307,7 +340,7 @@ LRA_TASKS = {
     },
     "pathfinder32": {
         "training": {
-            "mixed_precision": false,
+            "mixed_precision": False,
             "batch_size": 256,
             "learning_rate": 0.0001,
             "warmup": 312,
@@ -330,7 +363,7 @@ LRA_TASKS = {
             },
             "xformer": [
                 {
-                    "reversible": true,
+                    "reversible": True,
                     "block_type": "encoder",
                     "num_layers": 2,
                     "residual_norm_style": "pre",
@@ -341,7 +374,7 @@ LRA_TASKS = {
                         "residual_dropout": 0.1,
                         "attention": {
                             "name": "generic",
-                            "causal": false
+                            "causal": False
                         }
                     },
                     "feedforward_config": {
@@ -375,7 +408,7 @@ LRA_TASKS = {
             "test": 10000
         },
         "training": {
-            "mixed_precision": false,
+            "mixed_precision": False,
             "batch_size": 256,
             "learning_rate": 0.0001,
             "warmup": 175,
@@ -409,7 +442,7 @@ LRA_TASKS = {
             },
             "xformer": [
                 {
-                    "reversible": true,
+                    "reversible": True,
                     "block_type": "encoder",
                     "num_layers": 2,
                     "residual_norm_style": "pre",
@@ -420,7 +453,7 @@ LRA_TASKS = {
                         "residual_dropout": 0.1,
                         "attention": {
                             "name": "generic",
-                            "causal": false
+                            "causal": False
                         }
                     },
                     "feedforward_config": {
