@@ -6,7 +6,7 @@ from torch import nn, optim
 import tqdm
 import wandb
 from ..models import hf_bert as berts
-# from ..dataset.lra_benchmarks_ import get_loaders
+from ..dataset.lra_benchmarks import get_loaders
 from ..utils.get_optimizer import get_optimizer
 from ..utils import batch_to
 from ..dataset.lra_benchmarks.list_ops import get_tokenizer as get_tokenizer_listops
@@ -488,7 +488,7 @@ def build_dataloaders(
     datasets = {}
     for component in ("train", "dev", "test"):
         datasets[component] = LRADataset(
-            file_path=f"datasets/{task}.{component}.pickle",
+            file_path=f"xformers/xformers/benchmarks/LRA/datasets/{task}.{component}.pickle",
             seq_len=config_training["seq_len"],
         )
 
@@ -560,7 +560,9 @@ class Trainer:
         if self.kd_checkpoint is None:
             self.kd_checkpoint = f'./saves/trainer/lra_trainer/{subset}/checkpoint.pth'
         
-        config_traing = task_desc['training']
+        config_training = task_desc['training']
+        config_training["seq_len"] = task_desc["model"]["common"]["seq_len"]
+        logging.info(f"Learning rate: {config_training['learning_rate']}")
         dataloaders = build_dataloaders(subset, config_training)
         self.train_loader = dataloaders["train"]
         self.test_loader = dataloaders["test"]
