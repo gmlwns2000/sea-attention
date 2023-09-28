@@ -3,7 +3,7 @@ from .benchmark_bert import *
 def main():
     TRACE = True
     
-    BSIZE = 128
+    BSIZE = 96
     
     nbfs = [1, 2, 4, 8]
     ks = [7, 13, 25]

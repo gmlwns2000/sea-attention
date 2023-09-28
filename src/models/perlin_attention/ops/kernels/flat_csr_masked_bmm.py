@@ -26,16 +26,16 @@ def __flat_csr_masked_bmm_py(
                 b_vec = b[n, index_head, index_col]
                 out_values[n, ic] = torch.dot(a_vec, b_vec)
 
-@triton.autotune(configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
-    ],
-    key=['BLOCK_ROW','BLOCK_COL','BLOCK_HID']
-)
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=['BLOCK_ROW','BLOCK_COL','BLOCK_HID']
+# )
 @triton.jit
 def __flat_csr_masked_bmm_compute(
     CROW_INDICES,
@@ -184,7 +184,7 @@ def flat_csr_masked_bmm(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor, ma
         N, R, T_SRC, HID,
         grid[1], grid[2],
         BLOCK_ROW, BLOCK_COL, BLOCK_HID,
-        # num_warps=n_warps,
+        num_warps=n_warps,
     )
     
     return torch.sparse_csr_tensor(

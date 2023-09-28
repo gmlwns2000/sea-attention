@@ -56,8 +56,8 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         if on_warmup is not None:
             on_warmup()
         torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         start_mem = torch.cuda.max_memory_allocated()
         torch.cuda.synchronize()
@@ -65,16 +65,15 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         elapsed = 0
         last_report = time.time()
         t = time.time()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
         while True:
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            
-            start.record()
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
-            end.record()
-            torch.cuda.synchronize()
-            elapsed += start.elapsed_time(end) / 1000
+            # torch.cuda.synchronize()
+            # elapsed += start.elapsed_time(end) / 1000
+            # samples.append((start, end))
             
             sample_count += 1
             if time.time() - t > config.t_sample:
@@ -82,7 +81,10 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
             if time.time() - last_report > 0.5:
                 last_report = time.time()
                 print('.', end='', flush=True)
+        end.record()
         torch.cuda.synchronize()
+        # elapsed = sum(s.elapsed_time(e) / 1000 for s, e in samples)
+        elapsed = start.elapsed_time(end) / 1000
         mem = torch.cuda.max_memory_allocated() - start_mem
     except torch.cuda.OutOfMemoryError as ex: # type: ignore
         mem = 0
@@ -169,7 +171,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     else:
         attention_mask = (torch.arange(0, SEQ_LEN).view(SEQ_LEN, 1) >= torch.arange(0, SEQ_LEN).view(1, SEQ_LEN)) * 1.0
         hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
-        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN).expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
         
         layer = perlin.decoder.layers[0] # type: OPTDecoderLayer
         fc1 = nn.Identity()
@@ -204,9 +206,9 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     get_bench().disabled = True
     get_bench().synchronize = False
     
-    torch.cuda.synchronize()
-    gc.collect()
-    torch.cuda.empty_cache()
+    # torch.cuda.synchronize()
+    # gc.collect()
+    # torch.cuda.empty_cache()
     
     result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}{f",{bench_config.nbf}" if method == "perlin" else ""}{f",{bench_config.w}" if method == "perlin" else ""}', test_layer, bench_config)
     # print(result_interval, BSIZE)
@@ -217,12 +219,12 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         return_queue.put((result_interval, result_mem))
 
 def exam_config(config: BenchConfig):
-    # q = mp.Queue()
-    # exam(config, q)
-    # torch.cuda.synchronize()
-    # gc.collect()
-    # torch.cuda.empty_cache()
-    # return q.get()
+    q = mp.Queue()
+    exam(config, q)
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.empty_cache()
+    return q.get()
 
     q = mp.Queue()
     proc = mp.Process(target=exam, args=(config, q), daemon=True)

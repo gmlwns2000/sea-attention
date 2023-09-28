@@ -371,10 +371,15 @@ def render_merged(ax, axis, xlabel, title):
         # scale latency x axis
         # data[:,1,0,:] = data[:,1,0,:] * 10
         data = data[:,axis:axis+1,:,:]
-        weights = [{
-            'mnli': 433000,
-            'cola': 10657,
-            'mrpc': 5801,
+        # weights = [{
+        #     'mnli': 433000,
+        #     'cola': 10657,
+        #     'mrpc': 5801,
+        # }[k] for k in metrics.keys()]
+        weights = [{ # size of test set
+            'mnli': 9800,
+            'cola': 1050,
+            'mrpc': 1725,
         }[k] for k in metrics.keys()]
         for i in range(len(weights)):
             w = weights[i] / sum(weights)

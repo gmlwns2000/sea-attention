@@ -282,7 +282,7 @@ class PerlinAttention(nn.Module):
         
         COMPILE_CNN = os.environ.get('PERLIN_COMPILE', '0') == '1'
         if COMPILE_CNN:
-            # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, backend='onnxrt')
+            # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, backend='cudagraphs')
             pass
         
         self.attention_predictor_dec_scaler = nn.Sequential(
@@ -765,7 +765,7 @@ class PerlinAttention(nn.Module):
                         if not self.pconfig.causal:
                             token_length = (attention_mask > -1).long().sum(-1).view(N, -1)
                         else:
-                            causal_token_length = (causal_attention_mask > -1).long().sum(-1).view(1, 1, T_DST, 1)
+                            causal_token_length = (causal_attention_mask > -1).long().sum(-1).view(N, 1, T_DST, 1)
                         
                         # if k_flatten_dim == 'batch':
                         #     assert not self.pconfig.causal
@@ -806,7 +806,7 @@ class PerlinAttention(nn.Module):
                                 per_item_top_k = (H * (self.pconfig.k * T_M / token_length)).view(N, 1, 1)
                             else:
                                 # NOTE consider causal token length
-                                per_item_top_k = (H * (self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(1, T_DST, 1) #, 1, H*T_M)
+                                per_item_top_k = (H * (self.pconfig.k * T_M / causal_token_length.squeeze(0))).view(N, T_DST, 1) #, 1, H*T_M)
                         elif k_flatten_dim == 'query':
                             assert not self.pconfig.causal
                             t = masked_estimated_attention_probs.view(N, H, T, T_M)

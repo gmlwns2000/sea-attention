@@ -17,6 +17,28 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
     
     data = {}
     
+    for nbf in perlin_nbf:
+        for k in ks:
+            for w in ws:
+                latency, mem = exam_config(BenchConfig(
+                    method='perlin',
+                    bsize=1,
+                    seq_len=2048,
+                    k=k,
+                    w=w,
+                    nbf=nbf,
+                    trace=TRACE,
+                    causal=True,
+                    opt_model=opt_model,
+                ))
+                name = f'perlin,nbf:{nbf},k:{k},w:{w}'
+                entry = {
+                    'latency': latency * 1000, 
+                    'mem': mem / (1024 ** 2),
+                }
+                print(name, entry)
+                data[name] = entry
+    
     latency, mem = exam_config(BenchConfig(
         method='cosformer',
         bsize=1,
@@ -50,25 +72,6 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
         'latency': latency * 1000, 
         'mem': mem / (1024 ** 2),
     }
-    
-    for nbf in perlin_nbf:
-        for k in ks:
-            for w in ws:
-                latency, mem = exam_config(BenchConfig(
-                    method='perlin',
-                    bsize=1,
-                    seq_len=2048,
-                    k=k,
-                    w=w,
-                    nbf=nbf,
-                    trace=TRACE,
-                    causal=True,
-                    opt_model=opt_model,
-                ))
-                data[f'perlin,nbf:{nbf},k:{k},w:{w}'] = {
-                    'latency': latency * 1000, 
-                    'mem': mem / (1024 ** 2),
-                }
     
     for nbf in nbfs:
         latency, mem = exam_config(BenchConfig(
