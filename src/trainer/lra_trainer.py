@@ -85,7 +85,7 @@ LRA_TASKS_INITIAL = {
 LRA_TASKS = {
     "text": {
         'wandb_steps': 10,
-        'epochs': 30,
+        'epochs': 30, # TODO 25
         "dataloader_fn": lambda bs: get_loaders('text', bs),
         "dataset": {
             "train": 25000,
@@ -164,7 +164,7 @@ LRA_TASKS = {
     },
     "listops": {
         'wandb_steps': 10,
-        'epochs': 30,
+        'epochs': 30, # TODO 3
         "dataloader_fn": lambda bs: get_loaders('listops', bs),
         "dataset": {
             "train": 96000,
@@ -367,7 +367,7 @@ LRA_TASKS = {
     },
     "image": {
         'wandb_steps': 10,
-        'epochs': 500,
+        'epochs': 500, # 200
         "dataloader_fn": lambda bs: get_loaders('image', bs),
         "dataset": {
             "train": 45000,
