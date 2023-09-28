@@ -20,8 +20,11 @@ from ..utils import seed, get_bench
 from torch import nn
 import json
 
+os.environ['PERLIN_COMPILE'] = '1'
+torch.set_float32_matmul_precision('high')
+
 plt.style.use('seaborn-bright')
-plt.rcParams['font.family'] = 'Noto Sans'
+plt.rcParams['font.family'] = 'Noto Sans, Dejavu Sans'
 
 @dataclass
 class BenchConfig:
@@ -119,13 +122,14 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         pred_len = bench_config.w
 
     register_default_config(PerlinAttentionConfig(
-        performer_nb_factor=bench_config.nbf if method == 'perlin' or (method == 'performer' and bench_config.causal) else 1,
+        performer_nb_factor=bench_config.nbf if (method in ['perlin', 'performer']) else 1,
         lora_enabed=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,
         k=bench_config.k,
-        attention_predictor_length=pred_len
+        attention_predictor_length=pred_len,
+        causal=bench_config.causal,
     ))
     if not bench_config.causal:
         config = AutoConfig.from_pretrained('bert-base-uncased')
@@ -200,6 +204,10 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     get_bench().disabled = True
     get_bench().synchronize = False
     
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.empty_cache()
+    
     result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}{f",{bench_config.nbf}" if method == "perlin" else ""}{f",{bench_config.w}" if method == "perlin" else ""}', test_layer, bench_config)
     # print(result_interval, BSIZE)
     result_interval = result_interval / BSIZE
@@ -209,6 +217,13 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         return_queue.put((result_interval, result_mem))
 
 def exam_config(config: BenchConfig):
+    # q = mp.Queue()
+    # exam(config, q)
+    # torch.cuda.synchronize()
+    # gc.collect()
+    # torch.cuda.empty_cache()
+    # return q.get()
+
     q = mp.Queue()
     proc = mp.Process(target=exam, args=(config, q), daemon=True)
     proc.start()
@@ -311,9 +326,7 @@ def load_and_plot():
     ts = data['ts']
     ks = data['ks']
     
-    def plot(filename, title, ylabel, baselines, perlins, ts, ks):
-        plt.figure(figsize=(4.5,3.5))
-        
+    def plot(ax, filename, title, ylabel, baselines, perlins, ts, ks):
         NAMES = {
             'none': 'None',
             'cosformer': 'Cosformer',
@@ -360,8 +373,8 @@ def load_and_plot():
             'none': 'mediumslateblue',
             'cosformer': 'gray',
             'performer': 'lightcoral',
-            'reformer': 'greenyellow',
-            'scatterbrain': 'turquoise',
+            'reformer': '#788bfa',
+            'scatterbrain': '#3debc2',
             'sinkhorn': 'lightskyblue',
             'synthesizer': 'gold',
             'perlin_0': 'red',
@@ -380,7 +393,7 @@ def load_and_plot():
             y_slope = ys_est[i] / y_last
             y_last = ys_est[i]
         
-        plt.plot(
+        ax.plot(
             xs_est, 
             ys_est, 
             linestyle=':', 
@@ -392,7 +405,7 @@ def load_and_plot():
         )
         
         for iy, ys in enumerate(baselines):
-            plt.plot(
+            ax.plot(
                 ts, 
                 ys, 
                 label=NAMES[baseline_methods[iy]], 
@@ -403,51 +416,72 @@ def load_and_plot():
                 color=COLORS[baseline_methods[iy]],
             )
         for ik, k in enumerate(ks):
-            plt.plot(
+            ax.plot(
                 ts, 
                 perlins[ik], 
-                label=f'Ours (k={k})', 
+                label=f'Ours ($k$={k})', 
                 linewidth=1.0,
                 marker='*',
                 markersize=MARKER_SIZE['perlin'],
                 color=COLORS[f'perlin_{ik}'],
             )
         
-        plt.title(f'{title}', fontweight=500)
-        plt.xlabel(f'Seq. Len.', fontweight=500)
-        plt.ylabel(f'{ylabel}', fontweight=500)
-        plt.yscale('log', base=2)
-        plt.xscale('log', base=2)
-        plt.grid()
-        plt.legend(fontsize=6, ncols=2)
+        ax.set_title(f'{title}', fontweight=500)
+        ax.set_xlabel(f'Sequence Length', fontweight=500)
+        ax.set_ylabel(f'{ylabel}', fontweight=500)
+        ax.set_yscale('log', base=2)
+        ax.set_xscale('log', base=2)
+        ax.grid(True)
+        ax.set_xticks(ts)
+        # plt.legend(fontsize=6, ncols=2)
         
-        path = os.path.join(root, f'{filename}.png')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
-        path = os.path.join(root, f'{filename}.pdf')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
+        # path = os.path.join(root, f'{filename}.png')
+        # plt.savefig(path, dpi=300, bbox_inches='tight')
+        # print('saved', path)
+        # path = os.path.join(root, f'{filename}.pdf')
+        # plt.savefig(path, dpi=300, bbox_inches='tight')
+        # print('saved', path)
+    
+    nrows = 1
+    ncols = 2
+    fig, axs = plt.subplots(nrows, ncols)
+    fig.set_figwidth(3.2*ncols+1.2)
+    fig.set_figheight(2.4)
     
     plot(
+        axs[1],
         'exp_latency', 
-        'Latency', 'ms/it', 
+        'Latency', 'ms ↓', 
         latencies_baseline, 
         latencies_perlin, 
         ts, 
         ks
     )
+    
+    fig.legend(fontsize=8, ncols=1, loc='center right', bbox_to_anchor=(1, 0.5))
+    
     plot(
+        axs[0],
         'exp_vram', 
         'Peak VRAM Usage', 
-        'MB', 
+        'MB ↓', 
         vram_baseline, 
         vram_perlin, 
         ts, 
         ks
     )
+    
+    fig.subplots_adjust(wspace=0.27, right=0.83)
+    
+    path = os.path.join(root, f'exp_latency_memory.png')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
+    path = os.path.join(root, f'exp_latency_memory.pdf')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
 
 def main_plot():
-    measure_and_dump()
+    # measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':

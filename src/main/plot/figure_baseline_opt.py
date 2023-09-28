@@ -27,8 +27,16 @@ COLORS = {
     'sinkhorn': 'orange',
     'synthesizer': 'yellow',
 }
+EDGECOLORS = {
+    'none': '#040',
+    'performer': '#005',
+    'reformer': '#303',
+    'scatterbrain': 'black',
+    'sinkhorn': 'red',
+    'synthesizer': 'orange',
+}
 MARKERS = {
-    'none': 'x',
+    'none': 'o',
     'perlin': '*'
 }
 MARKER_SIZE = {
@@ -106,9 +114,28 @@ def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
         else:
             xs = []
             ys = []
+            ss = []
             for k, v in metric.items():
                 if v['method'] == method:
                     y = v['metric']
+                    s = {
+                        'reformer': {
+                            2: 0.5,
+                            4: 1.0,
+                            8: 1.5,
+                            16: 2.0
+                        },
+                        'performer': {
+                            8: 0.5,
+                            4: 1.0,
+                            2: 1.5,
+                            1: 2.0,
+                        },
+                        'none': {
+                            'none': 0.66,
+                        }
+                    }[method][v[{'reformer': 'n_hash', 'performer': 'nbf', 'none': 'method'}[method]]]
+                    ss.append(s * MARKER_SIZE.get(method, MARKER_SIZE['default']))
                     x = benchmark[k][benchmark_metric]
                     xs.append(x)
                     ys.append(y)
@@ -116,9 +143,11 @@ def render_plot(ax, metric, benchmark, benchmark_metric, x_label):
             ax.scatter(
                 xs, 
                 ys, 
-                s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
+                s=ss, 
                 marker=MARKERS.get(method, 'o'), 
                 color=COLORS.get(method, 'gray'),
+                edgecolor=EDGECOLORS.get(method, 'black'),
+                lw=1.0,
                 label=METHOD_NAMES[method],
                 zorder=100000 if method == 'none' else 0,
             )

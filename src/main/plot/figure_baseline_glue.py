@@ -15,10 +15,19 @@ COLORS = {
     'perlin': 'pink',
     'performer': 'blue',
     'reformer': 'purple',
-    'scatterbrain': 'gray',
+    'scatterbrain': '#2EB',
     'sinkhorn': 'orange',
-    'synthesizer': 'yellow',
+    'synthesizer': 'lime',
     'cosformer': 'skyblue',
+}
+EDGECOLORS = {
+    'none': '#040',
+    'performer': '#005',
+    'reformer': '#303',
+    'scatterbrain': '#197',
+    'sinkhorn': '#f55',
+    'synthesizer': '#5b5',
+    'cosformer': 'blue',
 }
 METHOD_NAMES = {
     'none': 'Vanilla',
@@ -76,12 +85,15 @@ def import_jn_format(path):
             w = v['w']
             ret[f'perlin,nbf:{nbf},k:{k},w:{w}'] = {
                 'metric': metric,
+                'nbf': nbf,
+                'k': k,
                 'method': 'perlin'
             }
         elif method == 'performer':
             nbf = v['nbf']
             ret[f'performer,nbf:{nbf}'] = {
                 'metric': metric,
+                'nbf': nbf,
                 'method': 'performer'
             }
         elif method == 'cosformer':
@@ -93,6 +105,7 @@ def import_jn_format(path):
             k = v['k']
             ret[f'{method},k:{k}'] = {
                 'metric': metric,
+                'k': k,
                 'method': method
             }
     return ret
@@ -142,6 +155,8 @@ SUBCOLORS = {
     'w:128': ('#30f', 100),
 }
 
+ss_methods = {}
+
 def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_label='Acc.'):
     plot_data = []
     for method in methods:
@@ -181,20 +196,70 @@ def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_
         else:
             xs = []
             ys = []
+            ss = []
             for k, v in data.items():
                 if v['method'] == method:
+                    print(k, v)
+                    s_default = MARKER_SIZE.get(method, MARKER_SIZE['default'])
                     y = v['metric']
                     assert k in benchmark, k
                     x = benchmark[k][benchmark_metric]
+                    s = {
+                        'none': {
+                            'none': 1.0
+                        },
+                        'performer': {
+                            '8': 0.5,
+                            '4': 1.0,
+                            '2': 1.5,
+                            '1': 2.0,
+                        },
+                        'reformer': {
+                            '7': 0.5,
+                            '13': 1.0,
+                            '25': 2.0
+                        },
+                        'scatterbrain': {
+                            '7': 0.5,
+                            '13': 1.0,
+                            '25': 2.0
+                        },
+                        'sinkhorn': {
+                            '7': 0.5,
+                            '13': 1.0,
+                            '25': 2.0
+                        },
+                        'synthesizer': {
+                            '7': 0.5,
+                            '13': 1.0,
+                            '25': 2.0
+                        },
+                        'cosformer': {
+                            'cosformer': 1.0,
+                        },
+                    }[method][v[{
+                        'none': 'method',
+                        'performer': 'nbf',
+                        'reformer': 'k',
+                        'scatterbrain': 'k',
+                        'sinkhorn': 'k',
+                        'synthesizer': 'k',
+                        'cosformer': 'method',
+                    }[method]]]
+                    ss.append(s * s_default)
                     xs.append(x)
                     ys.append(y)
+            
+            ss_methods[method] = ss
             
             ax.scatter(
                 xs, ys, 
                 label=METHOD_NAMES[method], 
                 color=COLORS[method], 
+                edgecolor=EDGECOLORS[method],
+                lw=1.0,
                 marker=MARKERS.get(method, 'o'), 
-                s=MARKER_SIZE.get(method, MARKER_SIZE['default']),
+                s=ss,
                 zorder=100000 if method == 'none' else 0,
             )
             plot_data.append([xs, ys])
@@ -203,14 +268,14 @@ def render_fig(ax, data, benchmark, benchmark_metric='latency', x_label='ms', y_
     ax.set_xlabel(x_label, fontweight=500)
     return plot_data
 
-ncols = len(metrics.keys())
+ncols = len(metrics.keys()) + 1
 nrows = 2
 
 fig, axs = plt.subplots(nrows, ncols)
 fig.set_figwidth(3.5*ncols)
-fig.set_figheight(2.5*nrows+1)
+fig.set_figheight(2.5*nrows)
 # fig.set_facecolor('black')
-fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy', fontsize=14, fontweight=500)
+# fig.suptitle('Comparison of Trade-off Between Computational Cost and Accuracy', fontsize=14, fontweight=500)
 
 all_plot_data = []
 for isubset, subset in enumerate(metrics.keys()):
@@ -219,16 +284,16 @@ for isubset, subset in enumerate(metrics.keys()):
         'cola': "Matthew's Corr.↑",
         'mnli': 'Acc.↑'
     }[subset]
-    ax = axs[0, isubset]
+    ax = axs[0, isubset + 1]
     ax.set_title(f'Memory ({NAMES[subset]})', fontsize=12, fontweight=500)
     plot_data_memory = render_fig(ax, metrics[subset], benchmarks, 'mem', 'MB↓', ylabel)
     
-    ax = axs[1, isubset]
+    ax = axs[1, isubset + 1]
     ax.set_title(f'Latency ({NAMES[subset]})', fontsize=12, fontweight=500)
     plot_data_latency = render_fig(ax, metrics[subset], benchmarks, 'latency', 'ms↓', ylabel)
     all_plot_data.append([plot_data_memory, plot_data_latency])
 
-fig.subplots_adjust(bottom=0.18, hspace=0.45, wspace=0.25)
+fig.subplots_adjust(right=0.885, hspace=0.50, wspace=0.30)
 handles, labels = ax.get_legend_handles_labels()
 label_clip = sum([1 if x == 'Ours' else 0 for x in labels])
 labels = labels[label_clip:]
@@ -268,24 +333,25 @@ for w in [32, 64, 128]:
 handles = our_handles + handles
 labels = our_labels + labels
 import itertools
-ncols = math.ceil(len(labels)/2)
+ncols = math.ceil(len(labels)/12)
 def flip(items, ncol):
     return itertools.chain(*[items[i::ncol] for i in range(ncol)])
 fig.legend(
     flip(handles, ncols), flip(labels, ncols), 
-    loc='lower center', ncol=ncols, handler_map={tuple: HandlerTuple(ndivide=None)})
+    loc='center right', ncol=ncols, handler_map={tuple: HandlerTuple(ndivide=None)}
+)
 # fig.tight_layout()
 
-plt.savefig(os.path.join(root, 'plot_baseline_glue.png'), bbox_inches='tight')
-plt.savefig(os.path.join(root, 'plot_baseline_glue.pdf'), bbox_inches='tight')
-print(os.path.join(root, 'plot_baseline_glue.png'))
+# plt.savefig(os.path.join(root, 'plot_baseline_glue.png'), bbox_inches='tight')
+# plt.savefig(os.path.join(root, 'plot_baseline_glue.pdf'), bbox_inches='tight')
+# print(os.path.join(root, 'plot_baseline_glue.png'))
 
-plt.clf()
-nrows = 2
-ncols = 1
-fig, axs = plt.subplots(nrows, ncols)
-fig.set_figwidth(3.5*ncols)
-fig.set_figheight(2.7*nrows+1)
+# plt.clf()
+# nrows = 2
+# ncols = 1
+# fig, axs = plt.subplots(nrows, ncols)
+# fig.set_figwidth(3.5*ncols)
+# fig.set_figheight(2.7*nrows+1)
 # plt.figure(figsize=(4,4))
 def render_merged(ax, axis, xlabel, title):
     for imethod, method in enumerate(methods):
@@ -333,7 +399,10 @@ def render_merged(ax, axis, xlabel, title):
             ax.scatter(
                 xs, 
                 ys, 
-                s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
+                # s=MARKER_SIZE.get(method, MARKER_SIZE['default']), 
+                s = ss_methods[method],
+                edgecolor=EDGECOLORS[method],
+                lw=1.0,
                 label=METHOD_NAMES[method], 
                 color=COLORS[method], 
                 marker=MARKERS.get(method, 'o'),
@@ -343,13 +412,13 @@ def render_merged(ax, axis, xlabel, title):
     # plt.legend()
     ax.grid(True)
     ax.set_title(title, fontsize=13, fontweight=500)
-    ax.set_xlabel(xlabel, fontsize=11, fontweight=500)
-    ax.set_ylabel('Average Metric↑', fontsize=11, fontweight=500)
+    ax.set_xlabel(xlabel, fontweight=500)
+    ax.set_ylabel('Average Metric↑', fontweight=500)
 
-render_merged(axs[0], 0, 'MB↓', 'Memory')
-render_merged(axs[1], 1, 'ms↓', 'Latency')
-fig.subplots_adjust(hspace=0.36, top=0.90)
-fig.suptitle("Averaged Among Subsets", fontsize=15, fontweight=500)
+render_merged(axs[0, 0], 0, 'MB↓', 'Memory (Avg.)')
+render_merged(axs[1, 0], 1, 'ms↓', 'Latency (Avg.)')
+# fig.subplots_adjust(hspace=0.36, top=0.90)
+# fig.suptitle("Averaged Among Subsets", fontsize=15, fontweight=500)
 
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.png'), bbox_inches='tight')
 plt.savefig(os.path.join(root, 'plot_baseline_glue_all.pdf'), bbox_inches='tight')

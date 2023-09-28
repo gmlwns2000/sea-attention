@@ -636,7 +636,7 @@ def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target
             with get_bench().region("scan_col.npixels"):
                 n_pixels = ((v_ends - v_starts).view(1, T_DST, 1, T_M).to(torch.int32) * x.view(N, T_DST, H, T_M).to(torch.int32))
                 # NOTE we set upper bound of pixel duplication
-                n_pixels = torch.clamp_max(n_pixels, max_k)
+                torch.clamp_max(n_pixels, max_k, out=n_pixels)
                 # print(n_pixels.view(N, T_DST, -1)[0])
             
             with get_bench().region("scan_col.cumsum"):

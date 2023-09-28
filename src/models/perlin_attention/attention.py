@@ -279,6 +279,12 @@ class PerlinAttention(nn.Module):
                 )
             # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, mode='reduce-overhead')
         # self.attention_predictor_cnn = nn.Identity()
+        
+        COMPILE_CNN = os.environ.get('PERLIN_COMPILE', '0') == '1'
+        if COMPILE_CNN:
+            # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, backend='onnxrt')
+            pass
+        
         self.attention_predictor_dec_scaler = nn.Sequential(
             nn.Linear(self.attention_head_size*2, 2),
         )

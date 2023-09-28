@@ -19,6 +19,8 @@ import torch.nn.functional as F
 from ..utils import strify
 import torch.distributed
 
+CHECKPOINT_REPOSITORY = os.environ.get('CHECKPOINT_REPOSITORY', './saves')
+
 default = lambda x, y: x if x is not None else y
 
 @dataclass
@@ -552,8 +554,8 @@ class Trainer:
         return ppl
     
     def checkpoint_path(self):
-        os.makedirs(f'./saves/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
-        path = f'./saves/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
+        os.makedirs(f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
+        path = f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
         return path
     
     def save(self, path=None):
