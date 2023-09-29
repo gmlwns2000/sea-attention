@@ -359,8 +359,8 @@ class Trainer:
         return score
 
     def checkpoint_path(self):
-        os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/final.pth'
+        os.makedirs(f'../../saves_vast_0928_glue/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
+        path = f'../../saves_vast_0928_glue/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
         return path
     
     def save(self):
