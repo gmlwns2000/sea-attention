@@ -1,7 +1,7 @@
 from .benchmark_bert import *
 from ..models.perlin_attention import modules as perlin_modules
 
-perlin_modules.CAUSAL_CONV_FORCE_NON_CAUSAL = True
+perlin_modules.CAUSAL_CONV_FORCE_NON_CAUSAL = False
 
 def exam(fname='data.json', opt_model='facebook/opt-125m'):
     TRACE = True
