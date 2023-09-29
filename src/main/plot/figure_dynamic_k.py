@@ -25,8 +25,8 @@ def main():
         
         data[k] = k_acc_dict
     
-    BASELINE = {7:0.8211, 13:0.8388, 25:0.8424}
     COLORS = {7:'magenta', 13:'purple', 25:'blue'}
+    BASELINE = {7:0.81844, 13:0.834946, 25:0.842893}
     for k in trained_k:
         data[k][k] = BASELINE[k]*100
     
