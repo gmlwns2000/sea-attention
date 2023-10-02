@@ -37,6 +37,7 @@ class PerlinAttentionConfig:
     use_cache: bool = False
     compile: bool = False
     context_output_method: str = 'mix'
+    k_oversample: float = 1.0
     
     def to_json(self):
         return asdict(self)
