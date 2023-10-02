@@ -89,7 +89,7 @@ deepspeed_config = {
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
         'sinkhorn': './config/ds_opt_1.3.json',
-        'cosformer': './config/ds_opt_1.3.json',
+        'cosformer': './config/ds_opt_1.3_zero3.json',
     }},
     'opt-2.7b': { 'wikitext2': {
         'none': './config/ds_opt_2.7.json',
