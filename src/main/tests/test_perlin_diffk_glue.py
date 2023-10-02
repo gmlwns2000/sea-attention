@@ -52,15 +52,22 @@ def main(
             TASK_TO_VALID[trainer.subset], 
             encode_batch_size
         )
+        acc_sum = 0
+        acc_count = 0
         perlin_attention.get_default_config().k=trained_k
-        with torch.no_grad(), torch.autocast('cuda', torch.float32):
-            batch['output_attentions'] = True
-            batch['output_hidden_states'] = True
-            trainer.base_model(**batch)
-            batch['teacher'] = trainer.base_model
-            output = trainer.model(**batch)
-            acc_sum += (torch.argmax(output.logits, dim=-1) == batch['labels']).float().sum().item()
-            acc_count += len(batch['labels'])
+        with tqdm.tqdm(valid_loader, dynamic_ncols=True) as pbar:
+            for batch in pbar:
+                batch = batch_to(batch, trainer.device)
+                with torch.no_grad(), torch.autocast('cuda', torch.float32):
+                    batch['output_attentions'] = True
+                    batch['output_hidden_states'] = True
+                    trainer.base_model(**batch)
+                    batch['teacher'] = trainer.base_model
+                    output = trainer.model(**batch)
+                    acc_sum += (torch.argmax(output.logits, dim=-1) == batch['labels']).float().sum().item()
+                    acc_count += len(batch['labels'])
+
+                pbar.set_description(f'k:{k}, acc:{acc_sum/acc_count:.4f}')
         pretrained_acc = acc_sum/acc_count*100
         print(f'pretrained_k:{trained_k}, accuracy:{pretrained_acc} %')
 
