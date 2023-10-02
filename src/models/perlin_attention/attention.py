@@ -1229,31 +1229,37 @@ class PerlinAttention(nn.Module):
             
             get_bench().register_temp_buffer('partial_context_layer_sparse', partial_context_layer)
             
-            with timer("out"):
-                if not self.pconfig.random_lookup:
-                    normalized_partial_context_layer = self.norm_partial(partial_context_layer)
-                    get_bench().register_temp_buffer('normalized_partial_context_layer', normalized_partial_context_layer)
+            if self.pconfig.context_output_method == 'norm':
+                raise Exception("if needed, please comment this")
+                with timer("out"):
+                    if not self.pconfig.random_lookup:
+                        normalized_partial_context_layer = self.norm_partial(partial_context_layer)
+                        get_bench().register_temp_buffer('normalized_partial_context_layer', normalized_partial_context_layer)
+                        
+                        partial_context_layer = \
+                            normalized_partial_context_layer +\
+                            partial_context_layer
+                        if self.pconfig.out_add_performer_context:
+                            raise Exception('performer context hidden size is modified')
+                            partial_context_layer = partial_context_layer +\
+                                self.norm_performer(performer_context_layer)
+                    else:
+                        raise Exception()
+                        partial_context_layer = \
+                            self.norm_partial(partial_context_layer) +\
+                            self.norm_random(random_context_layer) +\
+                            partial_context_layer
+                        if self.pconfig.out_add_performer_context:
+                            raise Exception('performer context hidden size is modified')
+                            partial_context_layer = partial_context_layer +\
+                                self.norm_performer(performer_context_layer)
                     
-                    partial_context_layer = \
-                        normalized_partial_context_layer +\
-                        partial_context_layer
-                    if self.pconfig.out_add_performer_context:
-                        raise Exception('performer context hidden size is modified')
-                        partial_context_layer = partial_context_layer +\
-                            self.norm_performer(performer_context_layer)
-                else:
-                    raise Exception()
-                    partial_context_layer = \
-                        self.norm_partial(partial_context_layer) +\
-                        self.norm_random(random_context_layer) +\
-                        partial_context_layer
-                    if self.pconfig.out_add_performer_context:
-                        raise Exception('performer context hidden size is modified')
-                        partial_context_layer = partial_context_layer +\
-                            self.norm_performer(performer_context_layer)
-                
-                if self.pconfig.out_norm:
-                    partial_context_layer = self.norm(partial_context_layer)
+                    if self.pconfig.out_norm:
+                        partial_context_layer = self.norm(partial_context_layer)
+            elif self.pconfig.context_output_method == 'mix':
+                pass
+            else:
+                raise Exception()
             
             # return DUMMY_OUTPUT #2978
             
