@@ -1087,6 +1087,7 @@ def test_config(
             attention_mask=mask,
             target_width=mask.shape[-1],
             is_causal=IS_CAUSAL,
+            max_dups=min(math.ceil(mask.shape[-1]/T_M), K),
         )
         resized_mask = resized_mask.transpose(1, 2).reshape(N, T_DST, H*T)
         for i in range(N):
@@ -1114,16 +1115,16 @@ def test_main():
     H = 1
     T = 32
     T_DST = 32
-    T_M = 16
+    T_M = 2
     K = 4
     
-    N = 1
-    H = 12
-    T = 4096
-    T = 1024*32
-    T_DST = T
-    T_M = 128
-    K = 32
+    # N = 1
+    # H = 12
+    # T = 4096
+    # T = 1024*32
+    # T_DST = T
+    # T_M = 128
+    # K = 32
     
     test_config(
         IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=T > 4096

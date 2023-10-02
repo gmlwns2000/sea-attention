@@ -10,6 +10,7 @@ def resize_from_m_to_t(
     target_width: int=None, 
     training=False,
     is_causal=True,
+    max_dups=None,
 ):
     assert masked_fill_value is not None
     N, H, T1, T_M = x.shape
