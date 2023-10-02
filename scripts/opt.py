@@ -40,7 +40,7 @@ parser.add_argument('--enable-lora', action='store_true')
 parser.add_argument('--enc-per-layer', action='store_true', default=False)
 parser.add_argument('--load-checkpoint', type=str, default=None)
 parser.add_argument('--predictor-backend', type=str, default='performer', choices=['performer', 'cosformer'])
-parser.add_argument('--context-output-method', type=str, default='mix', choices=['norm', 'mix'])
+parser.add_argument('--context-output-method', type=str, default='mix', choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea'])
 parser.add_argument('--k-oversample', type=float, default=1.0)
 
 args = parser.parse_args()

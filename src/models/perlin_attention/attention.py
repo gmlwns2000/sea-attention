@@ -1165,30 +1165,30 @@ class PerlinAttention(nn.Module):
                                 partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
                         
                 # return DUMMY_OUTPUT #2782
-                
-                with timer("attention.avg_pool"):
-                    if not self.pconfig.causal:
-                        average_context_layer = (
-                            v *\
-                            (dst_attention_mask > -1).to(v.dtype) *\
-                            resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2)
-                        ).sum(-2, keepdim=True).to(v.dtype)
-                    else:
-                        # TODO imporve this when causal
-                        avg_v = v * (dst_attention_mask > -1)
-                        average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1)
-                        average_context_layer = average_context_layer.to(v.dtype)
-                        if average_context_layer.shape[-2] > q.shape[-2]:
-                            average_context_layer = average_context_layer[...,-q.shape[-2]:,:]
-                        # return DUMMY_OUTPUT #2978
-                    average_scale = torch.sigmoid(estimated_scales[..., 1:2])
-                    partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
-                    get_bench().register_temp_buffer('estimated_scales', estimated_scales)
-                    get_bench().register_temp_buffer('average_scale', average_scale)
-                    if not self.pconfig.causal:
-                        get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
-                    get_bench().register_temp_buffer('average_context_layer', average_context_layer)
-                    get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
+                if self.pconfig.context_output_method not in ['sparse', 'norm_sprase']:
+                    with timer("attention.avg_pool"):
+                        if not self.pconfig.causal:
+                            average_context_layer = (
+                                v *\
+                                (dst_attention_mask > -1).to(v.dtype) *\
+                                resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2)
+                            ).sum(-2, keepdim=True).to(v.dtype)
+                        else:
+                            # TODO imporve this when causal
+                            avg_v = v * (dst_attention_mask > -1)
+                            average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1)
+                            average_context_layer = average_context_layer.to(v.dtype)
+                            if average_context_layer.shape[-2] > q.shape[-2]:
+                                average_context_layer = average_context_layer[...,-q.shape[-2]:,:]
+                            # return DUMMY_OUTPUT #2978
+                        average_scale = torch.sigmoid(estimated_scales[..., 1:2])
+                        partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
+                        get_bench().register_temp_buffer('estimated_scales', estimated_scales)
+                        get_bench().register_temp_buffer('average_scale', average_scale)
+                        if not self.pconfig.causal:
+                            get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T).transpose(-1, -2))
+                        get_bench().register_temp_buffer('average_context_layer', average_context_layer)
+                        get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
             
             # return DUMMY_OUTPUT #2978
             
@@ -1229,8 +1229,8 @@ class PerlinAttention(nn.Module):
             
             get_bench().register_temp_buffer('partial_context_layer_sparse', partial_context_layer)
             
-            if self.pconfig.context_output_method == 'norm':
-                raise Exception("if needed, please comment this")
+            if self.pconfig.context_output_method == 'sea':
+                # raise Exception("if needed, please comment this")
                 with timer("out"):
                     if not self.pconfig.random_lookup:
                         normalized_partial_context_layer = self.norm_partial(partial_context_layer)
@@ -1256,9 +1256,9 @@ class PerlinAttention(nn.Module):
                     
                     if self.pconfig.out_norm:
                         partial_context_layer = self.norm(partial_context_layer)
-            elif self.pconfig.context_output_method == 'mix':
-                pass
-            else:
+            elif self.pconfig.context_output_method in ['norm_sparse', 'norm_mix']:
+                partial_context_layer = self.norm(partial_context_layer) # WHY seperate norm_partial, norm?
+            elif self.pconfig.context_output_method not in ['sparse', 'mix']:
                 raise Exception()
             
             # return DUMMY_OUTPUT #2978
