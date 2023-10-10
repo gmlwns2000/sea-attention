@@ -85,7 +85,7 @@ deepspeed_config = {
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',
-        'perlin': './config/ds_opt_1.3_zero3.json',
+        'perlin': './config/ds_opt_1.3.json',
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
         'sinkhorn': './config/ds_opt_1.3.json',
