@@ -10,7 +10,8 @@ def resize_from_m_to_t(
     target_width: int=None, 
     training=False,
     is_causal=True,
-    max_dups=None,
+    k=None,
+    oversampled=None,
 ):
     assert masked_fill_value is not None
     N, H, T1, T_M = x.shape
@@ -49,6 +50,26 @@ def resize_from_m_to_t(
     grid_input = F.pad(x, pad=(0, 1), value=masked_fill_value)
     assert grid_input.shape[-1] == (T_M + 1)
     output = grid_input.gather(dim=-1, index=token_index_x)
+    
+    if oversampled is not None:
+        # if oversampled in compressed one, we should undersample on uncompressed one.
+        # so mask out some pixels in perticular X index.
+        assert isinstance(oversampled, float)
+        assert isinstance(k, (int, float))
+        
+        N, H, T1, T2 = output.shape
+        
+        xs = torch.arange(0, T2, device=token_length.device).view(1, 1, 1, T2)
+        ws = token_length # current width
+        ps = torch.clamp_min(torch.round(token_length / oversampled), 1) # how many total pixels
+        
+        # rounding error is smaller than ws pixel in ps
+        oys = torch.clamp(token_length, round(k), round(k*oversampled)) / k
+        # print(oys)
+        mask = torch.abs(((xs + 1) / ws * ps) - torch.round((xs + 1) / ws * ps)) <= ((1 / oys) * 0.5 + 1e-4)
+        # print(mask)
+        output.masked_fill_(~mask, value=masked_fill_value)
+    
     return output
 
 def test_main():
