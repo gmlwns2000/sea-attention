@@ -147,7 +147,7 @@ class BaseTrainer:
             attention_predictor_backend=perlin_predictor_backend,
             attention_predictor_enc_per_layer=perlin_enc_per_layer,
             layerwise = perlin_layerwise,
-            lora_enabed = perlin_lora,
+            lora_enabled = perlin_lora,
             compile = compile,
             context_output_method=perlin_context_output_method,
             k_oversample=perlin_k_oversample,
@@ -183,13 +183,17 @@ class BaseTrainer:
                 if isinstance(module, perlin_opt.OPTDecoderLayer):
                     module.train_layerwise = True
                     print('layerwise patch', type(module))
-            if self.perlin_lora:
-                for name, param in model.named_parameters():
-                    if 'perlin' in name:
-                        param.requires_grad = True
-                    else:
-                        param.requires_grad = False
-                    # print(name, param.requires_grad)
+        
+        if self.perlin_lora:
+            # for name, param in model.named_parameters():
+            #     if ('perlin' in name) or ('embed' in name):
+            #         param.requires_grad = True
+            #         print('[EXPERIMENTAL] lora: grad on', name)
+            #     else:
+            #         param.requires_grad = False
+            #         print('[EXPERIMENTAL] lora: grad off', name)
+            #     # print(name, param.requires_grad)
+            pass
         
         return model
 
@@ -397,6 +401,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         def on_model_init():
             print('on model init')
             self.apply_model_options(self.model)
+            
+        perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(

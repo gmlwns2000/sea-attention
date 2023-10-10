@@ -125,7 +125,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
 
     register_default_config(PerlinAttentionConfig(
         performer_nb_factor=bench_config.nbf if (method in ['perlin', 'performer']) else 1,
-        lora_enabed=False,
+        lora_enabled=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,

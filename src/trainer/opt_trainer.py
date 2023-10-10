@@ -82,8 +82,17 @@ class KDWrapperModel(nn.Module):
         self.base_model = base_model
         self.using_deepspeed = using_deepspeed
     
+        self.lazy_attention = True
+        if self.lazy_attention:
+            for m in self.base_model.modules():
+                if hasattr(m, 'lazy_checkout'):
+                    m.lazy_checkout = True
+    
     def forward(self, batch):
         # print('cc')
+
+        if self.lazy_attention:
+            batch['output_attentions'] = False
         
         self.base_model.eval()
         
@@ -111,8 +120,10 @@ class KDWrapperModel(nn.Module):
         with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_teacher = self.base_model(**batch)
-            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
-            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
+            if batch['output_hidden_states']:
+                output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
+            if batch['output_attentions']:
+                output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
             output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
         
         # print('gg')
@@ -202,6 +213,7 @@ class Trainer:
         if self.config.kd_checkpointing:
             self.swap_out_device = torch.device('cpu')
             warnings.warn("using cpu offload for KD buffers. this will save a lot of memory, but slow down A--LOT!")
+            raise Exception()
         else:
             self.swap_out_device = self.device
         

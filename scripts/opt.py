@@ -77,7 +77,7 @@ deepspeed_config = {
     }},
     'opt-350m': { 'wikitext2': {
         'none': './config/ds_opt_350.json',
-        'perlin': './config/ds_opt_350.json',
+        'perlin': './config/ds_opt_350_zero2.json',
         'performer': './config/ds_opt_350_zero2.json',
         'reformer': './config/ds_opt_350_zero2.json',
         'sinkhorn': './config/ds_opt_350_zero2.json',

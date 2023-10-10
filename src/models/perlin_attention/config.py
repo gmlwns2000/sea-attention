@@ -27,7 +27,7 @@ class PerlinAttentionConfig:
     attention_predictor_enc_per_layer: bool = False
     layerwise: bool = False
     lora_r: int = 32
-    lora_enabed: bool = False
+    lora_enabled: bool = False
     lora_in_approx_enabled: bool = False
     partial_attention_scaler: bool = True
     out_add_performer_context: bool = False
