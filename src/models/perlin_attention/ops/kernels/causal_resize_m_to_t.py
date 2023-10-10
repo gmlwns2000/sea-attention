@@ -1148,7 +1148,7 @@ def test_main():
     T_DST = 64
     T_M = 8
     K = 16
-    K_OS = 1.5
+    K_OS = 1.0
     
     # N = 1
     # H = 12

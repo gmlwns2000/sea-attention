@@ -39,16 +39,18 @@ class PerlinSelfAttention(nn.Module):
         
         self.last_loss = None
 
-        self.query_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.key_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.value_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        if self.pconfig.lora_enabed:
+            self.query_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            self.key_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            self.value_lora = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
         
-        self.query_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.key_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        
-        self.query_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.key_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
-        self.value_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+        if self.pconfig.lora_in_approx_enabled:
+            self.query_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            self.key_lora_for_approx_score = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            
+            self.query_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            self.key_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
+            self.value_lora_for_approx_atten = LoraLinear(config.hidden_size, self.all_head_size, self.pconfig.lora_r)
         
         self.attention = PerlinAttention(
             config=config,

@@ -183,13 +183,16 @@ class BaseTrainer:
                 if isinstance(module, perlin_opt.OPTDecoderLayer):
                     module.train_layerwise = True
                     print('layerwise patch', type(module))
-            if self.perlin_lora:
-                for name, param in model.named_parameters():
-                    if 'perlin' in name:
-                        param.requires_grad = True
-                    else:
-                        param.requires_grad = False
-                    # print(name, param.requires_grad)
+        
+        if self.perlin_lora:
+            for name, param in model.named_parameters():
+                if ('perlin' in name) or ('embed' in name):
+                    param.requires_grad = True
+                    print('[EXPERIMENTAL] lora: grad on', name)
+                else:
+                    param.requires_grad = False
+                    print('[EXPERIMENTAL] lora: grad off', name)
+                # print(name, param.requires_grad)
         
         return model
 
@@ -397,6 +400,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         def on_model_init():
             print('on model init')
             self.apply_model_options(self.model)
+            
+        perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(

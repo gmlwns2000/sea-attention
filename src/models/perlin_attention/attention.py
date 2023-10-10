@@ -290,23 +290,24 @@ class PerlinAttention(nn.Module):
         )
         
         #-- compressed predictor
-        self.attention_predictor_comp_length = \
-            self.pconfig.attention_predictor_comp_patch_count * self.pconfig.attention_predictor_comp_patch_size
-        self.attention_predictor_comp_codebook = nn.Parameter(
-            torch.randn((self.pconfig.attention_predictor_comp_book_size, self.pconfig.attention_predictor_comp_patch_size))
-        )
-        self.attention_predictor_comp_enc = nn.Sequential(
-            nn.Dropout(0.1),
-            nn.Linear(performer_value_hidden_size, self.attention_head_size*2),
-            nn.LayerNorm(self.attention_head_size*2),
-            nn.GELU(),
-        )
-        self.attention_predictor_comp_dec_row = nn.Sequential(
-            nn.Linear(
-                self.attention_head_size*2,
-                self.pconfig.attention_predictor_comp_book_size * self.pconfig.attention_predictor_comp_patch_count
-            ),
-        )
+        if self.pconfig.attention_predictor_method == 'comp':
+            self.attention_predictor_comp_length = \
+                self.pconfig.attention_predictor_comp_patch_count * self.pconfig.attention_predictor_comp_patch_size
+            self.attention_predictor_comp_codebook = nn.Parameter(
+                torch.randn((self.pconfig.attention_predictor_comp_book_size, self.pconfig.attention_predictor_comp_patch_size))
+            )
+            self.attention_predictor_comp_enc = nn.Sequential(
+                nn.Dropout(0.1),
+                nn.Linear(performer_value_hidden_size, self.attention_head_size*2),
+                nn.LayerNorm(self.attention_head_size*2),
+                nn.GELU(),
+            )
+            self.attention_predictor_comp_dec_row = nn.Sequential(
+                nn.Linear(
+                    self.attention_head_size*2,
+                    self.pconfig.attention_predictor_comp_book_size * self.pconfig.attention_predictor_comp_patch_count
+                ),
+            )
         #-- TODO VQVAE
         
         #- output
@@ -346,9 +347,18 @@ class PerlinAttention(nn.Module):
             print(self._warning_messages)
             self._warning_messages = ''
         
-        if context_layer_truth is not None and context_layer_truth.device != q.device:
-            context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
-            attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
+        if context_layer_truth is not None:
+            if callable(context_layer_truth):
+                with torch.no_grad():
+                    context_layer_truth = context_layer_truth()
+            if context_layer_truth.device != q.device:
+               context_layer_truth = context_layer_truth.to(q.device, non_blocking=True)
+            
+            if callable(attention_scores_truth):
+                with torch.no_grad():
+                    attention_scores_truth = attention_scores_truth()
+            if attention_scores_truth.device != q.device:
+                attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
         
         DUMMY_OUTPUT = PerlinAttentionOutput(
             loss=None,
