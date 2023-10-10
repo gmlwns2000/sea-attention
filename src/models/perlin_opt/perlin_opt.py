@@ -180,7 +180,7 @@ class OPTAttention(nn.Module):
         
         ### sinkhorn
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornCausalAttention
-        if self.attention_method == 'sinkhorn':
+        if self.attention_method == 'sinkhorn' or DEFAULT_METHOD == 'any':
             if os.environ.get("PERLIN_IGNORE_SINKHORN", "0") == "0":
                 self.perlin_sinkhorn_atten = SinkhornCausalAttention(
                     bucket_size=pconfig.k,
@@ -195,7 +195,7 @@ class OPTAttention(nn.Module):
             
         ### cosformer
         from ..cosformer import CosformerAttention
-        if self.attention_method == 'cosformer':
+        if self.attention_method == 'cosformer' or DEFAULT_METHOD == 'any':
             if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
                 self.perlin_cosformer_atten = CosformerAttention(
                     embed_dim=self.embed_dim,
@@ -209,7 +209,7 @@ class OPTAttention(nn.Module):
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
         
-        if self.attention_method == 'reformer':
+        if self.attention_method == 'reformer' or DEFAULT_METHOD == 'any':
             self.perlin_reformer_atten = LSHAttention(
                 dropout=dropout,
                 bucket_size=32, # this will re adjust atomatically

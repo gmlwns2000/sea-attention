@@ -19,6 +19,9 @@ from ..models.perlin_opt import OPTModel, OPTAttention, OPTDecoderLayer
 from ..utils import seed, get_bench
 from torch import nn
 import json
+from ..models import perlin_opt
+
+perlin_opt.perlin_opt.DEFAULT_METHOD = 'any'
 
 os.environ['PERLIN_COMPILE'] = '1'
 torch.set_float32_matmul_precision('high')
