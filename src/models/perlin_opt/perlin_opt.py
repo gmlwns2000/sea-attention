@@ -130,6 +130,8 @@ class OPTLearnedPositionalEmbedding(nn.Embedding):
 
 DEFAULT_METHOD = 'none'
 
+from ..common.lora import LoraLinear, lora_forward
+
 class OPTAttention(nn.Module):
     _counter = 0
     """Multi-headed attention from 'Attention Is All You Need' paper"""
@@ -172,6 +174,9 @@ class OPTAttention(nn.Module):
         
         from ..perlin_attention import PerlinSelfAttention, get_default_config
         pconfig = get_default_config()
+        
+        if pconfig.lora_enabled:
+            self.perlin_out_lora = LoraLinear(embed_dim, embed_dim, pconfig.lora_r)
         
         ### sinkhorn
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornCausalAttention
@@ -565,6 +570,8 @@ class OPTAttention(nn.Module):
 
         # get query proj
         query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
+        self.q_proj.scaling = torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
+        
         past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -630,7 +637,10 @@ class OPTAttention(nn.Module):
         if attn_state is not None:
             past_key_value = (*past_key_value, attn_state)
 
-        attn_output = self.out_proj(attn_output)
+        if self.pconfig.lora_enabled:
+            attn_output = lora_forward(self.out_proj, self.perlin_out_lora, attn_output, True)
+        else:
+            attn_output = self.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
 

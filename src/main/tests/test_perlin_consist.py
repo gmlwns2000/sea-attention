@@ -32,7 +32,7 @@ config.max_position_embeddings = 4096
 
 register_default_config(PerlinAttentionConfig(
     performer_nb_factor=8,
-    lora_enabed=False,
+    lora_enabled=False,
     lora_in_approx_enabled=False,
     partial_attention_scaler=True,
     k_flatten=True,
