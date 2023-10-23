@@ -67,7 +67,7 @@ def main(
                     acc_sum += (torch.argmax(output.logits, dim=-1) == batch['labels']).float().sum().item()
                     acc_count += len(batch['labels'])
 
-                pbar.set_description(f'k:{k}, acc:{acc_sum/acc_count:.4f}')
+                pbar.set_description(f'k:{trained_k}, acc:{acc_sum/acc_count:.4f}')
         pretrained_acc = acc_sum/acc_count*100
         print(f'pretrained_k:{trained_k}, accuracy:{pretrained_acc} %')
 
