@@ -153,10 +153,47 @@ class OPTAttention(nn.Module):
         
         self.last_attention_scores = None
         self.last_context_layer = None
+        self.lazy_checkout = False
+        self._under_lazy = False
+        
         self.swap_out_device = 'cpu'
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
+    
+    def lazy_checkout_attention(
+        self, *args
+    ):
+        def get():
+            self.lazy_checkout = False
+            self._under_lazy = True
+            with torch.no_grad():
+                self(*args)
+            self.lazy_checkout = True
+            self._under_lazy = False
+            x = self.last_attention_scores
+            self.last_context_layer = None
+            self.last_attention_scores = None
+            return x
+        
+        return get
+
+    def lazy_checkout_context(
+        self, *args
+    ):
+        def get():
+            self._under_lazy = True
+            self.lazy_checkout = False
+            with torch.no_grad():
+                self(*args)
+            self._under_lazy = False
+            self.lazy_checkout = True
+            x = self.last_context_layer
+            self.last_context_layer = None
+            self.last_attention_scores = None
+            return x
+        
+        return get
 
     def forward(
         self,
@@ -168,6 +205,8 @@ class OPTAttention(nn.Module):
         output_attentions: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
+        
+        inps = (hidden_states, key_value_states, past_key_value, attention_mask, layer_head_mask, output_attentions)
         
         op_dtype = torch.float16 if self.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
         if op_dtype != hidden_states:
@@ -238,7 +277,13 @@ class OPTAttention(nn.Module):
             attn_weights = torch.max(
                 attn_weights, torch.tensor(torch.finfo(attn_weights.dtype).min, device=attn_weights.device)
             )
-            self.last_attention_scores = batch_to(attn_weights, self.swap_out_device)
+            if self.lazy_checkout:
+                self.last_attention_scores = self.lazy_checkout_attention(*inps)
+            else:
+                if self._under_lazy:
+                    self.last_attention_scores = attn_weights
+                else:
+                    self.last_attention_scores = batch_to(attn_weights, self.swap_out_device)
             attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
 
         # upcast to fp32 if the weights are in fp16. Please see https://github.com/huggingface/transformers/pull/17437
@@ -270,7 +315,13 @@ class OPTAttention(nn.Module):
 
         attn_output = torch.bmm(attn_probs, value_states)
         
-        self.last_context_layer = batch_to(attn_output, self.swap_out_device)
+        if not self.lazy_checkout:
+            if self._under_lazy:
+                self.last_context_layer = attn_output
+            else:
+                self.last_context_layer = batch_to(attn_output, self.swap_out_device)
+        else:
+            self.last_context_layer = self.lazy_checkout_context(*inps)
 
         if attn_output.size() != (bsz * self.num_heads, tgt_len, self.head_dim):
             raise ValueError(

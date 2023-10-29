@@ -117,6 +117,7 @@ def main():
     exam('data.json', 'facebook/opt-125m')
     exam('data_350m.json', 'facebook/opt-350m')
     exam('data_1.3b.json', 'facebook/opt-1.3b')
+    exam('data_2.7b.json', 'facebook/opt-2.7b')
 
 if __name__ == '__main__':
     main()
