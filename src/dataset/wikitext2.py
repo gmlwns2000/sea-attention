@@ -60,11 +60,14 @@ class Wikitext2Dataset(Dataset):
             self.encodings = torch.load(cache_path)
             print('cache size', self.encodings.shape)
         else:
+            cutoff_dataset = 5000000 # 5M document
             if dataset == 'openwebtext':
                 chunk_size = 50
                 if subset == 'train':
+                    cutoff_dataset = 500000 # 500k document
                     data = load_dataset("Skylion007/openwebtext", split='train[:99%]')
                 else:
+                    cutoff_dataset = 2000 # 2k document
                     data = load_dataset("Skylion007/openwebtext", split='train[99%:]')
                 print('OPENWEBTEXT loaded')
             else:
@@ -125,7 +128,6 @@ class Wikitext2Dataset(Dataset):
             
             encodings = []
             encodings_size = 0
-            cutoff_dataset = 500000 # 500k document
             chunked_iterator = ChunkedIterator(iter(data), chunk_size, cutoff=cutoff_dataset)
             with mp.Pool(mp.cpu_count() - 1) as pool, \
                     tqdm.tqdm(pool.imap(self.get_encodings, chunked_iterator, chunksize=8), dynamic_ncols=True, total=math.ceil(cutoff_dataset/chunk_size)) as pbar:
