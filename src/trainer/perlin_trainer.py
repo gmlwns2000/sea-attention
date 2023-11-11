@@ -361,7 +361,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         model_config = {
             'opt-125m': {
-                'wikitext2': 'Aalaa/opt-125m-wikitext2'
+                'wikitext2': 'Aalaa/opt-125m-wikitext2' if os.environ.get('FORCE_OPENWEBTEXT', '0') == '0' else 'facebook/opt-125m'
             },
             'opt-350m': {
                 'wikitext2': 'lnair/opt-350m-wikitext2'
@@ -373,6 +373,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'wikitext2': 'lnair/opt-2.7b-wikitext2'
             }
         }[model][subset]
+        print(model_config)
         
         if eval_steps is None:
             eval_steps = {
