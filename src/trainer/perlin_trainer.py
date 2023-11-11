@@ -404,6 +404,10 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             
         perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
+        lr_low_scale = {'opt-2.7b': 0.05}.get(model, 0.2) if self.attention_method == 'perlin' else 1.0
+        lr_high_scale = {'opt-2.7b': 0.5}.get(model, 10.0) if self.attention_method == 'perlin' else 10.0
+        print(f'PerlinTrainer: lr_high_scale = {lr_high_scale}, lr_low_scale = {lr_low_scale}')
+        
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
                 experiment_name=self.format_exp(f'{model}_{subset}'),
@@ -414,8 +418,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 max_seq_len=max_seq_len,
-                lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
-                lr_low_scale=0.2 if self.attention_method == 'perlin' else 1.0,
+                lr_high_scale=lr_high_scale,
+                lr_low_scale=lr_low_scale,
                 additional_config=perlin_attention.get_default_config().to_json(),
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
