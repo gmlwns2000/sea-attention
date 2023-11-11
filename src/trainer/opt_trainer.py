@@ -268,7 +268,7 @@ class Trainer:
                 if hasattr(m, 'use_deepspeed'):
                     m.use_deepspeed = self.deepspeed
         
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config, use_fast=True)
         
         self.kd_model = KDWrapperModel(
             self.config, 
@@ -568,6 +568,8 @@ class Trainer:
     def checkpoint_path(self):
         os.makedirs(f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
         path = f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
+        if os.environ.get('FORCE_OPENWEBTEXT', '0') == '1':
+            path += 'owt.pth'
         return path
     
     def save(self, path=None):
