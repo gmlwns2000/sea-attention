@@ -9,7 +9,7 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
     nbfs = [1, 2, 4, 8]
     perlin_nbf = [8]
     ks = [32, 64, 128]
-    ws = [128, 256, 384]
+    ws = [64, 128, 256, 384]
     n_hashs = [2, 4, 8, 16]
     # nbfs = [8]
     # ks = [128]
