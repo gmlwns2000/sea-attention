@@ -237,6 +237,9 @@ def exam_config(config: BenchConfig):
 
 # BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+HAS_FLASH = os.environ.get('FLASH', '0') == '1'
+if HAS_FLASH:
+    BASELINES = ['none', 'flash', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 # BASELINES = ['none',]
 
 def main_methods():
@@ -251,6 +254,9 @@ def measure_and_dump():
     
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
+    if HAS_FLASH:
+        ts = [2**x for x in range(12, 16)]
+        # ts = [2**17]
     # ks = [2**x for x in range(3, 8)]
     ks = [32, 64, 128,]
     # ks = [32]
@@ -258,6 +264,19 @@ def measure_and_dump():
     # ks = [32]
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
+    
+    result_baseline = [
+        [
+            exam_config(BenchConfig(
+                precision=precision,
+                method=method,
+                seq_len=t,
+                trace=False,
+            ))
+            for t in ts
+        ]
+        for method in baseline_methods
+    ]
     
     result_perlin = [
         [
@@ -271,19 +290,6 @@ def measure_and_dump():
             for t in ts
         ]
         for k in ks
-    ]
-    
-    result_baseline = [
-        [
-            exam_config(BenchConfig(
-                precision=precision,
-                method=method,
-                seq_len=t,
-                trace=False,
-            ))
-            for t in ts
-        ]
-        for method in baseline_methods
     ]
     
     latencies_baseline = [
@@ -334,6 +340,7 @@ def load_and_plot():
     def plot(ax, filename, title, ylabel, baselines, perlins, ts, ks):
         NAMES = {
             'none': 'None',
+            'flash': 'FlashAttention',
             'cosformer': 'Cosformer',
             'performer': 'Performer',
             'reformer': 'Reformer',
@@ -344,6 +351,7 @@ def load_and_plot():
         
         LINESTYLE = {
             'none': '--',
+            'flash': '--',
             'cosformer': ':',
             'performer': ':',
             'reformer': ':',
@@ -355,6 +363,7 @@ def load_and_plot():
         
         MARKERS = {
             'none': '>',
+            'flash': '<',
             'cosformer': '+',
             'performer': 'v',
             'reformer': '^',
@@ -365,6 +374,7 @@ def load_and_plot():
         
         MARKER_SIZE = {
             'none': 5,
+            'flash': 5,
             'cosformer': 5,
             'performer': 5,
             'reformer': 5,
@@ -376,6 +386,7 @@ def load_and_plot():
         
         COLORS = {
             'none': 'mediumslateblue',
+            'flash': '#a7a',
             'cosformer': 'gray',
             'performer': 'lightcoral',
             'reformer': '#788bfa',
@@ -450,8 +461,12 @@ def load_and_plot():
     nrows = 1
     ncols = 2
     fig, axs = plt.subplots(nrows, ncols)
-    fig.set_figwidth(3.2*ncols+1.2)
-    fig.set_figheight(2.4)
+    if not HAS_FLASH:
+        fig.set_figwidth(3.2*ncols+1.2)
+        fig.set_figheight(2.4)
+    else:
+        fig.set_figwidth(4*ncols+1.5)
+        fig.set_figheight(3)
     
     plot(
         axs[1],
@@ -486,7 +501,7 @@ def load_and_plot():
     print('saved', path)
 
 def main_plot():
-    measure_and_dump()
+    # measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':
