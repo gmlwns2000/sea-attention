@@ -143,6 +143,7 @@ class OPTAttention(nn.Module):
         dropout: float = 0.0,
         is_decoder: bool = False,
         bias: bool = True,
+        config: OPTConfig = None,
     ):
         super().__init__()
         
@@ -231,7 +232,7 @@ class OPTAttention(nn.Module):
         self.teacher_attention_scores = None
         self.teacher_context_layer = None
         self.perlin_self_attention = PerlinSelfAttention(
-            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads),
+            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads, max_position_embeddings=config.max_position_embeddings),
             perlin_config=self.pconfig,
         )
         self.last_loss = None
@@ -475,6 +476,7 @@ class OPTAttention(nn.Module):
                 context_layer_truth = context_layer_truth,
                 last_state = last_state,
             ) #type: PerlinAttentionOutput
+            # return q, None, None #TODO REMOVE
             self.last_loss = output.loss
             if not self.benchmarking and self.checkout_perlin_output:
                 warnings.warn("you are checking-out LARGE buffers!!")
@@ -559,11 +561,11 @@ class OPTAttention(nn.Module):
         
         # deepspeed fp32 support, convert fp32
         op_dtype = torch.float16 if self.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
-        if op_dtype != hidden_states:
+        if op_dtype != hidden_states.dtype:
             hidden_states = hidden_states.to(op_dtype)
-        if op_dtype != attention_mask and attention_mask is not None:
+        if attention_mask is not None and op_dtype != attention_mask.dtype:
             attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
-        if op_dtype != layer_head_mask and layer_head_mask is not None:
+        if layer_head_mask is not None and op_dtype != layer_head_mask.dtype:
             layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         bsz, tgt_len, _ = hidden_states.size()
@@ -648,6 +650,7 @@ class OPTAttention(nn.Module):
 class OPTDecoderLayer(nn.Module):
     def __init__(self, config: OPTConfig):
         super().__init__()
+        
         self.embed_dim = config.hidden_size
         self.self_attn = OPTAttention(
             embed_dim=self.embed_dim,
@@ -655,6 +658,7 @@ class OPTDecoderLayer(nn.Module):
             dropout=config.attention_dropout,
             is_decoder=True,
             bias=config.enable_bias,
+            config=config
         )
         self.do_layer_norm_before = config.do_layer_norm_before
         self.dropout = config.dropout
@@ -680,6 +684,7 @@ class OPTDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -700,16 +705,16 @@ class OPTDecoderLayer(nn.Module):
         device = attention_mask.device
         if device != hidden_states.device:
             hidden_states = batch_to(hidden_states, device)
-            
+        
         # deepspeed fp32 support, convert fp32
         op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
-        if op_dtype != hidden_states:
+        if op_dtype != hidden_states.dtype:
             hidden_states = hidden_states.to(op_dtype)
-        if op_dtype != attention_mask and attention_mask is not None:
+        if attention_mask is not None and op_dtype != attention_mask.dtype:
             attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
-        if op_dtype != layer_head_mask and layer_head_mask is not None:
+        if layer_head_mask is not None and op_dtype != layer_head_mask.dtype:
             layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
-
+        
         # if layerwise, detach!
         if self.train_layerwise:
             if hidden_states.requires_grad:
@@ -732,7 +737,7 @@ class OPTDecoderLayer(nn.Module):
                 hidden_states = checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
-
+    
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -743,10 +748,12 @@ class OPTDecoderLayer(nn.Module):
             use_cache=use_cache,
         )
         
+        # return
+        
         def after_self_atten(residual, hidden_states):
             # deepspeed fp32 support, convert fp32
             op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
-            if op_dtype != hidden_states:
+            if op_dtype != hidden_states.dtype:
                 hidden_states = hidden_states.to(op_dtype)
             
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -927,6 +934,8 @@ class OPTDecoder(OPTPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.word_embed_proj_dim, self.padding_idx)
         self.embed_positions = OPTLearnedPositionalEmbedding(config.max_position_embeddings, config.hidden_size)
 
+        # print(config)
+        
         if config.word_embed_proj_dim != config.hidden_size:
             self.project_out = nn.Linear(config.hidden_size, config.word_embed_proj_dim, bias=False)
         else:

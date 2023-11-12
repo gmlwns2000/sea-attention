@@ -54,7 +54,7 @@ def resize_from_m_to_t(
     if oversampled is not None:
         # if oversampled in compressed one, we should undersample on uncompressed one.
         # so mask out some pixels in perticular X index.
-        assert isinstance(oversampled, float)
+        assert isinstance(oversampled, (float, int))
         assert isinstance(k, (int, float))
         
         N, H, T1, T2 = output.shape

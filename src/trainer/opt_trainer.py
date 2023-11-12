@@ -172,7 +172,10 @@ class KDWrapperModel(nn.Module):
             loss_special = self.model.calc_loss_special()
         # assert loss_special.requires_grad, loss_special.requires_grad
         
-        loss = loss_model + loss_kd + loss_special
+        if not os.environ.get('IGNORE_KD_LOSS', '0') == '1':
+            loss = loss_model + loss_kd + loss_special
+        else:
+            loss = output_student.loss
         
         # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
         
@@ -532,8 +535,8 @@ class Trainer:
                 'output_attentions': False,
             })
             if not self.deepspeed:
-                with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-                    self.base_model(**batch)
+                # with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+                #     self.base_model(**batch)
                 with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
                     batch['teacher'] = self.base_model
                     output_student = self.model(**batch)
@@ -573,6 +576,10 @@ class Trainer:
         return path
     
     def save(self, path=None):
+        if os.environ.get('NO_SAVE', '0') == '1':
+            print('skip saving')
+            return
+        
         if path is None: path = self.checkpoint_path()
         if not self.deepspeed:
             torch.save({

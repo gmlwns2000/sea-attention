@@ -111,6 +111,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     method = bench_config.method
     
     device = torch.device('cuda')
+    
+    # print(SEQ_LEN)
 
     if bench_config.w is None:
         pred_len = 128
@@ -142,7 +144,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         perlin = BertModel(config).eval()
     else:
         config = AutoConfig.from_pretrained(bench_config.opt_model)
-        # config.max_position_embeddings = SEQ_LEN
+        config.max_position_embeddings = SEQ_LEN
+        # print(config)
         perlin = OPTModel(config).eval()
     for module in perlin.modules():
         if isinstance(module, BertSelfAttention):
@@ -174,7 +177,9 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     else:
         attention_mask = (torch.arange(0, SEQ_LEN).view(SEQ_LEN, 1) >= torch.arange(0, SEQ_LEN).view(1, SEQ_LEN)) * 1.0
         hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
-        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN).expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = (1-attention_mask_expand)*(-32000)
+        attention_mask_expand = attention_mask_expand.expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
         
         layer = perlin.decoder.layers[0] # type: OPTDecoderLayer
         fc1 = nn.Identity()
@@ -221,19 +226,33 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     if return_queue is not None:
         return_queue.put((result_interval, result_mem))
 
-def exam_config(config: BenchConfig):
-    q = mp.Queue()
-    exam(config, q)
-    torch.cuda.synchronize()
-    gc.collect()
-    torch.cuda.empty_cache()
-    return q.get()
-
-    q = mp.Queue()
-    proc = mp.Process(target=exam, args=(config, q), daemon=True)
-    proc.start()
-    proc.join()
-    return q.get()
+def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem=6000):
+    if find_bsize:
+        find_config = copy.deepcopy(config)
+        find_config.t_warmup = 0
+        find_config.t_sample = 0
+        _, mem = exam_config(find_config, using_mp=using_mp, find_bsize=False)
+        if mem == 0:
+            return 0, 0
+        mem = mem / 1024 / 1024
+        bsize = max(1, min(32, math.floor(target_mem / mem)))
+        print('found bsize', bsize)
+        config.bsize = bsize
+        return exam_config(config, using_mp=using_mp, find_bsize=False)
+    else:
+        if not using_mp:
+            q = mp.Queue()
+            exam(config, q)
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+            return q.get()
+        else:
+            q = mp.Queue()
+            proc = mp.Process(target=exam, args=(config, q), daemon=True)
+            proc.start()
+            proc.join()
+            return q.get()
 
 # BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']

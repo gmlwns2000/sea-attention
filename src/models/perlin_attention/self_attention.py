@@ -252,6 +252,7 @@ class PerlinSelfAttention(nn.Module):
                 context_layer_truth=context_layer_truth,
                 last_state=last_state,
             ) #type: PerlinAttentionOutput
+            # return None
             
         if self.checkout_last_attention_probs:
             self.last_attention_probs = output.partial_attention_probs

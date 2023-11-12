@@ -514,7 +514,7 @@ if __name__ == '__main__':
         trainer = LraTrainer(**kwargs)
     elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
-        assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
+        # assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         kwargs['cmd_args'] = args
         trainer = OptTrainer(**kwargs)
     else:
@@ -529,7 +529,54 @@ if __name__ == '__main__':
     if args.load_only_additionals:
         trainer.load_state_from_base()
 
+    if '__CONTEXT' in os.environ:
+        model = trainer.model
+        def resize_pos_embed(model: perlin_opt.OPTForCausalLM):
+            pos_embed = model.model.decoder.embed_positions # type: perlin_opt.OPTLearnedPositionalEmbedding
+            offset = pos_embed.offset
+            w = pos_embed.weight.data
+            new_context_window = int(os.environ.get('__CONTEXT', '8192'))
+            mode = os.environ.get('__IMODE', 'bilinear')
+            w_interp = torch.concat([
+                w[:offset], 
+                torch.nn.functional.interpolate(
+                    w[offset:].unsqueeze(0).unsqueeze(0), 
+                    size=(new_context_window, w.shape[-1]), 
+                    mode=mode, 
+                    align_corners=True,
+                ).squeeze(0).squeeze(0)
+            ], dim=0)
+            assert w_interp.shape[-1] == w.shape[-1]
+            pos_embed.weight.data = w_interp
+            model.config.max_position_embeddings = new_context_window
+            for m in model.modules():
+                if hasattr(m, 'v_eye_learned_causal'):
+                    t = m.v_eye_learned_causal
+                    m.v_eye_learned_causal.data = torch.nn.functional.interpolate(
+                        t, size=(new_context_window, t.shape[-1]), mode='nearest'#, align_corners=True
+                    )
+        resize_pos_embed(trainer.model)
+        resize_pos_embed(trainer.base_model)
+        
+        stride = int(os.environ.get('__STRIDE', '2048'))
+        trainer.valid_loader.dataset.max_length = trainer.valid_loader.dataset.stride = stride
+        trainer.train_loader.dataset.max_length = trainer.train_loader.dataset.stride = stride
+        
+        print('context length is adjusted')
+    
     if not args.eval:
         trainer.main()
     else:
-        trainer.evaluate()
+        force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
+        if force_cpu:
+            trainer.device = 'cpu'
+            trainer.model.to('cpu')
+            trainer.base_model.to('cpu')
+        
+        eval_job = os.environ.get('EVAL_JOB', 'PPL').upper()
+        if eval_job == 'PPL':
+            trainer.evaluate()
+        elif eval_job == 'EXPPL':
+            trainer.evaluate()
+        else:
+            raise Exception()
