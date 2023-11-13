@@ -79,7 +79,7 @@ def exam_table():
         json.dump(data, f, indent=2)
 
 def exam(fname='data.json', opt_model='facebook/opt-125m'):
-    TRACE = True
+    TRACE = os.environ.get('TRACE', '1') == '1'
     
     nbfs = [1, 2, 4, 8]
     perlin_nbf = [8]
@@ -186,14 +186,14 @@ def exam(fname='data.json', opt_model='facebook/opt-125m'):
     path = './plots/main/benchmark_opt_ablation'
     os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, fname), 'w') as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=2)
 
 def main():
-    exam_table()
-    # exam('data.json', 'facebook/opt-125m')
-    # exam('data_350m.json', 'facebook/opt-350m')
-    # exam('data_1.3b.json', 'facebook/opt-1.3b')
-    # exam('data_2.7b.json', 'facebook/opt-2.7b')
+    # exam_table()
+    exam('data.json', 'facebook/opt-125m')
+    exam('data_350m.json', 'facebook/opt-350m')
+    exam('data_1.3b.json', 'facebook/opt-1.3b')
+    exam('data_2.7b.json', 'facebook/opt-2.7b')
 
 if __name__ == '__main__':
     main()

@@ -44,6 +44,7 @@ class BenchConfig:
     causal: bool = False
     n_hash: int = 8
     opt_model: str = 'facebook/opt-125m'
+    small_head: bool = False
 
 def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
@@ -51,10 +52,14 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         torch.cuda.synchronize()
         print(f'[{name}] warmup... ', end = '', flush=True)
         t = time.time()
+        sample_count = 0
         while True:
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
+            sample_count += 1
             if time.time() - t > config.t_warmup:
+                break
+            if sample_count > 5:
                 break
         if on_warmup is not None:
             on_warmup()
@@ -71,6 +76,7 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
+        sample_count = 0
         while True:
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
@@ -84,6 +90,8 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
             if time.time() - last_report > 0.5:
                 last_report = time.time()
                 print('.', end='', flush=True)
+            if config.method in ['flash', 'none'] and sample_count > min(max((((2**17)**2) / (config.seq_len**2)), 10), 200):
+                break
         end.record()
         torch.cuda.synchronize()
         # elapsed = sum(s.elapsed_time(e) / 1000 for s, e in samples)
@@ -141,6 +149,10 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     if not bench_config.causal:
         config = AutoConfig.from_pretrained('bert-base-uncased')
         config.max_position_embeddings = SEQ_LEN
+        if bench_config.small_head:
+            config.num_attention_heads = 1
+            config.num_hidden_layers = 1
+            config.hidden_size = 128
         perlin = BertModel(config).eval()
     else:
         config = AutoConfig.from_pretrained(bench_config.opt_model)
@@ -227,7 +239,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         return_queue.put((result_interval, result_mem))
 
 def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem=6000):
-    if find_bsize:
+    if (find_bsize and config.seq_len <= 81920):
         find_config = copy.deepcopy(config)
         find_config.t_warmup = 0
         find_config.t_sample = 0
@@ -235,7 +247,9 @@ def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem
         if mem == 0:
             return 0, 0
         mem = mem / 1024 / 1024
-        bsize = max(1, min(32, math.floor(target_mem / mem)))
+        bsize = max(1, min(128, math.floor(target_mem / mem)))
+        if config.method == 'flash':
+            bsize = min(bsize, max(1, int((16384**2)/(config.seq_len**2))))
         print('found bsize', bsize)
         config.bsize = bsize
         return exam_config(config, using_mp=using_mp, find_bsize=False)
@@ -264,17 +278,18 @@ if HAS_FLASH:
 def main_methods():
     for method in BASELINES:
         exam_config(BenchConfig(
-            method=method
+            method=method,
+            small_head=True,
         ))
     
 def measure_and_dump():
-    TRACE = True
+    TRACE = False
     precision = torch.float32
     
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
     if HAS_FLASH:
-        ts = [2**x for x in range(12, 16)]
+        ts = [2**x for x in range(12, 18)]
         # ts = [2**17]
     # ks = [2**x for x in range(3, 8)]
     ks = [32, 64, 128,]
@@ -291,6 +306,7 @@ def measure_and_dump():
                 method=method,
                 seq_len=t,
                 trace=False,
+                small_head=True,
             ))
             for t in ts
         ]
@@ -305,6 +321,7 @@ def measure_and_dump():
                 seq_len=t,
                 k=k,
                 trace=TRACE,
+                small_head=True,
             ))
             for t in ts
         ]

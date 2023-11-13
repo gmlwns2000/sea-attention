@@ -150,7 +150,10 @@ def flat_csr_softmax(scores: torch.Tensor, H:int, T_SRC:int, max_z_per_row:int=N
     if BLOCK_Z >= 4096:
         num_warps = 16
     BLOCK_R = 1
+    if R >= 8192:
+        BLOCK_R = triton.cdiv(R, 4096)
     grid = (N, triton.cdiv(R, BLOCK_R))
+    # print(grid)
     __flat_csr_softmax_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
