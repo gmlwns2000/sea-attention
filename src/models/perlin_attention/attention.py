@@ -572,6 +572,8 @@ class PerlinAttention(nn.Module):
             # estimate attention scores
             with timer("predictor"):
                 if self.pconfig.attention_predictor_method == 'mlp':
+                    # I came up this dark magic from my head during rebuttal...
+                    query_skips = 1
                     with timer("predictor.enc"):
                         raise_if_nan(performer_value)
                         # ENC_PER_LAYER = False
@@ -590,6 +592,9 @@ class PerlinAttention(nn.Module):
                             #     performer_value, 
                             #     self.attention_predictor_enc_head_embd.view(1, _H, 1, _H).expand(_N, _H, _T, _H)
                             # ], dim=-1)
+                            if query_skips > 1:
+                                assert (t_enc_x.shape[-2] % query_skips) == 0
+                                t_enc_x = t_enc_x[:, :, ::query_skips, :]
                             t_attention_predictor = self.attention_predictor_enc(t_enc_x)
                     with timer("predictor.dec_row"):
                         raise_if_nan(t_attention_predictor)
@@ -605,6 +610,12 @@ class PerlinAttention(nn.Module):
                             estimated_attention_score,
                             q.shape[-2],
                         )
+                        
+                        if query_skips > 1:
+                            _N, _H, _T, _D = estimated_attention_score.shape
+                            estimated_attention_score = estimated_attention_score.view(_N, _H, _T, 1, _D).expand(_N, _H, _T, query_skips, _D).reshape(_N, _H, _T*query_skips, _D)
+                            _N, _H, _T, _D = t_attention_predictor.shape
+                            t_attention_predictor = t_attention_predictor.view(_N, _H, _T, 1, _D).expand(_N, _H, _T, query_skips, _D).reshape(_N, _H, _T*query_skips, _D)
                         
                         # print('cnnd', strify(last_state), q.shape, strify(estimated_attention_score))
                         assert estimated_attention_score.shape[-2] == T_DST

@@ -299,20 +299,6 @@ def measure_and_dump():
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
     
-    result_baseline = [
-        [
-            exam_config(BenchConfig(
-                precision=precision,
-                method=method,
-                seq_len=t,
-                trace=False,
-                small_head=True,
-            ))
-            for t in ts
-        ]
-        for method in baseline_methods
-    ]
-    
     result_perlin = [
         [
             exam_config(BenchConfig(
@@ -326,6 +312,20 @@ def measure_and_dump():
             for t in ts
         ]
         for k in ks
+    ]
+    
+    result_baseline = [
+        [
+            exam_config(BenchConfig(
+                precision=precision,
+                method=method,
+                seq_len=t,
+                trace=False,
+                small_head=True,
+            ))
+            for t in ts
+        ]
+        for method in baseline_methods
     ]
     
     latencies_baseline = [
@@ -357,7 +357,7 @@ def measure_and_dump():
             'baseline_methods': baseline_methods,
             'ts': ts,
             'ks': ks,
-        }, f)
+        }, f, indent=2)
 
 def load_and_plot():
     baseline_methods = BASELINES
@@ -537,7 +537,7 @@ def load_and_plot():
     print('saved', path)
 
 def main_plot():
-    # measure_and_dump()
+    measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':
