@@ -1,15 +1,15 @@
 # BigBird removed due to implementation error. The value is dummy
 
 data_mnli = {
-    'Ours': 81.85,
-    'Re-': 80.34,
+    'SEA (Ours)': 84.6,
+    'Cosformer': 82.7,
+    'Reformer': 82.3,
     # 'B.B': 80.0,
-    'S.B': 79.22,
-    'Long-': 78.8,
-    'Sink.': 76.26,
-    'Per-': 74.66,
-    'Synth.': 73.67,
-    # 'Cos-': 62.2,
+    'ScatterBrain': 80.4,
+    # 'Long-': 78.8,
+    'Sinkhorn': 81.9,
+    'Synthesizer': 75.5,
+    'Performer': 74.66,
 }
 data_cola = {
     'Ours': 82.1,

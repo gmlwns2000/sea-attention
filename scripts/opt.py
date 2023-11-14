@@ -40,6 +40,8 @@ parser.add_argument('--enable-lora', action='store_true')
 parser.add_argument('--enc-per-layer', action='store_true', default=False)
 parser.add_argument('--load-checkpoint', type=str, default=None)
 parser.add_argument('--predictor-backend', type=str, default='performer', choices=['performer', 'cosformer'])
+parser.add_argument('--context-output-method', type=str, default='mix', choices=['norm', 'mix'])
+parser.add_argument('--k-oversample', type=float, default=1.0)
 
 args = parser.parse_args()
 
@@ -75,7 +77,7 @@ deepspeed_config = {
     }},
     'opt-350m': { 'wikitext2': {
         'none': './config/ds_opt_350.json',
-        'perlin': './config/ds_opt_350.json',
+        'perlin': './config/ds_opt_350_zero2.json',
         'performer': './config/ds_opt_350_zero2.json',
         'reformer': './config/ds_opt_350_zero2.json',
         'sinkhorn': './config/ds_opt_350_zero2.json',
@@ -83,11 +85,11 @@ deepspeed_config = {
     }},
     'opt-1.3b': { 'wikitext2': {
         'none': './config/ds_opt_1.3.json',
-        'perlin': './config/ds_opt_1.3_zero3.json',
+        'perlin': './config/ds_opt_1.3.json',
         'performer': './config/ds_opt_1.3.json',
         'reformer': './config/ds_opt_1.3.json',
         'sinkhorn': './config/ds_opt_1.3.json',
-        'cosformer': './config/ds_opt_1.3.json',
+        'cosformer': './config/ds_opt_1.3_zero3.json',
     }},
     'opt-2.7b': { 'wikitext2': {
         'none': './config/ds_opt_2.7.json',
@@ -119,6 +121,8 @@ cmd = [
     '--predictor-length', str(args.predictor_length),
     '--performer-nb-feature-factor', str(args.nbf),
     '--predictor-backend', str(args.predictor_backend),
+    '--context-output-method', args.context_output_method,
+    '--k-oversample', str(args.k_oversample),
     '--gradient-checkpointing',
     '--deepspeed-enable',
     '--deepspeed',

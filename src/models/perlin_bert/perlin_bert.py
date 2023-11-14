@@ -721,6 +721,86 @@ class BertSelfAttention(nn.Module):
             self.perlin_token_merging_attention_probs = attention_probs
             
             self.last_loss = 0
+        elif self.attention_method == 'flash':
+            use_cache = past_key_value is not None
+            if self.is_decoder:
+                # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+                # Further calls to cross_attention layer can then reuse all cross-attention
+                # key/value_states (first "if" case)
+                # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+                # all previous decoder key/value_states. Further calls to uni-directional self-attention
+                # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+                # if encoder bi-directional self-attention `past_key_value` is always `None`
+                past_key_value = (key_layer, value_layer)
+
+            # Take the dot product between "query" and "key" to get the raw attention scores.
+            # attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+
+            # if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
+            #     query_length, key_length = query_layer.shape[2], key_layer.shape[2]
+            #     if use_cache:
+            #         position_ids_l = torch.tensor(key_length - 1, dtype=torch.long, device=hidden_states.device).view(
+            #             -1, 1
+            #         )
+            #     else:
+            #         position_ids_l = torch.arange(query_length, dtype=torch.long, device=hidden_states.device).view(-1, 1)
+            #     position_ids_r = torch.arange(key_length, dtype=torch.long, device=hidden_states.device).view(1, -1)
+            #     distance = position_ids_l - position_ids_r
+
+            #     positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
+            #     positional_embedding = positional_embedding.to(dtype=query_layer.dtype)  # fp16 compatibility
+
+            #     if self.position_embedding_type == "relative_key":
+            #         relative_position_scores = torch.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
+            #         attention_scores = attention_scores + relative_position_scores
+            #     elif self.position_embedding_type == "relative_key_query":
+            #         relative_position_scores_query = torch.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
+            #         relative_position_scores_key = torch.einsum("bhrd,lrd->bhlr", key_layer, positional_embedding)
+            #         attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
+
+            # attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+            # if attention_mask is not None:
+            #     # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+            #     attention_scores = attention_scores + attention_mask
+
+            # # Normalize the attention scores to probabilities.
+            # attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+
+            # # This is actually dropping out entire tokens to attend to, which might
+            # # seem a bit unusual, but is taken from the original Transformer paper.
+            # attention_probs = self.dropout(attention_probs)
+
+            # # Mask heads if we want to
+            # if head_mask is not None:
+            #     attention_probs = attention_probs * head_mask
+
+            # context_layer = torch.matmul(attention_probs, value_layer)
+            
+            from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+
+            attention_probs = None
+            # torch implementation, working on lab server
+            context_layer = F.scaled_dot_product_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                is_causal=False,
+            )
+            # not working with our gpus...
+            # context_layer = flash_attn_func(
+            #     q=query_layer.permute(0, 2, 1, 3),
+            #     k=key_layer.permute(0, 2, 1, 3),
+            #     v=value_layer.permute(0, 2, 1, 3),
+            # ).permute(0, 2, 1, 3).contiguous()
+
+            context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+            context_layer = context_layer.view(new_context_layer_shape)
+            
+            self.perlin_token_merging_key_layer = key_layer
+            self.perlin_token_merging_attention_probs = attention_probs
+            
+            self.last_loss = 0
         else:
             raise Exception(self.attention_method)
 

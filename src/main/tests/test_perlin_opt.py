@@ -1,3 +1,9 @@
+"""
+Testing OPT
+
+Usage: python -m src.main.tests.test_perlin_opt
+"""
+
 from ...models import perlin_opt, perlin_attention
 import transformers
 import torch

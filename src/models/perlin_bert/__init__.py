@@ -29,7 +29,7 @@ from .perlin_bert import (
     BaseModelOutputWithPoolingAndCrossAttentions,
     SequenceClassifierOutput,
     
-    # TODO HJ these should be removed
+    # TODO these should be removed
     TokenMergingStart,
     TokenMergingEnd,
     ProjectionUpdater
