@@ -56,7 +56,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
     parser.add_argument('--enc-per-layer', action='store_true', default=False)
-    parser.add_argument('--context-output-method', default='mix', type=str,  choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea']) # norm for BERT, mix for OPT
+    parser.add_argument('--context-output-method', default='mix', type=str,  choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea']) # norm for BERT, mix for OPT # NOTE default is different
     parser.add_argument('--k-oversample', default=1, type=float)
     return parser
 
