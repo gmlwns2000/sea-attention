@@ -69,6 +69,7 @@ SUBMARKERS = {
     'k:128': 'X',
 }
 SUBCOLORS = {
+    'w:64': ('#306', 100000),
     'w:128': ('#f03', 10000),
     'w:256': ('#603', 1000),
     'w:384': ('#30f', 100),
@@ -224,7 +225,7 @@ for k in [32, 64, 128]:
         ))
         break
     our_handles.append(tuple(markers))
-for w in [128, 256, 384]:
+for w in [64, 128, 256, 384]:
     our_labels.append(f'Ours ($K$={w})')
     markers = []
     for m in SUBMARKERS.values():

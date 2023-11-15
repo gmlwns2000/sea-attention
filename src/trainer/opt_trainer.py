@@ -82,8 +82,17 @@ class KDWrapperModel(nn.Module):
         self.base_model = base_model
         self.using_deepspeed = using_deepspeed
     
+        self.lazy_attention = True
+        if self.lazy_attention:
+            for m in self.base_model.modules():
+                if hasattr(m, 'lazy_checkout'):
+                    m.lazy_checkout = True
+    
     def forward(self, batch):
         # print('cc')
+
+        if self.lazy_attention:
+            batch['output_attentions'] = False
         
         self.base_model.eval()
         
@@ -111,8 +120,10 @@ class KDWrapperModel(nn.Module):
         with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_teacher = self.base_model(**batch)
-            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
-            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
+            if batch['output_hidden_states']:
+                output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
+            if batch['output_attentions']:
+                output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
             output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
         
         # print('gg')
@@ -161,7 +172,10 @@ class KDWrapperModel(nn.Module):
             loss_special = self.model.calc_loss_special()
         # assert loss_special.requires_grad, loss_special.requires_grad
         
-        loss = loss_model + loss_kd + loss_special
+        if not os.environ.get('IGNORE_KD_LOSS', '0') == '1':
+            loss = loss_model + loss_kd + loss_special
+        else:
+            loss = output_student.loss
         
         # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
         
@@ -202,6 +216,7 @@ class Trainer:
         if self.config.kd_checkpointing:
             self.swap_out_device = torch.device('cpu')
             warnings.warn("using cpu offload for KD buffers. this will save a lot of memory, but slow down A--LOT!")
+            raise Exception()
         else:
             self.swap_out_device = self.device
         
@@ -256,7 +271,7 @@ class Trainer:
                 if hasattr(m, 'use_deepspeed'):
                     m.use_deepspeed = self.deepspeed
         
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config, use_fast=True)
         
         self.kd_model = KDWrapperModel(
             self.config, 
@@ -520,8 +535,8 @@ class Trainer:
                 'output_attentions': False,
             })
             if not self.deepspeed:
-                with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-                    self.base_model(**batch)
+                # with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+                #     self.base_model(**batch)
                 with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
                     batch['teacher'] = self.base_model
                     output_student = self.model(**batch)
@@ -556,9 +571,15 @@ class Trainer:
     def checkpoint_path(self):
         os.makedirs(f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
         path = f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/rebuttal.pth'
+        if os.environ.get('FORCE_OPENWEBTEXT', '0') == '1':
+            path += 'owt.pth'
         return path
     
     def save(self, path=None):
+        if os.environ.get('NO_SAVE', '0') == '1':
+            print('skip saving')
+            return
+        
         if path is None: path = self.checkpoint_path()
         if not self.deepspeed:
             torch.save({

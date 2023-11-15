@@ -85,13 +85,13 @@ def main_calc():
 
 def main_plot():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--m', type=int, default=128)
+    parser.add_argument('--m', type=int, default=64)
     parser.add_argument('--h', type=int, default=12)
     parser.add_argument('--d', type=int, default=64)
     args = parser.parse_args()
     
-    ts = [2**(x/10) for x in range(50, 130)]
-    ks = [2**x for x in range(5, 10)]
+    ts = [2**(x/10) for x in range(50, 140)]
+    ks = [2**x for x in range(5, 8)]
     
     perlins = [
         [calc_perlin(H=args.h, T=t, D=args.d, M=args.m, K=k)['all'] / (1024**3) for t in ts]
@@ -99,20 +99,21 @@ def main_plot():
     ]
     denses = [calc_dense(H=args.h, T=t, D=args.d)['all'] / (1024**3) for t in ts]
     
-    plt.plot(ts, denses, label='dense')
+    plt.plot(ts, denses, label='Quadratic')
     for ik, k in enumerate(ks):
-        plt.plot(ts, perlins[ik], label=f'k={k}')
+        plt.plot(ts, perlins[ik], label=f'Ours(k={k}, K=64)')
     root = './saves/poc/neko/calc_flops_comp/'
     os.makedirs(root, exist_ok=True)
     plt.grid()
     plt.legend()
-    plt.xlabel('Token Length')
+    plt.xlabel('Sequence Length')
     plt.ylabel('GFLOPs')
     # plt.yscale('log')
-    plt.title('Attention FLOPs comparision between Ours and dense')
-    path = os.path.join(root, 'plot.png')
-    plt.savefig(path, dpi=300)
-    print('saved', path)
+    plt.title('FLOPs Comparision Between SEA (Ours) And Quadratic Attention')
+    path = os.path.join(root, 'plot')
+    plt.savefig(path+'.png', dpi=300, bbox_inches='tight')
+    plt.savefig(path+'.pdf', dpi=300, bbox_inches='tight')
+    print('saved', path+'.png')
 
 if __name__ == '__main__':
     main_calc()

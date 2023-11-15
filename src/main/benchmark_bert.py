@@ -19,6 +19,9 @@ from ..models.perlin_opt import OPTModel, OPTAttention, OPTDecoderLayer
 from ..utils import seed, get_bench
 from torch import nn
 import json
+from ..models import perlin_opt
+
+perlin_opt.perlin_opt.DEFAULT_METHOD = 'any'
 
 os.environ['PERLIN_COMPILE'] = '1'
 torch.set_float32_matmul_precision('high')
@@ -41,6 +44,7 @@ class BenchConfig:
     causal: bool = False
     n_hash: int = 8
     opt_model: str = 'facebook/opt-125m'
+    small_head: bool = False
 
 def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
@@ -48,10 +52,14 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         torch.cuda.synchronize()
         print(f'[{name}] warmup... ', end = '', flush=True)
         t = time.time()
+        sample_count = 0
         while True:
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
+            sample_count += 1
             if time.time() - t > config.t_warmup:
+                break
+            if sample_count > 5:
                 break
         if on_warmup is not None:
             on_warmup()
@@ -68,6 +76,7 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         start.record()
+        sample_count = 0
         while True:
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
@@ -81,6 +90,8 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
             if time.time() - last_report > 0.5:
                 last_report = time.time()
                 print('.', end='', flush=True)
+            if config.method in ['flash', 'none'] and sample_count > min(max((((2**17)**2) / (config.seq_len**2)), 10), 200):
+                break
         end.record()
         torch.cuda.synchronize()
         # elapsed = sum(s.elapsed_time(e) / 1000 for s, e in samples)
@@ -108,6 +119,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     method = bench_config.method
     
     device = torch.device('cuda')
+    
+    # print(SEQ_LEN)
 
     if bench_config.w is None:
         pred_len = 128
@@ -125,7 +138,7 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
 
     register_default_config(PerlinAttentionConfig(
         performer_nb_factor=bench_config.nbf if (method in ['perlin', 'performer']) else 1,
-        lora_enabed=False,
+        lora_enabled=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,
@@ -136,10 +149,15 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     if not bench_config.causal:
         config = AutoConfig.from_pretrained('bert-base-uncased')
         config.max_position_embeddings = SEQ_LEN
+        if bench_config.small_head:
+            config.num_attention_heads = 1
+            config.num_hidden_layers = 1
+            config.hidden_size = 128
         perlin = BertModel(config).eval()
     else:
         config = AutoConfig.from_pretrained(bench_config.opt_model)
-        # config.max_position_embeddings = SEQ_LEN
+        config.max_position_embeddings = SEQ_LEN
+        # print(config)
         perlin = OPTModel(config).eval()
     for module in perlin.modules():
         if isinstance(module, BertSelfAttention):
@@ -171,7 +189,9 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     else:
         attention_mask = (torch.arange(0, SEQ_LEN).view(SEQ_LEN, 1) >= torch.arange(0, SEQ_LEN).view(1, SEQ_LEN)) * 1.0
         hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
-        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN).expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = (1-attention_mask_expand)*(-32000)
+        attention_mask_expand = attention_mask_expand.expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
         
         layer = perlin.decoder.layers[0] # type: OPTDecoderLayer
         fc1 = nn.Identity()
@@ -218,36 +238,59 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     if return_queue is not None:
         return_queue.put((result_interval, result_mem))
 
-def exam_config(config: BenchConfig):
-    q = mp.Queue()
-    exam(config, q)
-    torch.cuda.synchronize()
-    gc.collect()
-    torch.cuda.empty_cache()
-    return q.get()
-
-    q = mp.Queue()
-    proc = mp.Process(target=exam, args=(config, q), daemon=True)
-    proc.start()
-    proc.join()
-    return q.get()
+def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem=6000):
+    if (find_bsize and config.seq_len <= 81920):
+        find_config = copy.deepcopy(config)
+        find_config.t_warmup = 0
+        find_config.t_sample = 0
+        _, mem = exam_config(find_config, using_mp=using_mp, find_bsize=False)
+        if mem == 0:
+            return 0, 0
+        mem = mem / 1024 / 1024
+        bsize = max(1, min(128, math.floor(target_mem / mem)))
+        if config.method == 'flash':
+            bsize = min(bsize, max(1, int((16384**2)/(config.seq_len**2))))
+        print('found bsize', bsize)
+        config.bsize = bsize
+        return exam_config(config, using_mp=using_mp, find_bsize=False)
+    else:
+        if not using_mp:
+            q = mp.Queue()
+            exam(config, q)
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+            return q.get()
+        else:
+            q = mp.Queue()
+            proc = mp.Process(target=exam, args=(config, q), daemon=True)
+            proc.start()
+            proc.join()
+            return q.get()
 
 # BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+HAS_FLASH = os.environ.get('FLASH', '0') == '1'
+if HAS_FLASH:
+    BASELINES = ['none', 'flash', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 # BASELINES = ['none',]
 
 def main_methods():
     for method in BASELINES:
         exam_config(BenchConfig(
-            method=method
+            method=method,
+            small_head=True,
         ))
     
 def measure_and_dump():
-    TRACE = True
+    TRACE = False
     precision = torch.float32
     
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
+    if HAS_FLASH:
+        ts = [2**x for x in range(12, 18)]
+        # ts = [2**17]
     # ks = [2**x for x in range(3, 8)]
     ks = [32, 64, 128,]
     # ks = [32]
@@ -264,6 +307,7 @@ def measure_and_dump():
                 seq_len=t,
                 k=k,
                 trace=TRACE,
+                small_head=True,
             ))
             for t in ts
         ]
@@ -277,6 +321,7 @@ def measure_and_dump():
                 method=method,
                 seq_len=t,
                 trace=False,
+                small_head=True,
             ))
             for t in ts
         ]
@@ -312,7 +357,7 @@ def measure_and_dump():
             'baseline_methods': baseline_methods,
             'ts': ts,
             'ks': ks,
-        }, f)
+        }, f, indent=2)
 
 def load_and_plot():
     baseline_methods = BASELINES
@@ -331,6 +376,7 @@ def load_and_plot():
     def plot(ax, filename, title, ylabel, baselines, perlins, ts, ks):
         NAMES = {
             'none': 'None',
+            'flash': 'FlashAttention',
             'cosformer': 'Cosformer',
             'performer': 'Performer',
             'reformer': 'Reformer',
@@ -341,6 +387,7 @@ def load_and_plot():
         
         LINESTYLE = {
             'none': '--',
+            'flash': '--',
             'cosformer': ':',
             'performer': ':',
             'reformer': ':',
@@ -352,6 +399,7 @@ def load_and_plot():
         
         MARKERS = {
             'none': '>',
+            'flash': '<',
             'cosformer': '+',
             'performer': 'v',
             'reformer': '^',
@@ -362,6 +410,7 @@ def load_and_plot():
         
         MARKER_SIZE = {
             'none': 5,
+            'flash': 5,
             'cosformer': 5,
             'performer': 5,
             'reformer': 5,
@@ -373,6 +422,7 @@ def load_and_plot():
         
         COLORS = {
             'none': 'mediumslateblue',
+            'flash': '#a7a',
             'cosformer': 'gray',
             'performer': 'lightcoral',
             'reformer': '#788bfa',
@@ -447,8 +497,12 @@ def load_and_plot():
     nrows = 1
     ncols = 2
     fig, axs = plt.subplots(nrows, ncols)
-    fig.set_figwidth(3.2*ncols+1.2)
-    fig.set_figheight(2.4)
+    if not HAS_FLASH:
+        fig.set_figwidth(3.2*ncols+1.2)
+        fig.set_figheight(2.4)
+    else:
+        fig.set_figwidth(4*ncols+1.5)
+        fig.set_figheight(3)
     
     plot(
         axs[1],

@@ -56,7 +56,7 @@ def add_perlin_model_options(parser):
     parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
     parser.add_argument('--enc-per-layer', action='store_true', default=False)
-    parser.add_argument('--context-output-method', default='mix', type=str,  choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea'])
+    parser.add_argument('--context-output-method', default='mix', type=str,  choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea']) # norm for BERT, mix for OPT
     parser.add_argument('--k-oversample', default=1, type=float)
     return parser
 
@@ -147,7 +147,7 @@ class BaseTrainer:
             attention_predictor_backend=perlin_predictor_backend,
             attention_predictor_enc_per_layer=perlin_enc_per_layer,
             layerwise = perlin_layerwise,
-            lora_enabed = perlin_lora,
+            lora_enabled = perlin_lora,
             compile = compile,
             context_output_method=perlin_context_output_method,
             k_oversample=perlin_k_oversample,
@@ -183,13 +183,17 @@ class BaseTrainer:
                 if isinstance(module, perlin_opt.OPTDecoderLayer):
                     module.train_layerwise = True
                     print('layerwise patch', type(module))
-            if self.perlin_lora:
-                for name, param in model.named_parameters():
-                    if 'perlin' in name:
-                        param.requires_grad = True
-                    else:
-                        param.requires_grad = False
-                    # print(name, param.requires_grad)
+        
+        if self.perlin_lora:
+            # for name, param in model.named_parameters():
+            #     if ('perlin' in name) or ('embed' in name):
+            #         param.requires_grad = True
+            #         print('[EXPERIMENTAL] lora: grad on', name)
+            #     else:
+            #         param.requires_grad = False
+            #         print('[EXPERIMENTAL] lora: grad off', name)
+            #     # print(name, param.requires_grad)
+            pass
         
         return model
 
@@ -357,7 +361,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         model_config = {
             'opt-125m': {
-                'wikitext2': 'Aalaa/opt-125m-wikitext2'
+                'wikitext2': 'Aalaa/opt-125m-wikitext2' if os.environ.get('FORCE_OPENWEBTEXT', '0') == '0' else 'facebook/opt-125m'
             },
             'opt-350m': {
                 'wikitext2': 'lnair/opt-350m-wikitext2'
@@ -369,6 +373,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'wikitext2': 'lnair/opt-2.7b-wikitext2'
             }
         }[model][subset]
+        print(model_config)
         
         if eval_steps is None:
             eval_steps = {
@@ -397,6 +402,12 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         def on_model_init():
             print('on model init')
             self.apply_model_options(self.model)
+            
+        perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
+        
+        lr_low_scale = {'opt-2.7b': 0.05}.get(model, 0.2) if self.attention_method == 'perlin' else 1.0
+        lr_high_scale = {'opt-2.7b': 0.5}.get(model, 10.0) if self.attention_method == 'perlin' else 10.0
+        print(f'PerlinTrainer: lr_high_scale = {lr_high_scale}, lr_low_scale = {lr_low_scale}')
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
@@ -408,8 +419,8 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 max_seq_len=max_seq_len,
-                lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
-                lr_low_scale=0.2 if self.attention_method == 'perlin' else 1.0,
+                lr_high_scale=lr_high_scale,
+                lr_low_scale=lr_low_scale,
                 additional_config=perlin_attention.get_default_config().to_json(),
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
@@ -503,7 +514,7 @@ if __name__ == '__main__':
         trainer = LraTrainer(**kwargs)
     elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
-        assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
+        # assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         kwargs['cmd_args'] = args
         trainer = OptTrainer(**kwargs)
     else:
@@ -518,7 +529,54 @@ if __name__ == '__main__':
     if args.load_only_additionals:
         trainer.load_state_from_base()
 
+    if '__CONTEXT' in os.environ:
+        model = trainer.model
+        def resize_pos_embed(model: perlin_opt.OPTForCausalLM):
+            pos_embed = model.model.decoder.embed_positions # type: perlin_opt.OPTLearnedPositionalEmbedding
+            offset = pos_embed.offset
+            w = pos_embed.weight.data
+            new_context_window = int(os.environ.get('__CONTEXT', '8192'))
+            mode = os.environ.get('__IMODE', 'bilinear')
+            w_interp = torch.concat([
+                w[:offset], 
+                torch.nn.functional.interpolate(
+                    w[offset:].unsqueeze(0).unsqueeze(0), 
+                    size=(new_context_window, w.shape[-1]), 
+                    mode=mode, 
+                    align_corners=True,
+                ).squeeze(0).squeeze(0)
+            ], dim=0)
+            assert w_interp.shape[-1] == w.shape[-1]
+            pos_embed.weight.data = w_interp
+            model.config.max_position_embeddings = new_context_window
+            for m in model.modules():
+                if hasattr(m, 'v_eye_learned_causal'):
+                    t = m.v_eye_learned_causal
+                    m.v_eye_learned_causal.data = torch.nn.functional.interpolate(
+                        t, size=(new_context_window, t.shape[-1]), mode='nearest'#, align_corners=True
+                    )
+        resize_pos_embed(trainer.model)
+        resize_pos_embed(trainer.base_model)
+        
+        stride = int(os.environ.get('__STRIDE', '2048'))
+        trainer.valid_loader.dataset.max_length = trainer.valid_loader.dataset.stride = stride
+        trainer.train_loader.dataset.max_length = trainer.train_loader.dataset.stride = stride
+        
+        print('context length is adjusted')
+    
     if not args.eval:
         trainer.main()
     else:
-        trainer.evaluate()
+        force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
+        if force_cpu:
+            trainer.device = 'cpu'
+            trainer.model.to('cpu')
+            trainer.base_model.to('cpu')
+        
+        eval_job = os.environ.get('EVAL_JOB', 'PPL').upper()
+        if eval_job == 'PPL':
+            trainer.evaluate()
+        elif eval_job == 'EXPPL':
+            trainer.evaluate()
+        else:
+            raise Exception()

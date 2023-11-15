@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from ..benchmark_bert import BASELINES
 
@@ -9,12 +10,23 @@ print(data)
 
 assert len(BASELINES) == len(data['vram_baseline']), f"{len(BASELINES)} == {len(data['vram_baseline'])}"
 
+METHOD2NAME = {
+    'none': 'Vanilla',
+    'performer': 'Performer',
+    'sinkhorn': 'Sinkhorn',
+    'cosformer': 'Cosformer',
+    'reformer': 'Reformer',
+    'scatterbrain': 'Scatterbrain',
+    'synthesizer': 'Synthesizer',
+    'flash': 'FlashAttention',
+}
+
 ts = data['ts'] + ['Avg.']
 ks = data['ks']
 
 just_width = max([len(s) for s in BASELINES])
 def format(lst):
-    return [f'{i:.1f}'.rjust(just_width) for i in lst]
+    return [(f'{i:.2f}' if not math.isnan(i) else 'OOM').rjust(just_width) for i in lst]
 def avg(lst):
     return sum(lst) / len(lst)
 
@@ -33,11 +45,12 @@ def render_table(key_baseline, key_perlin):
     # print(cell_data)
 
     table_cells = "|".join(['c']*(len(ts)+1))
-    table_header = " & ".join(["".rjust(just_width)]+[str(i).rjust(just_width) for i in ts])
+    table_header = " & ".join(["".rjust(just_width)]+[(f'{i:,}' if not isinstance(i, str) else i).rjust(just_width) for i in ts])
     table_data = ""
     for row in cell_data:
         if isinstance(row, list):
             name, row_data = row[0], row[1:]
+            name = METHOD2NAME.get(name, name)
             table_data += ' & '.join([name.rjust(just_width)]+format(row_data))
             table_data += '\\\\\n'
         elif isinstance(row, str):

@@ -626,7 +626,15 @@ def __scan_col_4_compute(
     #         mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
     #     )
 
-def scan_col(x: torch.Tensor, original_width: int, target_width_max: int, target_width: torch.Tensor, max_col_z: int, max_k: int):
+def scan_col(
+    x: torch.Tensor, 
+    original_width: int, 
+    target_width_max: int, 
+    target_width: torch.Tensor, 
+    max_col_z: int, 
+    max_k: int, 
+    oversampled: float = None
+):
     N, T_DST, H_T = x.shape # N, T_DST, H*T_M
     assert target_width.shape == (T_DST,)
     scales = target_width / original_width
@@ -898,7 +906,16 @@ def nullcontext(enter_result=None):
     yield enter_result
 
 def resize_from_m_to_t_csr(
-    x, masked_fill_value, k, target_width=None, training=False, need_assert=False, is_causal=True, max_col_z = None, benchmarking = False,
+    x, 
+    masked_fill_value, 
+    k, 
+    target_width=None, 
+    training=False, 
+    need_assert=False, 
+    is_causal=True, 
+    max_col_z = None, 
+    benchmarking = False,
+    oversampled = None,
 ):
     if benchmarking:
         timer = lambda name: get_bench().region(name)
@@ -945,6 +962,7 @@ def resize_from_m_to_t_csr(
                 target_width=target_width, 
                 max_col_z=max_col_z,
                 max_k=k,
+                oversampled=oversampled,
             )
             if isinstance(ret, torch.Tensor):
                 assert ret.is_sparse_csr
@@ -987,7 +1005,7 @@ def resize_from_m_to_t_csr(
             )
 
 def test_config(
-    IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=False
+    IS_CAUSAL, N, H, T, T_DST, T_M, K, K_OS, only_bench=False
 ):
     from .....utils import seed
     from .....utils.bench import bench
@@ -1033,7 +1051,7 @@ def test_config(
     
     compressed_mask = causal_topk_masking(
         estimated_probs, 
-        k=K, 
+        k=K * K_OS, 
         attention_mask=attention_mask, 
         dst_attention_mask=dst_attention_mask, 
         causal_attention_mask=causal_attention_mask,
@@ -1044,7 +1062,8 @@ def test_config(
         t = resize_from_m_to_t_csr(
             compressed_mask, 0, K,
             target_width=mask.shape[-1], 
-            is_causal=IS_CAUSAL
+            is_causal=IS_CAUSAL,
+            oversampled=K_OS,
         )
         if t is not None:
             print(t.shape)
@@ -1058,7 +1077,9 @@ def test_config(
             compressed_mask, 0, 
             attention_mask=mask,
             target_width=mask.shape[-1],
-            is_causal=IS_CAUSAL
+            is_causal=IS_CAUSAL,
+            k=K,
+            oversampled=K_OS,
         )
         
         os.makedirs('./saves/tests/ops/causal_resize_m_to_t', exist_ok=True)
@@ -1070,7 +1091,7 @@ def test_config(
         print('saved sample ./saves/tests/ops/causal_resize_m_to_t/state.pth')
     
     # print(resized_mask)
-    # return
+    return
     
     # for i in range(H):
     #     print('-=-')
@@ -1087,7 +1108,8 @@ def test_config(
             attention_mask=mask,
             target_width=mask.shape[-1],
             is_causal=IS_CAUSAL,
-            max_dups=min(math.ceil(mask.shape[-1]/T_M), K),
+            k=K,
+            oversampled=K_OS,
         )
         resized_mask = resized_mask.transpose(1, 2).reshape(N, T_DST, H*T)
         for i in range(N):
@@ -1101,6 +1123,7 @@ def test_config(
             target_width=mask.shape[-1],
             is_causal=IS_CAUSAL,
             benchmarking=True,
+            oversampled=K_OS,
         )
     
     bench('csr_convert (trace)', bench_csr_convert, t_warmup=0.5, t_sample=3, tracetree=True)
@@ -1117,6 +1140,15 @@ def test_main():
     T_DST = 32
     T_M = 2
     K = 4
+    K_OS = 1.0
+    
+    N = 1
+    H = 1
+    T = 64
+    T_DST = 64
+    T_M = 8
+    K = 16
+    K_OS = 1.0
     
     # N = 1
     # H = 12
@@ -1127,7 +1159,7 @@ def test_main():
     # K = 32
     
     test_config(
-        IS_CAUSAL, N, H, T, T_DST, T_M, K, only_bench=T > 4096
+        IS_CAUSAL, N, H, T, T_DST, T_M, K, K_OS, only_bench=T > 4096
     )
     
     # for t in [2048, 4096, 8192]:

@@ -8,7 +8,7 @@ matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
 
 data = pd.read_csv("./plots/main/wandb_opt125.csv")
 colnames = [
-    'opt125 perlin k64 w384 - eval/score',
+    'opt125 k64 w64 - eval/score',
     'opt125 performer (_) - eval/score',
     'opt125 reformer (_) - eval/score',
 ]

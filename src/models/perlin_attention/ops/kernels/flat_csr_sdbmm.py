@@ -393,6 +393,8 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
         with timer("flat_csr_sdbmm.tch.compute"):
             BLOCK_COL_HEAD = min(MAX_ROW_Z, 1024)
             TCH_BLOCK_R = 1
+            if R > 4096:
+                TCH_BLOCK_R = triton.next_power_of_2(triton.cdiv(R, 4096))
             grid_tch = (N, triton.cdiv(R, TCH_BLOCK_R))
             __flat_csr_sdbmm_tch_compute[grid_tch](
                 crow_indices,
@@ -472,15 +474,9 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
         need_assert=True
     )
     
-    # print(csr_mask.crow_indices(), csr_mask.col_indices(), T, flatten_csr_to_dense(csr_mask, T, H))
-    t_assert = flat_csr_to_dense(csr_mask, T, H).max() == 1
-    if run_benchmark:
-        assert t_assert
-    elif not t_assert:
-        return False
-    
     query_layer = torch.randn((N, H, T_DST, HID), device=device)
     key_layer = torch.randn((N, H, T, HID), device=device)
+    value_layer = torch.randn((N, H, T, HID), device=device)
     csr_score = flat_csr_masked_bmm(
         query_layer, 
         key_layer, 
@@ -488,10 +484,23 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
         None
     )
     csr_probs = flat_csr_softmax(csr_score, H, T)
+    def bench_sparse():
+        with torch.no_grad():
+            return flat_csr_sdbmm(csr_probs, value_layer, T_M, benchmarking=True)
+    
+    if run_benchmark and (T > 4096):
+        bench('sparse_sdbmm', bench_sparse, 0.5, 3, 'ms', False)
+        return
+    
+    # print(csr_mask.crow_indices(), csr_mask.col_indices(), T, flatten_csr_to_dense(csr_mask, T, H))
+    t_assert = flat_csr_to_dense(csr_mask, T, H).max() == 1
+    if run_benchmark:
+        assert t_assert
+    elif not t_assert:
+        return False
+    
     # csr_probs_dense = csr_probs.to_dense().view(N, T_DST, H, T).transpose(1, 2).reshape(N, H, T_DST, T)
     csr_probs_dense = flat_csr_to_dense(csr_probs, T, H)
-    
-    value_layer = torch.randn((N, H, T, HID), device=device)
     
     def bench_naive():
         with torch.no_grad():
@@ -499,10 +508,6 @@ def test_config(N, H, T, T_DST, T_M, K, HID, run_benchmark=True):
                 csr_probs_dense,
                 value_layer
             )
-    
-    def bench_sparse():
-        with torch.no_grad():
-            return flat_csr_sdbmm(csr_probs, value_layer, T_M, benchmarking=True)
     
     context = bench_naive()
     context_sparse = bench_sparse()
@@ -547,7 +552,7 @@ def test_main():
     
     N = 1
     H = 12
-    T = 4096
+    T = 4096*4
     T_DST = T
     T_M = 256
     K = 64
