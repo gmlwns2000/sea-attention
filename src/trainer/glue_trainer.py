@@ -80,7 +80,8 @@ def get_base_model(dataset, only_tokenizer=False):
     if only_tokenizer:
         return None, tokenizer
     
-    bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
+    # bert = model.from_pretrained(checkpoint, cache_dir='./cache/huggingface/')
+    bert = model.from_pretrained(checkpoint)
     return bert, tokenizer
 
 BF16 = torch.float16 if torch.cuda.is_bf16_supported() else torch.float16
