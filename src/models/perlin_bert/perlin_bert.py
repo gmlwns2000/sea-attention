@@ -435,7 +435,7 @@ class BertSelfAttention(nn.Module):
             q = F.pad(q, pad_config).float()
             # k = F.pad(k, pad_config).float()
             v = F.pad(v, pad_config).float()
-            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            binary_mask = F.pad(binary_mask.expand(N, H, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N*H, TP, TP)
             assert q.shape == (N, H, T+to_pad, HID)
             # assert binary_mask.shape == (N, T+to_pad)
         else:
