@@ -53,12 +53,12 @@ def process_layer(teacher: torch.Tensor, est: torch.Tensor, dense: torch.Tensor,
     H, T, T = teacher.shape
     
     stacks = []
-    for i in range(H):
+    for i in range(1):
         stacks.append(np.concatenate([
             convert_to_colormap(teacher[i].cpu().numpy(), gs[0]),
-            convert_to_colormap(est[i].cpu().numpy(), gs[1]),
-            convert_to_colormap(dense[i].cpu().numpy(), gs[2]),
-            convert_to_colormap(partial[i].cpu().numpy(), gs[3]),
+            # convert_to_colormap(est.cpu().numpy(), gs[1]),
+            # convert_to_colormap(dense.cpu().numpy(), gs[2]),
+            convert_to_colormap(partial.cpu().numpy(), gs[3]),
         ], axis=0))
     stacks = np.concatenate(stacks, axis=1)
     
@@ -84,11 +84,12 @@ def job_main(args):
 def process_batch_index(attentions: List[torch.Tensor], i: int, T: int, gs = [0.2, 0.2, 0.2, 0.2]):
     imgs = []
     for ilayer, attn in enumerate(tqdm.tqdm(attentions, dynamic_ncols=True, desc='render.layer')):
+        # breakpoint()
         img = process_layer(
             teacher=attn['teacher_attn'][i][:, :T, :T],
-            est=attn['estimated_attn'][i][:, :T, :T],
-            dense=attn['dense_attn'][i][:, :T, :T],
-            partial=attn['partial_attn'][i][:, :T, :T],
+            est=attn['estimated_attn'][i][:T, :T],
+            dense=attn['dense_attn'][i][:T, :T],
+            partial=attn['partial_attn'][i][:T, :T],
             idx=ilayer,
             gs = gs
         )

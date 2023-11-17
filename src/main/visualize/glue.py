@@ -42,8 +42,8 @@ def main(
     for module in bert.modules():
         if isinstance(module, perlin_bert.BertSelfAttention):
             teacher_attn = module.teacher_attention_prob
-            estimated_attn = module.last_perlin_estimated_probs
-            dense_attn = module.last_perlin_dense_probs
+            estimated_attn = torch.zeros_like(module.last_perlin_partial_probs)
+            dense_attn = torch.zeros_like(module.last_perlin_partial_probs)
             partial_attn = module.last_perlin_partial_probs
             attentions.append({
                 'teacher_attn': teacher_attn.cpu(),
