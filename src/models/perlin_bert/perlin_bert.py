@@ -442,18 +442,19 @@ class BertSelfAttention(nn.Module):
             q = q.float()
             # k = k.float()
             v = v.float()
-            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+            binary_mask = binary_mask.expand(N, H, TP, TP).bool().view(N*H, TP, TP)
         def merge_head(t: torch.Tensor):
             N, H, T, HID = t.shape
-            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            return t.contiguous().view(N*H, T, HID)
         q = merge_head(q)
         # k = merge_head(k)
         v = merge_head(v)
         self.perlin_reformer_atten.bucket_size = bucket_size
         reformer_context_layer, _,_ = self.perlin_reformer_atten(
             # torch.cat([q, k], dim=-1), 
-            q, 
-            v, 
+            q,
+            v,
             input_attn_mask = binary_mask
         )
         #unpad
