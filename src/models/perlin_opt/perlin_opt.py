@@ -347,15 +347,16 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = F.pad(q, (0,0,0,to_pad_dst)).float()
                 v = F.pad(v, (0,0,0,to_pad_src)).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().view(N, TP_DST, TP_SRC)
+                binary_mask = F.pad(binary_mask.expand(N, H, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().reshape(N*H, TP_DST, TP_SRC)
                 assert q.shape == (N, H, T_DST + to_pad_dst, HID)
             else:
                 q = q.float()
                 v = v.float()
-                binary_mask = binary_mask.expand(N, 1, T_DST, T_SRC).bool().view(N, T_DST, T_SRC)
+                binary_mask = binary_mask.expand(N, H, T_DST, T_SRC).bool().reshape(N*H, T_DST, T_SRC)
             def merge_head(t: torch.Tensor):
                 N, H, T, HID = t.shape
-                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                return t.permute(0, 1, 2, 3).contiguous().view(N*H, T, HID)
             q = merge_head(q)
             v = merge_head(v)
             self.perlin_reformer_atten.bucket_size = bucket_size
@@ -369,10 +370,10 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
                 v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, TP_DST, HID)#.permute(0, 2, 1, 3)
                 reformer_context_layer = reformer_context_layer[:, :, :T_DST, :]
             else:
-                reformer_context_layer = reformer_context_layer.view(N, T_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, T_DST, HID)#.permute(0, 2, 1, 3)
             
             if not self.benchmarking:
                 attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
