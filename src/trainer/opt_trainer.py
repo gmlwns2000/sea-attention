@@ -142,7 +142,7 @@ class KDWrapperModel(nn.Module):
                 loss_model = output_student.loss
         else:
             loss_model = 0.0
-        if float(os.environ.get('__TASK_LOSS', '0')) > 0:
+        if float(os.environ.get('__TASK_LOSS', '0')) > 0.01:
             loss_model = float(os.environ.get('__TASK_LOSS', '0')) * output_student.loss
         
         loss_kd = 0
