@@ -580,7 +580,13 @@ class Trainer:
             print('skip saving')
             return
         
-        if path is None: path = self.checkpoint_path()
+        if path is None: 
+            path = self.checkpoint_path()
+        
+        save_prefix = os.environ.get('__SAVE_PREFIX', '')
+        if save_prefix != '':
+            path = path[:-4] + save_prefix + path[-4:]
+        
         if not self.deepspeed:
             torch.save({
                 'step': self.step,
