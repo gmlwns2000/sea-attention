@@ -361,7 +361,7 @@ class PerlinAttention(nn.Module):
             context_layer_truth = None
             N, H, TSRC, D = k.shape
             N, H, TDST, D = q.shape
-            score = torch.bmm(q.view(N*H, TDST, D), k.view(N*H, TSRC, D).transpose(-1, -2)).view(N, H, TDST, TSRC)
+            score = torch.bmm(q.detach().view(N*H, TDST, D), k.detach().view(N*H, TSRC, D).transpose(-1, -2)).view(N, H, TDST, TSRC)
             score = score + attention_mask
             score = torch.softmax(score, dim=-1)
             attention_scores_truth = score
