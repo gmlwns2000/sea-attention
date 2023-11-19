@@ -142,6 +142,8 @@ class KDWrapperModel(nn.Module):
                 loss_model = output_student.loss
         else:
             loss_model = 0.0
+        if float(os.environ.get('__TASK_LOSS', '0')) > 0.01:
+            loss_model = float(os.environ.get('__TASK_LOSS', '0')) * output_student.loss
         
         loss_kd = 0
         if self.config.using_kd:
@@ -175,6 +177,7 @@ class KDWrapperModel(nn.Module):
         if not os.environ.get('IGNORE_KD_LOSS', '0') == '1':
             loss = loss_model + loss_kd + loss_special
         else:
+            warnings.warn('kd loss ignored!')
             loss = output_student.loss
         
         # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
