@@ -363,7 +363,7 @@ class PerlinAttention(nn.Module):
             N, H, TDST, D = q.shape
             score = torch.bmm(q.detach().view(N*H, TDST, D), k.detach().view(N*H, TSRC, D).transpose(-1, -2)).view(N, H, TDST, TSRC)
             score = score + attention_mask
-            score = torch.softmax(score, dim=-1)
+            # score = torch.softmax(score, dim=-1)
             attention_scores_truth = score
         
         DUMMY_OUTPUT = PerlinAttentionOutput(

@@ -239,7 +239,9 @@ class Trainer:
         if self.config.on_model_init is not None: self.config.on_model_init()
         if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
-        self.init_deepspeed()
+        self.deepspeed_inited = False
+        if not os.environ.get('LAZY_DEEPSPEED', '0') == '1':
+            self.init_deepspeed()
         
         self.wandb_inited = False
     
@@ -388,6 +390,8 @@ class Trainer:
         self.optimizer.zero_grad()
     
     def init_deepspeed(self):
+        if self.deepspeed_inited: return
+        
         if self.deepspeed:
             engine, optimizer, _, _ = deepspeed.initialize(
                 args=self.cmd_args,
@@ -399,6 +403,8 @@ class Trainer:
             self.ds_optimizer = optimizer
         else:
             self.kd_model.to(self.device)
+        
+        self.deepspeed_inited = True
     
     def train_step(self, batch) -> Tuple[float, Dict[str, float]]:
         batch = batch_to(batch, self.device)
@@ -669,6 +675,9 @@ class Trainer:
             print(f'loaded {path} ({-1}@[{-1}/{-1}])')
     
     def main(self):
+        if os.environ.get('LAZY_DEEPSPEED', '0') == '1':
+            self.init_deepspeed()
+        
         torch.set_float32_matmul_precision('high')
         warnings.warn("using TF32 if available, so be caution...")
         
