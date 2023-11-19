@@ -398,10 +398,6 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             num_steps = {
                 'wikitext2': 10000,
             }[subset]
-        
-        def on_model_init():
-            print('on model init')
-            self.apply_model_options(self.model)
             
         perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
@@ -425,13 +421,17 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
                 kd_checkpointing=kd_checkpointing,
-                on_model_init=on_model_init,
+                on_model_init=self.on_model_init,
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,
             cmd_args=cmd_args,
         )
         
+        self.apply_model_options(self.model)
+    
+    def on_model_init(self):
+        print('on model init')
         self.apply_model_options(self.model)
 
 OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b']
