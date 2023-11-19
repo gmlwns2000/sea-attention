@@ -357,7 +357,7 @@ class PerlinAttention(nn.Module):
             if attention_scores_truth.device != q.device:
                 attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
         
-        if os.environ.get('__USE_SELF_TEACHER', '0') == '1' and self.training:
+        if os.environ.get('KD_SELF_TEACHER', '0') == '1' and self.training:
             context_layer_truth = None
             N, H, TSRC, D = k.shape
             N, H, TDST, D = q.shape
