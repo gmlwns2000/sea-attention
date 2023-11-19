@@ -357,6 +357,15 @@ class PerlinAttention(nn.Module):
             if attention_scores_truth.device != q.device:
                 attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
         
+        if os.environ.get('__USE_SELF_TEACHER', '0') == '1' and self.training:
+            context_layer_truth = None
+            N, H, TSRC, D = k.shape
+            N, H, TDST, D = q.shape
+            score = torch.bmm(q.view(N*H, TDST, D), k.view(N*H, TSRC, D).transpose(-1, -2)).view(N, H, TDST, TSRC)
+            score = score + attention_mask
+            score = torch.softmax(score, dim=-1)
+            attention_scores_truth = score
+        
         DUMMY_OUTPUT = PerlinAttentionOutput(
             loss=None,
             context_layer=None,

@@ -179,6 +179,9 @@ class KDWrapperModel(nn.Module):
         else:
             warnings.warn('kd loss ignored!')
             loss = output_student.loss
+            if os.environ.get('KD_SELF_TEACHER', '0') == '1':
+                warnings.warn('using self teacher!')
+                loss = loss + loss_special
         
         # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
         
