@@ -618,7 +618,7 @@ class Trainer:
     
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
-        if not self.deepspeed:
+        if not self.deepspeed or not self.deepspeed_inited:
             if os.path.exists(path):
                 print(f'load from {path}')
                 state = torch.load(path, map_location='cpu')
