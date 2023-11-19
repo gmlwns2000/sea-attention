@@ -684,9 +684,14 @@ class Trainer:
         from ..utils.secrets import WANDB_KEY, USER_NAME
         os.environ['WANDB_API_KEY'] = WANDB_KEY
         if self.local_rank == 0:
+            try:
+                config = asdict(self.config)
+            except Exception as ex:
+                print('failed to pickle')
+                config = {'oops': f'{ex}'}
             wandb.init(
                 project=f"[{USER_NAME}] perlin-opt" if USER_NAME is not None else "perlin-opt",
-                config=asdict(self.config)
+                config=config
             )
             self.wandb_inited = True
             print('save path', self.checkpoint_path())
