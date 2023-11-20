@@ -28,7 +28,8 @@ k = 128
 pw = 96
 
 dynamic_ks = [96, 104, 112, 120, 128]
-query_skips = [1, 2, 4, 8, 16]
+# query_skips = [1, 2, 4, 8, 16]
+query_skips = [16, 8, 4, 2, 1]
 
 def long_sleep(sec):
     last_tick = time.time()
@@ -100,8 +101,67 @@ def samples():
     with open('./plots/exp_long_context/data.json', 'w') as f:
         json.dump(data, f, indent=2)
 
+r"""
+\begin{table}[h]
+\caption{...}
+\label{table.baseline.glue}
+\begin{center}
+\begin{tabular}{l|c|ccccccc}
+\toprule
+Metric &\textcolor{gray}{Vanilla}& \textbf{SEA (Ours)}&Cosformer&Reformer&Sinkhorn&Synthesizer&Performer\\
+\midrule
+Accuracy&\textcolor{gray}{84.1}&84.0& 82.7& 82.5& 81.9& 75.5& 74.7\\
+Memory (MB) & \textcolor{gray}{9.00} & 17.17& 10.88& 88.36& 9.39& 8.25& 14.76\\
+Latency ($\mu$s)& \textcolor{gray}{238} & 701 & 242& 900& 152& 181& 320\\
+\bottomrule
+\end{tabular}
+\end{center}
+\end{table}
+"""
+def wrap_color(v, vmin, vmax, cmin=(64, 212, 19), cmax=(227, 25, 72)):
+    #\textcolor[RGB]{62,114,196} {Medium Blue}
+    x = min(1, max((v-vmin) / (vmax-vmin), 0))
+    c = [int(t[0] * x + t[1] * (1-x)) for t in zip(cmax, cmin)]
+    return f'\\textbf{{\\textcolor[RGB]{{{c[0]}, {c[1]}, {c[2]}}}{{{v:.2f}}}}}'
+
+def render_table():
+    with open('./plots/exp_long_context/data.json', 'r') as f:
+        data = json.load(f)
+    
+    print(data)
+    
+    print('-'*80)
+    print(r'\begin{table}[h]')
+    print(r'\label{table.exp_long_context}')
+    print(
+        r'\caption{The trade off on long context experiment on Wikitext2 using post training compression techniques: '
+        r'Query skipping and dynamic k control. Each entry of table shows \textcode{PPL((ms)/(MB))}.}'
+    )
+    print(r'\begin{center}')
+    print(r'\resizebox{1.0\linewidth}{!}{')
+    print(r'\begin{tabular}{r|c|c|c|c|c}')
+    print(r'\toprule')
+    print(f'\\backslashbox{{\\tiny Query Skips}}{{\\tiny Dynamic-k}} & {" & ".join([str(x) for x in dynamic_ks])} \\\\')
+    print(r'\midrule')
+    for iq, qskip in enumerate(query_skips):
+        line = f'{qskip}'
+        for ds in dynamic_ks:
+            sample = data[f'{ds},{qskip}']
+            line += f' & {wrap_color(sample["ppl"], 21.0, 24.0)} ({{\\small {wrap_color(sample["latency"], 14, 20)} / {wrap_color(sample["mem"], 440, 480)}}})'
+        line += '\\\\'
+        print(line)
+        if iq < (len(query_skips) - 1):
+            print(r'\midrule')
+    print(r'\bottomrule')
+    print(r'\end{tabular}')
+    print(r'}')
+    print(r'\end{center}')
+    print(r'\end{table}')
+    print('-'*80)
+
 def main():
-    samples()
+    # samples()
+    render_table()
     
 if __name__ == '__main__':
     main()
