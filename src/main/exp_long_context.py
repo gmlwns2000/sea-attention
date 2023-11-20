@@ -41,7 +41,7 @@ def samples():
             'LOAD_AFTER_RESIZE': '1',
             '__CONTEXT': '4096',
             '__STRIDE': '4096',
-            'CUDA_VISIBLE_DEVICES': '0',
+            # 'CUDA_VISIBLE_DEVICES': '0',
         })
         cmd = \
             f'python -m src.trainer.perlin_trainer '\
@@ -59,6 +59,10 @@ def samples():
             text = f.read()
             text = text.strip().replace('\n', '')
             ppl = float(text)
+        os.environ.update({
+            'DYNAMIC_K': str(int(dks)),
+            'QUERY_SKIPS': str(int(qskip)),
+        })
         latency, mem = exam_config(BenchConfig(
             method='perlin',
             seq_len=4096,
@@ -81,7 +85,7 @@ def samples():
     
     os.makedirs('./plots/exp_long_context', exist_ok=True)
     with open('./plots/exp_long_context/data.json', 'w') as f:
-        json.dump(data, f)
+        json.dump(data, f, indent=2)
 
 def main():
     samples()
