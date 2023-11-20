@@ -581,8 +581,9 @@ if __name__ == '__main__':
         
         eval_job = os.environ.get('EVAL_JOB', 'PPL').upper()
         if eval_job == 'PPL':
-            trainer.evaluate()
-        elif eval_job == 'EXPPL':
-            trainer.evaluate()
+            ppl = trainer.evaluate()
+            os.makedirs('./cache/perlin_trainer', exist_ok=True)
+            with open('./cache/perlin_trainer/last_ppl.txt', 'w') as f:
+                f.write(f'{ppl}\n')
         else:
             raise Exception()
