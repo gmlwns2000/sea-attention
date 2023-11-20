@@ -582,7 +582,7 @@ class PerlinAttention(nn.Module):
             with timer("predictor"):
                 if self.pconfig.attention_predictor_method == 'mlp':
                     # I came up this dark magic from my head during rebuttal...
-                    query_skips = 1
+                    query_skips = int(os.environ.get('QUERY_SKIPS', '1'))
                     with timer("predictor.enc"):
                         raise_if_nan(performer_value)
                         # ENC_PER_LAYER = False

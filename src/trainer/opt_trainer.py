@@ -618,6 +618,11 @@ class Trainer:
     
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
+        
+        load_prefix = os.environ.get('__LOAD_PREFIX', '')
+        if load_prefix != '':
+            path = path[:-4] + load_prefix + path[-4:]
+        
         if not self.deepspeed or not self.deepspeed_inited:
             if os.path.exists(path):
                 print(f'load from {path}')
