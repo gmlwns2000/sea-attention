@@ -9,7 +9,7 @@ def exam_appendix():
     TRACE = False
     
     nbf = 8
-    k = 128
+    k = 105
     w = 96
     seq_lens = [4096,]
     t_warmup = 1
@@ -37,7 +37,7 @@ def exam_appendix():
             'latency': latency * 1000, 
             'mem': mem / (1024 ** 2),
         }
-        # print(name, entry)
+        print(name, entry)
         data[name] = entry
     
         latency, mem = exam_config(BenchConfig(

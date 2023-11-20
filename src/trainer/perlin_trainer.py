@@ -564,6 +564,12 @@ if __name__ == '__main__':
         
         print('context length is adjusted')
     
+    if args.load_checkpoint is not None and os.environ.get('LOAD_AFTER_RESIZE', '0') == '1':
+        if args.load_checkpoint in ['auto', 'defualt', '']: 
+            trainer.load()
+        else:
+            trainer.load(args.load_checkpoint)
+    
     if not args.eval:
         trainer.main()
     else:

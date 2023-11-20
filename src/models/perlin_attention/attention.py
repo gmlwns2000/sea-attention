@@ -340,6 +340,11 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
         last_state: PerlinAttentionState = None,
     ):
+        dynamic_k = int(os.environ.get('DYNAMIC_K', '0'))
+        if dynamic_k > 0:
+            warnings.warn(f'dynamic k {dynamic_k}')
+            self.pconfig.k = dynamic_k
+        
         if len(self._warning_messages) > 0:
             print(self._warning_messages)
             self._warning_messages = ''
