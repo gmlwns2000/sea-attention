@@ -1,6 +1,7 @@
 import copy
 import itertools
 import os, sys, subprocess, json
+import time
 from .benchmark_opt_ablation import exam_config, BenchConfig
 
 """
@@ -28,6 +29,16 @@ pw = 96
 
 dynamic_ks = [96, 104, 112, 120, 128]
 query_skips = [1, 2, 4, 8, 16]
+
+def long_sleep(sec):
+    last_tick = time.time()
+    elapsed = 0
+    while elapsed < sec:
+        time.sleep(0.1)
+        elapsed += time.time() - last_tick
+        last_tick = time.time()
+        print(f'sleeping ({elapsed:.1f} sec)\r', end='', flush=True)
+    print()
 
 def samples():
     options = itertools.product(query_skips, dynamic_ks)
@@ -63,6 +74,7 @@ def samples():
             'DYNAMIC_K': str(int(dks)),
             'QUERY_SKIPS': str(int(qskip)),
         })
+        long_sleep(60)
         latency, mem = exam_config(BenchConfig(
             method='perlin',
             seq_len=4096,
@@ -71,6 +83,7 @@ def samples():
             trace=False,
             causal=True
         ))
+        # long_sleep(120)
         latency = latency * 1000
         mem = mem / (1024 ** 2)
         sample = {
