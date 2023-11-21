@@ -2,7 +2,6 @@ import copy
 import itertools
 import os, sys, subprocess, json
 import time
-from .benchmark_opt_ablation import exam_config, BenchConfig
 
 """
 __LOAD_PREFIX=dev5
@@ -42,6 +41,8 @@ def long_sleep(sec):
     print()
 
 def samples():
+    from .benchmark_opt_ablation import exam_config, BenchConfig
+    
     options = itertools.product(query_skips, dynamic_ks)
     data = {}
     for qskip, dks in options:
@@ -135,7 +136,8 @@ def render_table():
     print(r'\label{table.exp_long_context}')
     print(
         r'\caption{The trade off on long context experiment on Wikitext2 using post training compression techniques: '
-        r'Query skipping and dynamic k control. Each entry of table shows \textcode{PPL((ms)/(MB))}.}'
+        r'Query skipping and dynamic k control. Each entry of table shows \textcode{PPL(ms/MB)}. '
+        r'Each values are colored with green and red. Better values are more green, and worse values are more red. }'
     )
     print(r'\begin{center}')
     print(r'\resizebox{1.0\linewidth}{!}{')
@@ -147,7 +149,7 @@ def render_table():
         line = f'{qskip}'
         for ds in dynamic_ks:
             sample = data[f'{ds},{qskip}']
-            line += f' & {wrap_color(sample["ppl"], 21.0, 24.0)} ({{\\small {wrap_color(sample["latency"], 14, 20)} / {wrap_color(sample["mem"], 440, 480)}}})'
+            line += f' & {wrap_color(sample["ppl"], 21.5, 24.0)} ({{\\small {wrap_color(sample["latency"], 14, 21)} / {wrap_color(sample["mem"], 450, 480)}}})'
         line += '\\\\'
         print(line)
         if iq < (len(query_skips) - 1):
@@ -157,6 +159,20 @@ def render_table():
     print(r'}')
     print(r'\end{center}')
     print(r'\end{table}')
+    print('-'*80)
+    
+    print()
+    print()
+    
+    print('-'*80)
+    print('|' + '|'.join(['   '] + [str(x) for x in dynamic_ks]) + '|')
+    print('---'.join(['|',] * (len(dynamic_ks) + 2)))
+    for qskip in query_skips:
+        entries = [f'$\\textbf{{{qskip}}}$']
+        for ds in dynamic_ks:
+            sample = data[f'{ds},{qskip}']
+            entries.append(f'${wrap_color(sample["ppl"], 21.5, 24.0)}$(${wrap_color(sample["latency"], 14, 21)}$/${wrap_color(sample["mem"], 450, 480)}$)')
+        print('|' + '|'.join(entries) + '|')
     print('-'*80)
 
 def main():
