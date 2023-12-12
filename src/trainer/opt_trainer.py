@@ -660,7 +660,11 @@ class Trainer:
                     try:
                         state = get_fp32_state_dict_from_zero_checkpoint(path, tag='deepspeed')
                     except FileNotFoundError:
-                        state = torch.load(os.path.join(path, 'deepspeed', 'mp_rank_00_model_states.pt'), map_location='cpu')['module']
+                        mp_state_path = os.path.join(path, 'deepspeed', 'mp_rank_00_model_states.pt')
+                        if not os.path.exists(mp_state_path):
+                            print('not found', mp_state_path)
+                            return
+                        state = torch.load(mp_state_path, map_location='cpu')['module']
                 except RuntimeError as ex:
                     print(ex)
                 try:

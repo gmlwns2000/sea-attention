@@ -27,16 +27,18 @@ def __flat_csr_elmul_py(
                 idx_col = idx_cols[i]
                 out_values[n, crow_start+i] = values[i] * other[n, idx_head, ir, idx_col]
 
-@triton.autotune(configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
-    ],
-    key=['MAX_ROW_Z']
-)
+# DBG
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=[],
+#     # key=['MAX_ROW_Z']
+# )
 @triton.jit
 def __flat_csr_elmul_compute(
     CROW_INDICES,

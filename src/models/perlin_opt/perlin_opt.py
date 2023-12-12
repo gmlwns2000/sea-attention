@@ -15,6 +15,7 @@
 """ PyTorch OPT model."""
 import gc
 import os
+import random
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
@@ -72,6 +73,7 @@ OPT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # See all OPT models at https://huggingface.co/models?filter=opt
 ]
 
+timer = lambda name: get_bench().region(name)
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
 def _make_causal_mask(
@@ -1221,14 +1223,24 @@ class OPTDecoder(OPTPreTrainedModel):
                 #         print('leak obj', strify(t), t.element_size()*t.numel())
                 #         print('refs', [type(i) for i in r])
             else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_attention_mask,
-                    layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                    past_key_value=past_key_value,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                )
+                with timer('opt.layer'):
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # start_mem = torch.cuda.max_memory_allocated()
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_attention_mask,
+                        layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                        past_key_value=past_key_value,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                    )
+                    # end_mem = torch.cuda.max_memory_allocated()
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # print((end_mem - start_mem) / 1024 / 1024)
 
             hidden_states = layer_outputs[0]
 
@@ -1510,6 +1522,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+            
         outputs = self.model.decoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1521,6 +1534,11 @@ class OPTForCausalLM(OPTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        
+        if random.random() < 1/10 and not get_bench().disabled:
+            print(get_bench().format_tracetree())
+        else:
+            print('forward', input_ids.shape)
 
         logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 

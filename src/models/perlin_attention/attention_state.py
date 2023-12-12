@@ -1,5 +1,7 @@
 import copy
 import math
+import random
+import time
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -36,6 +38,7 @@ from .modules import (
     interpolate
 )
 from math import ceil, floor
+timer = lambda name: get_bench().region(name)
 
 class StatefulCausalPerformer:
     def __init__(self, parent: "PerlinAttentionState", performer: FastAttention):
@@ -49,25 +52,50 @@ class StatefulCausalPerformer:
         self.qs = []
     
     def __call__(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
-        # naive
-        self.seq_index += q.shape[-2]
-        self.qs.append(q)
-        qs = torch.cat(self.qs, dim=-2)
+        # # naive
+        # self.seq_index += q.shape[-2]
+        # self.qs.append(q)
+        # qs = torch.cat(self.qs, dim=-2)
         
-        #TODO: fix this!!
-        # qs = F.pad(qs, pad=(0,0,0,256-qs.shape[-2]), mode='constant', value=0)
-        # k = F.pad(k, pad=(0,0,0,256-k.shape[-2]), mode='constant', value=0)
-        # v = F.pad(v, pad=(0,0,0,256-v.shape[-2]), mode='constant', value=0)
+        # #TODO: fix this!!
+        # # qs = F.pad(qs, pad=(0,0,0,256-qs.shape[-2]), mode='constant', value=0)
+        # # k = F.pad(k, pad=(0,0,0,256-k.shape[-2]), mode='constant', value=0)
+        # # v = F.pad(v, pad=(0,0,0,256-v.shape[-2]), mode='constant', value=0)
         
-        original_causal_fn = self.performer.causal_linear_fn
-        self.performer.causal_linear_fn = self._causal_linear_attention_noncuda_stateful
-        context = self.performer(qs,k,v)
-        self.performer.causal_linear_fn = original_causal_fn
+        # # original_causal_fn = self.performer.causal_linear_fn
+        # # self.performer.causal_linear_fn = self._causal_linear_attention_noncuda_stateful
+        # print('performer', q.shape, qs.shape, k.shape, v.shape)
+        # context = self.performer(qs,k,v)
+        # # self.performer.causal_linear_fn = original_causal_fn
+        # del qs
         
-        return context[...,self.seq_index-q.shape[-2]:self.seq_index,:]
+        # out = context[...,-q.shape[-2]:,:].clone()
+        # del context
+        
+        # return out
     
-        # context = self.performer(q, k, v)
-        # return context
+        # # context = self.performer(q, k, v)
+        # # return context
+        
+        last_k_cumsum = 0
+        last_context_cumsum = 0
+        outs = []
+        
+        chunk_size = min(q.shape[-2], 16)
+
+        for q, k, v in zip(*map(lambda t: t.chunk(chunk_size, dim = -2), (q, k[...,-q.shape[-2]:, :], v[...,-q.shape[-2]:, :]))):
+            k_cumsum = self.last_k_cumsum + k.cumsum(dim=-2, dtype=torch.float64)
+
+            D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + 1e-12)
+            context = torch.einsum('...nd,...ne->...nde', k, v)
+            context_cumsum = self.last_context_cumsum + context.cumsum(dim=-3, dtype=torch.float64)
+            out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum.type_as(q), q, D_inv)
+
+            self.last_k_cumsum = k_cumsum[:, :, -1:]
+            self.last_context_cumsum = context_cumsum[:, :, -1:]
+            outs.append(out)
+
+        return torch.cat(outs, dim = -2)
 
     def _causal_linear_attention_noncuda_stateful(
         self, q, k, v, chunk_size = None, eps = 1e-6
@@ -119,10 +147,13 @@ class StatefulCausalCNN:
         self.window_align = 1
         self.xs = []
         self.xs_len = 0
-        
+    
     def __call__(self, cnn: torch.nn.Module, x: torch.Tensor, x_len: int):
-        assert x.shape[-2] == x_len, f"{x.shape}[-2] == {x_len}"
+        # assert x.shape[-2] == x_len, f"{x.shape}[-2] == {x_len}"
         # x = x[...,-x_len:,:]
+        
+        # torch.cuda.synchronize()
+        # t = time.time()
         
         self.xs.append(x)
         self.xs_len += x.shape[-2]
@@ -138,13 +169,21 @@ class StatefulCausalCNN:
             ts_len += self.xs[ixs].shape[-2]
             ixs -= 1
         ts.reverse()
+        self.xs = ts
         xs = torch.cat(ts, dim=-2)
         x_window = xs[...,-min(xs.shape[-2], x_window_len):,:]
         
+        # if random.random() < 1/100:
+        #     print(get_bench().format_tracetree())
         y = cnn(x_window)
         # assert y.shape == x_window.shape, f"{y.shape} == {x_window.shape}"
         # print('cnn dbg', len(self.xs), x.shape, y.shape, x_window.shape, x_start, self.xs_len)
-        output = y[...,-x.shape[-2]:,:]
+        # print(torch.cuda.max_memory_allocated() / 1024 / 1024)
+        # torch.cuda.synchronize()
+        # print('cnn', x.shape, x_len, x_window.shape, (time.time() - t) * 1000)
+        
+        output = y[...,-x_len:,:].clone()
+        del xs, x_window, ts, y
         return output
     
     def strify(self):
@@ -163,6 +202,39 @@ class StatefulCausalCNN:
         new.xs = list([it for it in self.xs]) # shallow copy
         return new
 
+class StatefulCumAvg:
+    def __init__(self, parent: "PerlinAttentionState"):
+        self.parent = parent
+        self.cumsum = 0
+        self.prev_len = 0
+    
+    def __call__(self, v: torch.Tensor, q_len: int):
+        N, H, T_SRC, D = v.shape
+        # if not isinstance(self.cumsum, torch.Tensor):
+        #     self.cumsum = torch.zeros((1, 1, 1, D), device=v.device, dtype=v.dtype)
+        
+        cs = v[...,-q_len:,:].cumsum(dim=-2) + self.cumsum
+        self.cumsum = cs[...,-1:,:].clone()
+        
+        cs = cs / torch.arange(self.prev_len+1, self.prev_len+1+cs.shape[-2], device=v.device).view(1, 1, -1, 1)
+        self.prev_len += q_len
+        
+        # print(self.prev_len)
+        
+        return cs
+    
+    def strify(self):
+        return strify({
+            'cumsum': self.cumsum,
+            'prev_len': self.prev_len
+        })
+    
+    def clone(self):
+        new = StatefulCumAvg(self.parent)
+        new.cumsum = self.cumsum.clone()
+        new.prev_len = self.prev_len
+        return new
+
 class PerlinAttentionState:
     def __init__(self, parent: "PerlinAttention"):
         if parent is not None:
@@ -173,9 +245,11 @@ class PerlinAttentionState:
         
         self.states = {}
     
-    def get_state(self, name: str, initializer=None):
+    def get_cloned_state(self, name: str, initializer=None):
         if name in self.states:
-            return self.states[name]
+            new_state = self.states[name].clone()
+            self.states[name] = new_state
+            return new_state
         else:
             state = initializer()
             self.states[name] = state
@@ -192,7 +266,8 @@ class PerlinAttentionState:
         if state is None:
             return None, func(x)
         else:
-            state = state.clone()
+            with timer(name+'.clone'):
+                state = state.clone()
             return state, state.forward_causal_cnn_op(name, func, x, x_len)
     
     def forward_causal_cnn_op(
@@ -202,7 +277,7 @@ class PerlinAttentionState:
         x: torch.Tensor,
         x_len: int,
     ):
-        state = self.get_state(name, lambda: StatefulCausalCNN(self))
+        state = self.get_cloned_state(name, lambda: StatefulCausalCNN(self))
         return state(func, x, x_len)
     
     @staticmethod
@@ -215,7 +290,8 @@ class PerlinAttentionState:
         v: torch.Tensor,
     ):
         if state is not None:
-            state = state.clone()
+            with timer(name+'.clone'):
+                state = state.clone()
             return state, state.forward_performer(
                 name=name,
                 performer=performer,
@@ -232,7 +308,7 @@ class PerlinAttentionState:
         k: torch.Tensor,
         v: torch.Tensor,
     ):
-        state = self.get_state(
+        state = self.get_cloned_state(
             name, 
             lambda: StatefulCausalPerformer(self, performer)
         )
@@ -243,6 +319,34 @@ class PerlinAttentionState:
             v=v,
         )
     
+    @staticmethod
+    def stateful_cumavg(
+        state: "PerlinAttentionState",
+        name: str,
+        v: torch.Tensor,
+        q_len: int,
+    ):
+        if state is not None:
+            with timer(name+'.clone'):
+                state = state.clone()
+            return state, state.forward_cumsum(
+                name=name,
+                v=v, q_len=q_len
+            )
+        else:
+            raise Exception()
+    
+    def forward_cumsum(
+        self,
+        name: str,
+        v: torch.Tensor,
+        q_len: int,
+    ):
+        N, H, T_SRC, D = v.shape
+        state = self.get_cloned_state(name, lambda: StatefulCumAvg(self))
+        
+        return state(v=v, q_len=q_len)
+    
     def strify(self):
         return f"State({strify(self.states)})"
     
@@ -252,5 +356,5 @@ class PerlinAttentionState:
         new.head_dim = self.head_dim
         new.embd_dim = self.embd_dim
         new.max_seq_length = self.max_seq_length
-        new.states = {k: v.clone() for k, v in self.states.items()}
+        new.states = {k: v for k, v in self.states.items()}
         return new
