@@ -552,7 +552,7 @@ class Trainer:
                 with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
                     batch['teacher'] = self.base_model
                     output_student = self.model(**batch)
-                    student_loss = output_student.loss
+                    student_loss = output_student.loss.item()
             else:
                 with torch.no_grad():
                     # print('aa')
@@ -560,10 +560,15 @@ class Trainer:
                     # print('bb')
                     student_loss = loss_details['student_model_loss']
                     # print(student_loss)
-            neg_log_likelihood = student_loss * trg_len.item()
+            print(student_loss, trg_len)
+            neg_log_likelihood = student_loss * trg_len.float().mean().item()
+            
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
             
             # nlls.append(neg_log_likelihood)
-            nll_sum += neg_log_likelihood.item()
+            nll_sum += neg_log_likelihood
             nll_count += batch['input_ids'].shape[-1]
 
             # for debugging

@@ -422,6 +422,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 wandb_steps=wandb_steps,
                 kd_checkpointing=kd_checkpointing,
                 on_model_init=self.on_model_init,
+                batch_size=int(os.environ.get('BATCH_SIZE', '1')),
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,

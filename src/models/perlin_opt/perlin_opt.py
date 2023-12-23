@@ -241,6 +241,14 @@ class OPTAttention(nn.Module):
         self.checkout_perlin_output = False
         self.last_perlin_output = None
         self.swap_out_device = None
+        
+        ### tree attention
+        from ..tree_attention.attention import TreeAttention
+        self.tree_attention = TreeAttention(
+            causal=True,
+            k=128,
+            w=64,
+        )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -264,7 +272,7 @@ class OPTAttention(nn.Module):
         # if self.layer_id == 0:
         #     print(f'attention(q={q.shape}, kv={v.shape}, m={attention_mask.shape})')
         
-        if self.attention_method == 'none':
+        if self.attention_method == "none":
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
             if attn_weights.size() != (N * H, T_DST, T_SRC):
@@ -290,15 +298,6 @@ class OPTAttention(nn.Module):
             else:
                 attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
-            # if layer_head_mask is not None:
-            #     if layer_head_mask.size() != (self.num_heads,):
-            #         raise ValueError(
-            #             f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-            #             f" {layer_head_mask.size()}"
-            #         )
-            #     attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            #     attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
             if True:
                 # this operation is a bit awkward, but it's required to
                 # make sure that attn_weights keeps its gradient.
@@ -312,12 +311,6 @@ class OPTAttention(nn.Module):
             attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
             attn_output = torch.bmm(attn_probs, v)
-
-            # if attn_output.size() != (N * self.num_heads, T_DST, self.head_dim):
-            #     raise ValueError(
-            #         f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-            #         f" {attn_output.size()}"
-            #     )
 
             attn_output = attn_output.view(N, H, T_DST, HID)
             attn_output = attn_output.transpose(1, 2)
@@ -543,6 +536,20 @@ class OPTAttention(nn.Module):
             sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
             
             return sinkhorn_context_layer, attention_probs
+        elif self.attention_method == "tree":
+            q = q.view(N, H, T_DST, HID)
+            k = k.view(N, H, T_SRC, HID)
+            v = v.view(N, H, T_SRC, HID)
+            
+            context = self.tree_attention(q, k, v, attention_mask)
+            context = context.permute(0, 2, 1, 3).contiguous().view(N, T_DST, H*HID)
+            
+            # if not self.benchmarking:
+            #     attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=q.device, dtype=q.dtype)
+            # else:
+            attention_probs = None
+            
+            return context, attention_probs
         else:
             raise Exception()
 
@@ -1535,10 +1542,10 @@ class OPTForCausalLM(OPTPreTrainedModel):
             return_dict=return_dict,
         )
         
-        if random.random() < 1/10 and not get_bench().disabled:
-            print(get_bench().format_tracetree())
-        else:
-            print('forward', input_ids.shape)
+        # if random.random() < 1/10 and not get_bench().disabled:
+        #     print(get_bench().format_tracetree())
+        # else:
+        #     print('forward', input_ids.shape)
 
         logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 
