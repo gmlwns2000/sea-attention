@@ -247,7 +247,10 @@ class OPTAttention(nn.Module):
         self.tree_attention = TreeAttention(
             causal=True,
             k=128,
-            w=64,
+            start_w=1024,
+            w=128,
+            scale_up=4.0,
+            oversample=1.0,
         )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
@@ -1546,6 +1549,10 @@ class OPTForCausalLM(OPTPreTrainedModel):
         #     print(get_bench().format_tracetree())
         # else:
         #     print('forward', input_ids.shape)
+        
+        if not get_bench().disabled:
+            print(get_bench().format_tracetree(), flush=True)
+            input()
 
         logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 

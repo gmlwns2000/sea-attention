@@ -1,3 +1,4 @@
+import math
 import cv2
 from matplotlib import pyplot as plt
 import torch
@@ -5,9 +6,15 @@ import torch.nn.functional as F
 from torch import nn, optim, Tensor
 from performer_pytorch import FastAttention
 import numpy as np
+from ...utils import get_bench
 
-def imshow_pixels(ps, psmask, need_expand):
-    return
+# get_bench().synchronize = True
+# get_bench().disabled = False
+
+timer = lambda x: get_bench().region(x)
+
+def imshow_pixels(ps, psmask, N, T_DST, T_SRC):
+    pass
 
     # ps = ps * psmask.long()
     # ret = torch.empty((N, T_DST, T_SRC), device=ps.device).fill_(0)
@@ -24,7 +31,6 @@ def imshow_pixels(ps, psmask, need_expand):
     # plt.savefig("hello.png", dpi=320)
     # input(">>>")
 
-@torch.compile
 def masked_bmm_masked_indices(a: Tensor, b: Tensor, xs: Tensor, xs_mask: Tensor, value: float):
     """
     a: [N, A, B]
@@ -38,6 +44,9 @@ def masked_bmm_masked_indices(a: Tensor, b: Tensor, xs: Tensor, xs_mask: Tensor,
     ys: [N, A, Z] \in { (R := a[i, :] \dot b[:, j]) if xs_mask == 1 else value }
     """
     
+    device = a.device
+    dtype = a.dtype
+    
     N, A, B = a.shape
     _N, C, _B = b.shape
     assert B == _B
@@ -46,7 +55,7 @@ def masked_bmm_masked_indices(a: Tensor, b: Tensor, xs: Tensor, xs_mask: Tensor,
     assert N == _N
     assert A == _A
     
-    xs = torch.clamp(xs, 0, C - 1)
+    xs = torch.clamp_max(xs, C - 1)
     
     # # [N, A, 1, B]
     # xs_a = a.view(N, A, 1, B)
@@ -59,24 +68,46 @@ def masked_bmm_masked_indices(a: Tensor, b: Tensor, xs: Tensor, xs_mask: Tensor,
     # ys = torch.where(xs_mask > 0.5, ys, value)
     # return ys
     
-    SPARQ = 32
-    _, a_idx = torch.topk(a.abs(), k=SPARQ, dim=-1)
-    a_mask = torch.zeros_like(a)
-    a_mask.scatter_(dim=-1, index=a_idx, value=1)
-    a = a_mask * a
-    
-    ts = torch.bmm(a, b.transpose(-1, -2))
-    ys = ts.gather(dim=-1, index=xs, sparse_grad=True)
+    # sparse implementation
+    col_idx = xs.view(N, A * Z)
+    crow_idx = (torch.arange(0, A+1, device=device) * Z)[None, :].expand(N, A+1)
+    values = torch.zeros_like(col_idx, dtype=dtype)
+    mask = torch.sparse_csr_tensor(
+        crow_indices=crow_idx,
+        col_indices=col_idx,
+        values=values.to(torch.float32),
+        size=(N, A, C)
+    )
+    with timer("addmm"):
+        ys = torch.sparse.sampled_addmm(
+            mask, a.to(torch.float32), b.transpose(-1, -2).to(torch.float32)
+        )
+    ys_values = ys.values()
+    assert ys_values.shape == values.shape
+    ys = ys_values.view(N, A, Z).to(dtype)
     ys = torch.where(xs_mask > 0.5, ys, value)
     return ys
+    
+    # # dense implementation
+    # with timer("mbmm_topk"):
+    #     SPARQ = 32
+    #     _, a_idx = torch.topk(a.abs(), k=SPARQ, dim=-1)
+    #     a_mask = torch.zeros_like(a)
+    #     a_mask.scatter_(dim=-1, index=a_idx, value=1)
+    #     a = a_mask * a
+    
+    # with timer("mbmm_bmm"):
+    #     ts = torch.bmm(a, b.transpose(-1, -2))
+    #     ys = ts.gather(dim=-1, index=xs, sparse_grad=True)
+    #     ys = torch.where(xs_mask > 0.5, ys, value)
+    # return ys
 
-@torch.compile
-def forward_mask(self_w: int, self_k: int, q: Tensor, k: Tensor):
+def forward_mask(self_w: int, self_k: int, q: Tensor, k: Tensor, scale_up: float, oversample: float):
     device = q.device
     dtype = q.dtype
     N, T_SRC, HID = k.shape
     N, T_DST, HID = q.shape
-    
+
     start_t_src = T_SRC - T_DST + 1
     end_t_src = start_t_src + T_DST
     tsrcs = torch.arange(start_t_src, end_t_src, device=device)[None, :, None].expand(N, T_DST, 1)
@@ -85,104 +116,135 @@ def forward_mask(self_w: int, self_k: int, q: Tensor, k: Tensor):
     ws = torch.empty((T_DST,), device=device, dtype=torch.float)[None, :, None].fill_(self_w).expand(N, T_DST, 1)
     # w cannot be larger than t_src
     
-    assert self_w <= self_k
-    OVERSAMPLE = 1.0
-    SCALE_UP = 2
-    max_pixels = int(round(self_k * OVERSAMPLE))
+    OVERSAMPLE = oversample
+    SCALE_UP = scale_up
+    max_pixels = max(int(round(self_k * OVERSAMPLE)), self_w)
     pixels = torch.arange(0, max_pixels, device=device)[None, None, :].expand(N, T_DST, max_pixels).contiguous()
     pixels_mask = torch.empty_like(pixels).fill_(0).float()
     pixels_mask[:, :, :self_w] = 1.0
     # pixel_counts = torch.empty((T_DST,), device=device, dtype=torch.long).fill_(self.w)[None, :, None].expand(N, T_DST, 1).contiguous()
     
-    need_expand = ws < tsrcs
+    # need_expand = ws < tsrcs
     while True:
-        # imshow_pixels(pixels, pixels_mask, need_expand)
-        
-        # TODO: topk masked pixels
-        t_tsrcs = torch.masked_select(tsrcs, need_expand).view(N, -1, 1)
-        tws = torch.masked_select(ws, need_expand).view(N, -1, 1)
-        # print('a', t_tsrcs.shape, pixels.shape)
-        tpixels = torch.masked_select(pixels, need_expand)
-        tpixels = tpixels.view(N, -1, pixels.shape[-1])
-        tpixels_mask = torch.masked_select(pixels_mask, need_expand).view(N, -1, pixels.shape[-1])
-        tq = torch.masked_select(q, need_expand).view(N, -1, q.shape[-1])
-        
-        # print(need_expand.shape, tpixels.shape, t_tsrcs.shape, tws.shape)
-        txs = torch.round(tpixels * (t_tsrcs / tws)).long()
-        scores = masked_bmm_masked_indices(tq, k, txs, tpixels_mask, -32000.0)
-        # k = clamp(round(tws / t_tsrcs * self.k)) * (1 if tww == t_tsrcs else 1.5), 1, tws)
-        tks = torch.clamp(
-            torch.round((tws / t_tsrcs * self_k) * torch.where(tws == t_tsrcs, 1, OVERSAMPLE)), 
-            torch.tensor(1, device=device), 
-            torch.clamp_max(tws - 1, scores.shape[-1] - 1)
-        ).long()
-        # print(torch.round((tws / t_tsrcs * self.k) * torch.where(tws == t_tsrcs, 1, OVERSAMPLE))[0, :, 0], self.k, tks.max().item(), scores.shape)
-        values, indices = torch.topk(scores, k=tks.max().item(), dim=-1, sorted=True, largest=True)
-        new_pixels = pixels.gather(dim=-1, index=indices)
-        new_pixels_mask = (torch.arange(0, indices.shape[-1], device=device)[None, None, :] < tks) * 1.0
-        # print(new_pixels_mask[0, -1, :])
-        
-        new_pixels = F.pad(new_pixels, (0, pixels.shape[-1] - new_pixels.shape[-1]), value=0.0)
-        new_pixels_mask = F.pad(new_pixels_mask, (0, pixels.shape[-1] - new_pixels_mask.shape[-1]), value=0.0)
-        # print(pixels.shape, need_expand.shape, new_pixels_mask.shape)
-        pixels = torch.masked_scatter(pixels, need_expand, new_pixels)
-        # print(pixels_mask.shape, need_expand.shape, new_pixels_mask.shape)
-        pixels_mask = torch.masked_scatter(pixels_mask, need_expand, new_pixels_mask)
-        # print(pixels_mask[0, -1, :])
-        
-        # need_expand = ws < tsrcs
-        ws_new = torch.min(tsrcs, ws * SCALE_UP)
-        
-        # TODO: resize from ws_new to ws
-        N, A, Z = pixels.shape
-        scale = ws_new / ws
-        ps_start = pixels * scale
-        ps_end = (pixels + 1) * scale
-        ps_start = torch.round(ps_start).long()
-        ps_end = torch.round(ps_end).long()
-        ps = ps_start[:, :, :, None].expand(N, A, Z, 2)
-        ps_counts = (ps_end - ps_start)[:, :, :, None]
-        reps = torch.arange(0, 2, device=device)[None, None, None, :]
-        reps = reps * pixels_mask[:, :, :, None]
-        ps = ps + torch.clamp_max(reps, torch.clamp_min(ps_counts - 1, 0)).long()
-        ps = ps.view(N * A, Z * 2).contiguous()
-        ps, _ = torch.sort(ps, dim=-1, descending=False)
-        
-        _, indices = torch.unique_consecutive(ps, return_inverse=True)
-        indices -= indices.min(dim=1, keepdim=True)[0]
-        result = -torch.ones_like(ps)
-        ps = result.scatter_(1, indices, ps)
-        ps = ps.view(N, A, -1)
-        
-        pixels_mask = (ps >= 0) * 1.0
-        pixels = ps * pixels_mask.long()
-        max_z = int(pixels_mask.sum(-1).max().item())
-        pixels = pixels[..., :max_z].contiguous()
-        pixels_mask = pixels_mask[..., :max_z].contiguous()
-        # print(pixels[0, -1], pixels.shape)
-        # input()
-        
-        ws = ws_new
+        with timer("loop"):
+            is_last_loop = w * SCALE_UP >= T_SRC
+            
+            imshow_pixels(pixels, pixels_mask, N, T_DST, T_SRC)
+            
+            # TODO: topk masked pixels
+            t_tsrcs = tsrcs #torch.masked_select(tsrcs, need_expand).view(N, -1, 1)
+            tws = ws #torch.masked_select(ws, need_expand).view(N, -1, 1)
+            # print('a', t_tsrcs.shape, pixels.shape)
+            tpixels = pixels #torch.masked_select(pixels, need_expand)
+            # tpixels = tpixels.view(N, -1, pixels.shape[-1])
+            tpixels_mask = pixels_mask #torch.masked_select(pixels_mask, need_expand).view(N, -1, pixels.shape[-1])
+            tq = q #torch.masked_select(q, need_expand).view(N, -1, q.shape[-1])
+            
+            with timer("topk_mask"):
+                txs = torch.round(tpixels * (t_tsrcs / tws)).long()
+                with timer("masked_bmm"):
+                    scores = masked_bmm_masked_indices(tq, k, txs, tpixels_mask, -32000.0)
+                # k = clamp(round(tws / t_tsrcs * self.k)) * (1 if tww == t_tsrcs else 1.5), 1, tws)
+                tks = torch.clamp(
+                    # torch.round((tws / t_tsrcs * self_k) * torch.where(tws == t_tsrcs, 1, OVERSAMPLE)), 
+                    torch.round((tws / t_tsrcs * self_k) * (1 if is_last_loop else OVERSAMPLE)), 
+                    torch.tensor(1, device=device), 
+                    torch.clamp_max(tws - 1, scores.shape[-1] - 1)
+                ).long()
+                # tks_max = tks.max().item()
+                tks_max = int(math.ceil(min(w - 1, scores.shape[-1] -1, self_k * (1 if is_last_loop else OVERSAMPLE))))
+                values, indices = torch.topk(scores, k=tks_max, dim=-1, sorted=True, largest=True)
+                with timer("pixels_gather"):
+                    new_pixels = pixels.gather(dim=-1, index=indices)
+                new_pixels_mask = (torch.arange(0, indices.shape[-1], device=device)[None, None, :] < tks) * 1.0
+            
+            with timer("pad"):
+                new_pixels = F.pad(new_pixels, (0, pixels.shape[-1] - new_pixels.shape[-1]), value=0.0)
+                new_pixels_mask = F.pad(new_pixels_mask, (0, pixels.shape[-1] - new_pixels_mask.shape[-1]), value=0.0)
+                pixels = new_pixels #torch.masked_scatter(pixels, need_expand, new_pixels)
+                pixels_mask = new_pixels_mask #torch.masked_scatter(pixels_mask, need_expand, new_pixels_mask)
+            
+            with timer("update_ws"):
+                # need_expand = ws < tsrcs
+                ws_new = torch.min(tsrcs, ws * SCALE_UP)
+            
+            with timer("resize"):
+                MAX_SCALE_UP = int(math.ceil(SCALE_UP))
+                with timer("resize.expand"):
+                    # TODO: resize from ws_new to ws
+                    N, A, Z = pixels.shape
+                    scale = ws_new / ws
+                    ps_start = pixels * scale
+                    ps_end = (pixels + 1) * scale
+                    ps_start = torch.round(ps_start).long()
+                    ps_end = torch.round(ps_end).long()
+                    ps = ps_start[:, :, :, None].expand(N, A, Z, MAX_SCALE_UP)
+                    ps_counts = (ps_end - ps_start)[:, :, :, None]
+                    reps = torch.arange(0, MAX_SCALE_UP, device=device)[None, None, None, :]
+                    reps = reps * pixels_mask[:, :, :, None]
+                    ps = ps + torch.clamp_max(reps, torch.clamp_min(ps_counts - 1, 0)).long()
+                    ps = ps.view(N * A, Z * MAX_SCALE_UP).contiguous()
+                with timer("resize.sort"):
+                    ps, _ = torch.sort(ps, dim=-1, descending=False)
+                
+                with timer("resize.unique"):
+                    _, indices = torch.unique_consecutive(ps, return_inverse=True)
+                    indices -= indices.min(dim=1, keepdim=True)[0]
+                    result = -torch.ones_like(ps)
+                    ps = result.scatter_(1, indices, ps)
+                    ps = ps.view(N, A, -1)
+                
+                with timer("resize.cleanup"):
+                    pixels_mask = (ps >= 0) * 1.0
+                    pixels = ps * pixels_mask.long()
+                    max_z = int(pixels_mask.sum(-1).max().item())
+                    pixels = pixels[..., :max_z].contiguous()
+                    pixels_mask = pixels_mask[..., :max_z].contiguous()
+            
+            ws = ws_new
 
-        # manage break
-        if w == T_SRC:
-            break
-        w = min(T_SRC, w * SCALE_UP)
+            # manage break
+            w = min(T_SRC, w * SCALE_UP)
+            if w == T_SRC:
+                break
     
-    # imshow_pixels(pixels, pixels_mask, need_expand)
+    imshow_pixels(pixels, pixels_mask, N, T_DST, T_SRC)
+    # pixels = pixels * pixels_mask.long()
+    # ret = torch.empty((N, T_DST, T_SRC), device=device).fill_(-32000.0)
+    # ret.scatter_(dim=-1, index=pixels, value=0)
+    # return ret
     
-    pixels = pixels * pixels_mask.long()
-    ret = torch.empty((N, T_DST, T_SRC), device=device).fill_(-32000.0)
-    ret.scatter_(dim=-1, index=pixels, value=0)
-    return ret
+    N, A, Z = pixels.shape
+    _, C, _ = k.shape
+    col_idx = pixels.view(N, A * Z)
+    crow_idx = (torch.arange(0, A+1, device=device) * Z)[None, :].expand(N, A+1)
+    values = torch.zeros_like(col_idx, dtype=dtype)
+    mask = torch.sparse_csr_tensor(
+        crow_indices=crow_idx,
+        col_indices=col_idx,
+        values=values.to(torch.float32),
+        size=(N, A, C)
+    )
+    return mask
 
 class TreeAttention(nn.Module):
-    def __init__(self, causal: bool, k: int, w: int):
+    def __init__(
+        self, 
+        causal: bool, 
+        k: int, 
+        start_w: int, 
+        w: int, 
+        scale_up: float,
+        oversample: float,
+    ):
         super().__init__()
         
         self.causal = causal
         self.k = k
+        self.start_w = start_w
         self.w = w
+        self.scale_up = scale_up
+        self.oversample = oversample
         assert causal
         
         self.performer = FastAttention(
@@ -351,7 +413,7 @@ class TreeAttention(nn.Module):
         N, H, T_DST, HID = q.shape
         
         contexts = []
-        t_dense = max(0, self.k - T_SRC + T_DST)
+        t_dense = max(0, max(self.start_w, self.k) - T_SRC + T_DST)
         if t_dense > 0:
             q, q_dense = q[..., t_dense:, :], q[..., :t_dense, :]
             mask, mask_dense = mask[..., t_dense:, :], mask[..., :t_dense, :]
@@ -361,14 +423,62 @@ class TreeAttention(nn.Module):
             context = torch.matmul(probs, v)
             contexts.append(context)
         
+        # t_mask = max(0, self.w - T_SRC + T_SRC)
+        # if t_mask > t_dense:
+        #     c_mask = t_mask - t_dense
+        #     t_dense = t_mask
+        #     q, q_dense = q[..., c_mask:, :], q[..., :c_mask, :]
+        #     mask, mask_dense = mask[..., c_mask:, :], mask[..., :c_mask, :]
+        #     scores = torch.matmul(q_dense, k.transpose(-1, -2))
+        #     scores = scores + mask_dense
+        #     _, idx = torch.topk(scores, k=self.k, dim=-1)
+        #     new_scores = torch.full_like(scores, -32000)
+        #     new_scores.scatter_(dim=-1, index=idx, src=scores)
+        #     scores = new_scores
+        #     probs = torch.softmax(scores, -1)
+        #     context = torch.matmul(probs, v)
+        #     contexts.append(context)
+        
         t_sparse = T_DST - t_dense
         if t_sparse > 0:
-            mask_sparse = forward_mask(self.w, self.k, q.view(N*H, t_sparse, HID), k.view(N*H, T_SRC, HID))
-            mask_sparse = mask_sparse.view(N, H, t_sparse, T_SRC)
-            scores = torch.matmul(q, k.transpose(-1, -2))
-            scores = scores + mask_sparse
-            probs = torch.softmax(scores, -1)
-            context = torch.matmul(probs, v)
+            q = q.view(N*H, t_sparse, HID)
+            k = k.view(N*H, T_SRC, HID)
+            with timer("fmask"):
+                mask_sparse = forward_mask(
+                    self.w, 
+                    self.k, 
+                    q, 
+                    k,
+                    self.scale_up,
+                    self.oversample,
+                )
+            
+            with timer("attention"):
+                scores = torch.sparse.sampled_addmm(
+                    mask_sparse, q.to(torch.float32), k.transpose(-1, -2).to(torch.float32)
+                )
+                scores = torch.sparse_bsr_tensor(
+                    crow_indices=scores.crow_indices(),
+                    col_indices=scores.col_indices(),
+                    values=scores.values().unsqueeze(-1).unsqueeze(-1),
+                    size=scores.shape
+                )
+                import torch.sparse._triton_ops as triton_ops
+                probs = triton_ops.bsr_softmax(scores).to_dense().to(q.dtype)
+                # probs = torch.sparse_csr_tensor(
+                #     crow_indices=probs.crow_indices(),
+                #     col_indices=probs.col_indices(),
+                #     values=probs.values().squeeze(-1).squeeze(-1),
+                #     size=probs.shape
+                # )
+                context = torch.bmm(probs, v.view(N*H, T_SRC, HID))
+                context = context.view(N, H, t_sparse, HID)
+            
+            # mask_sparse = mask_sparse.view(N, H, t_sparse, T_SRC)
+            # scores = torch.matmul(q, k.transpose(-1, -2))
+            # scores = scores + mask_sparse
+            # probs = torch.softmax(scores, -1)
+            # context = torch.matmul(probs, v)
             contexts.append(context)
         
         contexts = torch.concat(contexts, dim=-2)

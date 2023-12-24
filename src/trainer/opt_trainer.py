@@ -563,9 +563,9 @@ class Trainer:
             print(student_loss, trg_len)
             neg_log_likelihood = student_loss * trg_len.float().mean().item()
             
-            torch.cuda.synchronize()
-            gc.collect()
-            torch.cuda.empty_cache()
+            # torch.cuda.synchronize()
+            # gc.collect()
+            # torch.cuda.empty_cache()
             
             # nlls.append(neg_log_likelihood)
             nll_sum += neg_log_likelihood
