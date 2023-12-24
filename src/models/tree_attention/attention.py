@@ -127,7 +127,8 @@ def forward_mask(self_w: int, self_k: int, q: Tensor, k: Tensor, scale_up: float
     # need_expand = ws < tsrcs
     while True:
         with timer("loop"):
-            is_last_loop = w * SCALE_UP >= T_SRC
+            # is_last_loop = w * SCALE_UP >= T_SRC
+            is_last_loop = w == T_SRC
             
             imshow_pixels(pixels, pixels_mask, N, T_DST, T_SRC)
             
@@ -187,26 +188,34 @@ def forward_mask(self_w: int, self_k: int, q: Tensor, k: Tensor, scale_up: float
                 with timer("resize.sort"):
                     ps, _ = torch.sort(ps, dim=-1, descending=False)
                 
+                # print(ps.shape, self_k, self_w)
+                
                 with timer("resize.unique"):
                     _, indices = torch.unique_consecutive(ps, return_inverse=True)
                     indices -= indices.min(dim=1, keepdim=True)[0]
-                    result = -torch.ones_like(ps)
+                    result = torch.full_like(ps, -1)
                     ps = result.scatter_(1, indices, ps)
                     ps = ps.view(N, A, -1)
                 
                 with timer("resize.cleanup"):
-                    pixels_mask = (ps >= 0) * 1.0
-                    pixels = ps * pixels_mask.long()
-                    max_z = int(pixels_mask.sum(-1).max().item())
+                    pixels_mask = torch.zeros_like(ps)
+                    pixels_mask = pixels_mask.masked_fill_((ps >= 0), 1.0)
+                    pixels = ps.masked_fill_((ps < 0), 0.0)
+                    # max_z = int(pixels_mask.sum(-1).max().item())
+                    if is_last_loop:
+                        max_z = self_k
+                    else:
+                        max_z = int(round(self_k * 2))
+                    # print(is_last_loop, max_z, int(pixels_mask.sum(-1).max().item()))
                     pixels = pixels[..., :max_z].contiguous()
                     pixels_mask = pixels_mask[..., :max_z].contiguous()
-            
+                
             ws = ws_new
 
             # manage break
-            w = min(T_SRC, w * SCALE_UP)
             if w == T_SRC:
                 break
+            w = min(T_SRC, w * SCALE_UP)
     
     imshow_pixels(pixels, pixels_mask, N, T_DST, T_SRC)
     # pixels = pixels * pixels_mask.long()

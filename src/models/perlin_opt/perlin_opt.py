@@ -249,7 +249,7 @@ class OPTAttention(nn.Module):
             k=128,
             start_w=1024,
             w=128,
-            scale_up=4.0,
+            scale_up=2.0,
             oversample=1.0,
         )
 
