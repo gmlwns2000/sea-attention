@@ -241,17 +241,6 @@ class OPTAttention(nn.Module):
         self.checkout_perlin_output = False
         self.last_perlin_output = None
         self.swap_out_device = None
-        
-        ### tree attention
-        from ..tree_attention.attention import TreeAttention
-        self.tree_attention = TreeAttention(
-            causal=True,
-            k=128,
-            start_w=1024,
-            w=128,
-            scale_up=2.0,
-            oversample=1.0,
-        )
 
     def _shape(self, tensor: torch.Tensor, seq_len: int, bsz: int):
         return tensor.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2).contiguous()
@@ -539,20 +528,6 @@ class OPTAttention(nn.Module):
             sinkhorn_context_layer = sinkhorn_context_layer.view(new_context_layer_shape)
             
             return sinkhorn_context_layer, attention_probs
-        elif self.attention_method == "tree":
-            q = q.view(N, H, T_DST, HID)
-            k = k.view(N, H, T_SRC, HID)
-            v = v.view(N, H, T_SRC, HID)
-            
-            context = self.tree_attention(q, k, v, attention_mask)
-            context = context.permute(0, 2, 1, 3).contiguous().view(N, T_DST, H*HID)
-            
-            # if not self.benchmarking:
-            #     attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=q.device, dtype=q.dtype)
-            # else:
-            attention_probs = None
-            
-            return context, attention_probs
         else:
             raise Exception()
 
