@@ -8,7 +8,7 @@ This repository inlcudes official implementations for [SEA](https://openreview.n
 
 > **[SEA: Sparse Linear Attention with Estimated Attention Mask](https://openreview.net/forum?id=JbcwfmYrob)**<br>
 > :school:[Heejun Lee](https://github.com/gmlwns2000), :school:[Jina Kim](), :school:[Jeffery Willette](https://jeffwillette.github.io/), :school::robot:[Sung Ju Hwang](http://www.sungjuhwang.com/) <br>
-> KAIST:school:, [DeepAuto.ai](http://deepauto.ai/):robot:<br>
+> KAIST :school:, [DeepAuto.ai](http://deepauto.ai/):robot:<br>
 > Internation Conference on Learning Representation (ICLR) 2024
 
 ## Abstract
