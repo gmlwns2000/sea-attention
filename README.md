@@ -15,6 +15,17 @@ This repository inlcudes official implementations for [SEA](https://openreview.n
 
 The transformer architecture has made breakthroughs in recent years on tasks which require modeling pairwise relationships between sequential elements, as is the case in natural language understanding. However, transformers struggle with long sequences due to the quadratic complexity of the attention operation, and previous research has aimed to lower the complexity by sparsifying or linearly approximating the attention matrix. Yet, these approaches cannot straightforwardly distill knowledge from a teacher’s attention matrix, and often require complete retraining from scratch. Furthermore, previous sparse and linear approaches may also lose interpretability if they do not produce full quadratic attention matrices. To address these challenges, we propose SEA: Sparse linear attention with an Estimated Attention mask. SEA estimates the attention matrix with linear complexity via kernel-based linear attention, then creates a sparse approximation to the full attention matrix with a top-k selection to perform a sparse attention operation. For language modeling tasks (Wikitext2), previous linear and sparse attention methods show roughly two-fold worse perplexity scores over the quadratic OPT-1.3B baseline, while SEA achieves an even better perplexity than OPT-1.3B, using roughly half as much memory as OPT-1.3B. Moreover, SEA maintains an interpretable attention matrix and can utilize knowledge distillation to lower the complexity of existing pretrained transformers. We believe that our work will have a large practical impact, as it opens the possibility of running large transformers on resource-limited devices with less memory.
 
+## Results
+
+![image](https://github.com/gmlwns2000/sea-attention/assets/4879345/1573f9be-51b7-4084-8b88-1a802b9b7e45)
+
+![image](https://github.com/gmlwns2000/sea-attention/assets/4879345/bcf11f2b-b88c-4e46-89c7-277017747446)
+
+|      | LLaMA 13B | SEA 13B |
+|------|-----------|---------|
+| MMLU | 4.682     | 5.446   |
+> SEA trained on OpenWebText with 2,000 optimizer steps. This MMLU result is reported by [Geon Park](https://scholar.google.co.kr/citations?user=aJu-QCsAAAAJ&hl=ko)! Thank you for your contribution.
+
 ## How-to reproduce
 
 ```sh 
