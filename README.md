@@ -34,7 +34,8 @@ The transformer architecture has made breakthroughs in recent years on tasks whi
 
 |      | LLaMA 13B | SEA 13B |
 |------|-----------|---------|
-| MMLU | 4.682     | 5.446   |
+| PPL. (Wikitext2) | 4.682     | 5.446   |
+| MMLU | 54.87 | 47.93 |
 > SEA trained on OpenWebText with 2,000 optimizer steps. This MMLU result is reported by [Geon Park](https://scholar.google.co.kr/citations?user=aJu-QCsAAAAJ&hl=ko)! Thank you for your contribution.
 
 ## How-to reproduce
