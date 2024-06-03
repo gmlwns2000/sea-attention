@@ -2,7 +2,7 @@
 
 ![](doc/figure1.png)
 
-This repository inlcudes official implementations for [SEA](https://openreview.net/forum?id=JbcwfmYrob).
+This repository inlcudes official implementations for [SEA](https://openreview.net/forum?id=JbcwfmYrob) [[Paper]](https://openreview.net/pdf?id=JbcwfmYrob).
 
 `perlin` is the codename of `SEA-attention`.
 
