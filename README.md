@@ -7,7 +7,7 @@ This repository inlcudes official implementations for [SEA](https://openreview.n
 `perlin` is the codename of `SEA-attention`.
 
 > **[SEA: Sparse Linear Attention with Estimated Attention Mask](https://openreview.net/forum?id=JbcwfmYrob)**<br>
-> :school:[Heejun Lee](https://github.com/gmlwns2000), :school:[Jina Kim](https://jina0218.github.io/), :school:[Jeffery Willette](https://jeffwillette.github.io/), :school::robot:[Sung Ju Hwang](http://www.sungjuhwang.com/) <br>
+> :school:[Heejun Lee](https://github.com/gmlwns2000), :school:[Jina Kim](https://www.linkedin.com/in/jina-kaist-cs-undergrad/), :school:[Jeffery Willette](https://jeffwillette.github.io/), :school::robot:[Sung Ju Hwang](http://www.sungjuhwang.com/) <br>
 > KAIST :school:, [DeepAuto.ai](http://deepauto.ai/):robot:<br>
 > Internation Conference on Learning Representation (ICLR) 2024
 
