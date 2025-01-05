@@ -28,5 +28,7 @@ wandb/
 
 src/utils/secrets.*
 plots/
-/debug
-fast-transformers/
+submission/
+submission*.zip
+
+hello.png

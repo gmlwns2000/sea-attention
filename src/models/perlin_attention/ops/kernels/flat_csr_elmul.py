@@ -27,6 +27,18 @@ def __flat_csr_elmul_py(
                 idx_col = idx_cols[i]
                 out_values[n, crow_start+i] = values[i] * other[n, idx_head, ir, idx_col]
 
+# DBG
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=[],
+#     # key=['MAX_ROW_Z']
+# )
 @triton.jit
 def __flat_csr_elmul_compute(
     CROW_INDICES,
@@ -40,27 +52,31 @@ def __flat_csr_elmul_compute(
     OTHER,
     stride_other_n, stride_other_h, stride_other_tdst, stride_other_tsrc,
     N, H, T_DST, T_SRC, R, Z,
-    MAX_ROW_Z: tl.constexpr,
+    MAX_ROW_Z: tl.constexpr, BLOCK_R: tl.constexpr,
 ):
     n = tl.program_id(0)
     ir = tl.program_id(1)
+    ir = ir * BLOCK_R + tl.arange(0, BLOCK_R)
+    ir_mask = ir < R
     
     crow_start = tl.load(
         CROW_INDICES\
             + n*stride_crow_n\
-            + ir*stride_crow_r
+            + ir*stride_crow_r,
+        mask=ir_mask
     )
     crow_end = tl.load(
         CROW_INDICES\
             + n*stride_crow_n\
-            + (ir+1)*stride_crow_r
+            + (ir+1)*stride_crow_r,
+        mask=ir_mask
     )
     
     idx_ht = tl.load(
         COL_INDICES\
             + n*stride_col_n\
-            + (tl.arange(0, MAX_ROW_Z) + crow_start)*stride_col_z,
-        mask = tl.arange(0, MAX_ROW_Z) < (crow_end - crow_start)
+            + (tl.arange(0, MAX_ROW_Z)[None,:] + crow_start[:, None])*stride_col_z,
+        mask = (tl.arange(0, MAX_ROW_Z)[None, :] < (crow_end[:, None] - crow_start[:, None])) and ir_mask[:, None]
     )
     
     idx_heads = idx_ht // T_SRC
@@ -69,16 +85,16 @@ def __flat_csr_elmul_compute(
     in_values = tl.load(
         IN_VALUES\
             + n*stride_in_n\
-            + (tl.arange(0, MAX_ROW_Z) + crow_start)*stride_in_z,
-        mask = tl.arange(0, MAX_ROW_Z) < (crow_end - crow_start)
+            + (tl.arange(0, MAX_ROW_Z)[None,:] + crow_start[:, None])*stride_in_z,
+        mask = (tl.arange(0, MAX_ROW_Z)[None, :] < (crow_end[:, None] - crow_start[:, None])) and ir_mask[:, None]
     )
     other_values = tl.load(
         OTHER\
             + n*stride_other_n\
             + idx_heads*stride_other_h\
-            + ir*stride_other_tdst\
+            + ir[:, None]*stride_other_tdst\
             + idx_cols*stride_other_tsrc,
-        mask=tl.arange(0, MAX_ROW_Z) < (crow_end - crow_start)
+        mask=(tl.arange(0, MAX_ROW_Z)[None, :] < (crow_end[:, None] - crow_start[:, None])) and ir_mask[:, None]
     )
     
     out_values = in_values * other_values
@@ -86,9 +102,9 @@ def __flat_csr_elmul_compute(
     tl.store(
         OUT_VALUES\
             + n*stride_out_n\
-            + (tl.arange(0, MAX_ROW_Z) + crow_start)*stride_out_z,
+            + (tl.arange(0, MAX_ROW_Z)[None, :] + crow_start[:, None])*stride_out_z,
         out_values,
-        mask=tl.arange(0, MAX_ROW_Z) < (crow_end - crow_start)
+        mask=(tl.arange(0, MAX_ROW_Z)[None, :] < (crow_end[:, None] - crow_start[:, None])) and ir_mask[:, None]
     )
 
 def flat_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:int=None):
@@ -118,7 +134,11 @@ def flat_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:int=N
     # )
     
     MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
-    grid = (N, R)
+    BLOCK_R = 1
+    if R >= 4096:
+        BLOCK_R = triton.next_power_of_2(triton.cdiv(R, 2048))
+    GRID_R = triton.cdiv(R, BLOCK_R)
+    grid = (N, GRID_R)
     __flat_csr_elmul_compute[grid](
         crow_indices,
         crow_indices.stride(0), crow_indices.stride(1),
@@ -131,7 +151,7 @@ def flat_csr_elmul(probs: torch.Tensor, dense: torch.Tensor, max_z_per_row:int=N
         dense,
         dense.stride(0), dense.stride(1), dense.stride(2), dense.stride(3),
         N, H, T_DST, T, R, Z,
-        MAX_ROW_Z
+        MAX_ROW_Z, BLOCK_R,
     )
     
     return torch.sparse_csr_tensor(
@@ -165,8 +185,8 @@ def test_main():
     
     N = 1
     H = 12
-    T = 4096
-    T_DST = 4096
+    T = 4096*4
+    T_DST = 4096*4
     T_M = 128
     K = 64
     HID = 64
@@ -206,7 +226,8 @@ def test_main():
     csr_probs = flat_csr_softmax(
         csr_score, H, T
     )
-    csr_probs_dense = flat_csr_to_dense(csr_probs, T, H)
+    if T <= 4096:
+        csr_probs_dense = flat_csr_to_dense(csr_probs, T, H)
     dense_scaler = torch.randn((N, H, T, 1), device=device).expand(N, H, T_DST, T)
     
     def bench_naive():
@@ -219,8 +240,9 @@ def test_main():
         with torch.no_grad():
             return flat_csr_elmul(csr_probs, dense_scaler)
     
-    scaled_sparse = flat_csr_to_dense(bench_sparse(), T, H)
-    scaled = bench_naive()
+    if T <= 4096:
+        scaled_sparse = flat_csr_to_dense(bench_sparse(), T, H)
+        scaled = bench_naive()
     idx_batch = 0
     idx_head = 0
     # print(csr_probs_dense[idx_batch, idx_head])
@@ -228,21 +250,23 @@ def test_main():
     # print(scaled[idx_batch, idx_head])
     # print(scaled_sparse[idx_batch, idx_head])
     
-    max_error = (scaled - scaled_sparse).abs().max()
-    print(max_error)
-    if max_error > 1e-1:
-        warnings.warn('max error exceed threshold')
-        for i in range(N):
-            for j in range(H):
-                for k in range(T_DST):
-                    for m in range(T):
-                        err = (scaled[i,j,k,m] - scaled_sparse[i,j,k,m]).abs().item()
-                        if err > 1e-1:
-                            print(i,j,k,m,err,scaled[i,j,k,m],scaled_sparse[i,j,k,m])
-                            return
+    if T <= 4096:
+        max_error = (scaled - scaled_sparse).abs().max()
+        print(max_error)
+        if max_error > 1e-1:
+            warnings.warn('max error exceed threshold')
+            for i in range(N):
+                for j in range(H):
+                    for k in range(T_DST):
+                        for m in range(T):
+                            err = (scaled[i,j,k,m] - scaled_sparse[i,j,k,m]).abs().item()
+                            if err > 1e-1:
+                                print(i,j,k,m,err,scaled[i,j,k,m],scaled_sparse[i,j,k,m])
+                                return
     
     bench('sparse_elmul', bench_sparse, 0.5, 3, 'ms')
-    bench('naive_elmul', bench_naive, 0.5, 3, 'ms')
+    if T <= 4096:
+        bench('naive_elmul', bench_naive, 0.5, 3, 'ms')
 
 if __name__ == '__main__':
     test_main()

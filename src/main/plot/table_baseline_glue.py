@@ -1,53 +1,55 @@
+# BigBird removed due to implementation error. The value is dummy
+
 data_mnli = {
-    'Ours': 82.1,
-    'Re-': 81.7,
-    'B.B': 80.0,
-    'S.B': 79.5,
-    'Long-': 78.8,
-    'Sink.': 76.0,
-    'Synth.': 74.0,
-    'Per-': 74.0,
-    # 'Cos-': 62.2,
+    'SEA (Ours)': 84.6,
+    'Cosformer': 82.7,
+    'Reformer': 82.3,
+    # 'B.B': 80.0,
+    'ScatterBrain': 80.4,
+    # 'Long-': 78.8,
+    'Sinkhorn': 81.9,
+    'Synthesizer': 75.5,
+    'Performer': 74.66,
 }
 data_cola = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
-    'Synth.': 74.0,
     'Per-': 74.0,
+    'Synth.': 74.0,
     # 'Cos-': 62.2,
 }
 data_mrpc = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
-    'Synth.': 74.0,
     'Per-': 74.0,
+    'Synth.': 74.0,
     # 'Cos-': 62.2,
 }
 data_sst2 = {
     'Ours': 82.1,
     'Re-': 81.7,
-    'B.B': 80.0,
+    # 'B.B': 80.0,
     'S.B': 79.5,
     'Long-': 78.8,
     'Sink.': 76.0,
-    'Synth.': 74.0,
     'Per-': 74.0,
+    'Synth.': 74.0,
     # 'Cos-': 62.2,
 }
 
 data = {
     'MNLI': data_mnli,
-    'CoLA': data_cola,
-    'MRPC': data_mrpc,
-    'SST2': data_sst2,
+    # 'CoLA': data_cola,
+    # 'MRPC': data_mrpc,
+    # 'SST2': data_sst2,
 }
 
 my_key = 'Ours'

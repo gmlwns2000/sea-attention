@@ -3,6 +3,7 @@
 .gitignore
 .dockerignore
 Dockerfile
+build_docker.sh
 *.md
 *.sh
 *.yml

@@ -12,8 +12,9 @@ class LoraLinear(nn.Module):
         torch.nn.init.kaiming_uniform_(self.lora_a, a=math.sqrt(5))
     
     def forward(self, x: torch.Tensor):
-        x = F.linear(x, self.lora_a)
-        x = F.linear(x, self.lora_b)
+        x = F.linear(x, torch.mm(self.lora_b, self.lora_a))
+        # x = F.linear(x, self.lora_b)
+        # print(x[0,0,0])
         return x
 
 # fused
@@ -35,6 +36,7 @@ def lora_forward_linear(linear: nn.Linear, x: torch.Tensor):
     return F.linear(x, linear.weight, linear.bias)
 
 def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinear, x: torch.Tensor, enabled: bool):
+    # return linear_x
     if not enabled:
         return linear_x
         # assert linear.bias.ndim == 1
@@ -81,7 +83,7 @@ def lora_forward_lora(linear: nn.Linear, linear_x: torch.Tensor, lora: LoraLinea
     
     # assert x.requires_grad
     
-    if linear_x_flatten or x_flatten:
+    if x_flatten:
         x = x.view(N, T, H, D).permute(0, 2, 1, 3).contiguous()
     
     # assert x.requires_grad
