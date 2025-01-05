@@ -632,7 +632,6 @@ class BertSelfAttention(nn.Module):
                 v=value_layer, 
                 attention_mask=attention_mask
             )
-            self.last_perlin_partial_probs = attention_probs
             
             self.last_perlin_estimated_probs = attention_probs
             self.last_perlin_dense_probs = attention_probs

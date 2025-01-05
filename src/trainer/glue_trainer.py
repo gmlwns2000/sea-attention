@@ -360,7 +360,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/rebuttal.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
         return path
     
     def save(self):

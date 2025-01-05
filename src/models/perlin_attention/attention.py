@@ -1288,8 +1288,8 @@ class PerlinAttention(nn.Module):
             
             get_bench().register_temp_buffer('partial_context_layer_sparse', partial_context_layer)
             
-            if self.pconfig.context_output_method == 'sea':
-                # raise Exception("if needed, please comment this")
+            if self.pconfig.context_output_method == 'norm':
+                raise Exception("if needed, please comment this")
                 with timer("out"):
                     if not self.pconfig.random_lookup:
                         normalized_partial_context_layer = self.norm_partial(partial_context_layer)
@@ -1315,9 +1315,9 @@ class PerlinAttention(nn.Module):
                     
                     if self.pconfig.out_norm:
                         partial_context_layer = self.norm(partial_context_layer)
-            elif self.pconfig.context_output_method in ['norm_sparse', 'norm_mix']:
-                partial_context_layer = self.norm(partial_context_layer) # WHY seperate norm_partial, norm?
-            elif self.pconfig.context_output_method not in ['sparse', 'mix']:
+            elif self.pconfig.context_output_method == 'mix':
+                pass
+            else:
                 raise Exception()
             
             # return DUMMY_OUTPUT #2978
