@@ -1,3 +1,68 @@
+"""
+Validate output of OPT. Check error between on testing and on training (self.benchmark)
+
+Usage: python -m src.main.tests.test_perlin_opt_consist --k 64 --predictor-length 256
+NOTE: you should load trained weight for this consistent check.
+
+Example Output:
+> exam temp.q[0]                                   
+  [pass] temp.q[0]                                    : is matched.     loss 0.0.
+> exam temp.k[0]                                   
+  [pass] temp.k[0]                                    : is matched.     loss 0.0.
+> exam temp.v[0]                                   
+  [pass] temp.v[0]                                    : is matched.     loss 0.0.
+> exam temp.attention_mask[0]                      
+  [pass] temp.attention_mask[0]                       : is matched.     loss 0.0.
+> exam temp.v_for_atten[0]                         
+  [pass] temp.v_for_atten[0]                          : is matched.     loss 0.0.
+> exam temp.performer_context_layer[0]             
+  [pass] temp.performer_context_layer[0]              : is matched.     loss 1.9734558431849791e-10.
+> exam temp.performer_value[0]                     
+  [pass] temp.performer_value[0]                      : is matched.     loss 1.9734558431849791e-10.
+> exam temp.estimated_attention_score_dec_row[0]   
+  [pass] temp.estimated_attention_score_dec_row[0]    : is matched.     loss 8.659359895801799e-10.
+> exam temp.t_attention_predictor[0]               
+  [pass] temp.t_attention_predictor[0]                : is matched.     loss 5.155399662726268e-09.
+> exam temp.estimated_attention_score[0]           
+  [pass] temp.estimated_attention_score[0]            : is matched.     loss 1.3566382222052198e-06.
+> exam temp.estimated_attention_probs[0]           
+  [pass] temp.estimated_attention_probs[0]            : is matched.     loss 6.809747904457097e-11.
+> exam temp.masked_estimated_attention_probs[0]    
+  [pass] temp.masked_estimated_attention_probs[0]     : is matched.     loss 6.809747904457097e-11.
+> exam temp.per_item_top_k[0]                      
+  [pass] temp.per_item_top_k[0]                       : is matched.     loss 0.0.
+> exam temp.top_k_elems[0]                         
+  [pass] temp.top_k_elems[0]                          : is matched.     loss 0.0.
+> exam temp.topk_indices[0]                            <-- this is always show error for some reason, but negligible.
+  [fail] temp.topk_indices[0]                         : is not matched. loss 1833202144.0. dumped ./saves/tests/test_perlin_opt_consist/temp.topk_indices[0].pth.
+> exam temp.partial_attention_mask_before_interp[0]
+  [pass] temp.partial_attention_mask_before_interp[0] : is matched.     loss 0.0.
+> exam temp.partial_attention_mask[0]              
+  [pass] temp.partial_attention_mask[0]               : is matched.     loss 0.0.
+> exam temp.q_for_score[0]                         
+  [pass] temp.q_for_score[0]                          : is matched.     loss 0.0.
+> exam temp.k_for_score[0]                         
+  [pass] temp.k_for_score[0]                          : is matched.     loss 0.0.
+> exam temp.estimated_scales[0]                    
+  [pass] temp.estimated_scales[0]                     : is matched.     loss 7.745931673852624e-11.
+> exam temp.average_scale[0]                       
+  [pass] temp.average_scale[0]                        : is matched.     loss 6.8833827526759706e-12.
+> exam temp.average_context_layer[0]               
+  [pass] temp.average_context_layer[0]                : is matched.     loss 0.0.
+> exam temp.partial_context_layer_2[0]             
+  [pass] temp.partial_context_layer_2[0]              : is matched.     loss 3.9440088528408523e-08.
+> exam temp.partial_context_layer_sparse[0]        
+  [pass] temp.partial_context_layer_sparse[0]         : is matched.     loss 3.9440084975694845e-08.
+> exam temp.normalized_partial_context_layer[0]    
+  [pass] temp.normalized_partial_context_layer[0]     : is matched.     loss 6.797661171731306e-07.
+> exam temp.partial_context_layer[0]               
+  [pass] temp.partial_context_layer[0]                : is matched.     loss 1.0417220437375363e-06.
+> exam output.estimated_attention_probs_m          
+  [pass] output.estimated_attention_probs_m           : is matched.     loss 6.809747904457097e-11.
+> exam output.context_layer                        
+  [pass] output.context_layer                         : is matched.     loss 1.0417220437375363e-06.
+"""
+
 import os, tqdm, gc
 os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
 from transformers import logging

@@ -7,7 +7,7 @@ import tqdm
 from ..utils import raise_if_nan, seed, batch_to, Metric
 raise_if_nan = lambda x: x
 from ..models import hf_opt as opt
-from typing import List, Dict, Tuple
+from typing import List, Dict, Optional, Tuple, Callable
 import torch
 import wandb
 import transformers
@@ -18,6 +18,8 @@ import gc
 import torch.nn.functional as F
 from ..utils import strify
 import torch.distributed
+
+CHECKPOINT_REPOSITORY = os.environ.get('CHECKPOINT_REPOSITORY', './saves')
 
 default = lambda x, y: x if x is not None else y
 
@@ -55,6 +57,8 @@ class TrainerConfig:
     max_seq_len: int = 32000
     additional_config: dict = field(default_factory=lambda: {})
     
+    on_model_init: Optional[Callable] = None
+    
 # BF_16 = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 BF_16 = torch.float16
 
@@ -78,8 +82,17 @@ class KDWrapperModel(nn.Module):
         self.base_model = base_model
         self.using_deepspeed = using_deepspeed
     
+        self.lazy_attention = True
+        if self.lazy_attention:
+            for m in self.base_model.modules():
+                if hasattr(m, 'lazy_checkout'):
+                    m.lazy_checkout = True
+    
     def forward(self, batch):
         # print('cc')
+
+        if self.lazy_attention:
+            batch['output_attentions'] = False
         
         self.base_model.eval()
         
@@ -107,8 +120,10 @@ class KDWrapperModel(nn.Module):
         with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
             # print('*'*20, 'base', torch.cuda.max_memory_allocated() // 1024 // 1024)
             output_teacher = self.base_model(**batch)
-            if batch['output_hidden_states']: output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
-            if batch['output_attentions']: output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
+            if batch['output_hidden_states']:
+                output_teacher.hidden_states = batch_to(output_teacher.hidden_states, swap_out_device)
+            if batch['output_attentions']:
+                output_teacher.attentions = batch_to(output_teacher.attentions, swap_out_device)
             output_teacher.logits = batch_to(output_teacher.logits, swap_out_device)
         
         # print('gg')
@@ -127,6 +142,8 @@ class KDWrapperModel(nn.Module):
                 loss_model = output_student.loss
         else:
             loss_model = 0.0
+        if float(os.environ.get('__TASK_LOSS', '0')) > 0.01:
+            loss_model = float(os.environ.get('__TASK_LOSS', '0')) * output_student.loss
         
         loss_kd = 0
         if self.config.using_kd:
@@ -157,7 +174,16 @@ class KDWrapperModel(nn.Module):
             loss_special = self.model.calc_loss_special()
         # assert loss_special.requires_grad, loss_special.requires_grad
         
-        loss = loss_model + loss_kd + loss_special
+        if not os.environ.get('IGNORE_KD_LOSS', '0') == '1':
+            loss = loss_model + loss_kd + loss_special
+        else:
+            warnings.warn('kd loss ignored!')
+            loss = output_student.loss
+            if os.environ.get('KD_SELF_TEACHER', '0') == '1':
+                warnings.warn('using self teacher!')
+                loss = loss + loss_special
+        
+        # assert loss.requires_grad, f"{loss_model.requires_grad}, {loss_kd.requires_grad}, {loss_special.requires_grad}"
         
         loss_py = loss.item()
         loss_details = {
@@ -177,8 +203,11 @@ class Trainer:
         import deepspeed as ds
         
         self.config = config if config is not None else TrainerConfig()
-        self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
-        self.local_rank = max(0, cmd_args.local_rank)
+        if cmd_args is None:
+            self.device = 0
+        else:
+            self.device = 0 if cmd_args.local_rank < 0 else cmd_args.local_rank
+        self.local_rank = max(0, cmd_args.local_rank if cmd_args != None else 0)
         torch.cuda.set_device(self.device)
         seed(42 + self.local_rank)
         
@@ -193,6 +222,7 @@ class Trainer:
         if self.config.kd_checkpointing:
             self.swap_out_device = torch.device('cpu')
             warnings.warn("using cpu offload for KD buffers. this will save a lot of memory, but slow down A--LOT!")
+            raise Exception()
         else:
             self.swap_out_device = self.device
         
@@ -206,9 +236,12 @@ class Trainer:
             warnings.warn(f"--gradient-accumulation-steps={old_steps} is ignored, cacluated grad. acc. steps using deepspeed config. inferenced={self.config.gradient_accumulation_steps}")
         
         self.init_model()
+        if self.config.on_model_init is not None: self.config.on_model_init()
         if not skip_init_loaders: self.init_loader()
         self.init_optimizer()
-        self.init_deepspeed()
+        self.deepspeed_inited = False
+        if not os.environ.get('LAZY_DEEPSPEED', '0') == '1':
+            self.init_deepspeed()
         
         self.wandb_inited = False
     
@@ -246,7 +279,7 @@ class Trainer:
                 if hasattr(m, 'use_deepspeed'):
                     m.use_deepspeed = self.deepspeed
         
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(self.config.model_config, use_fast=True)
         
         self.kd_model = KDWrapperModel(
             self.config, 
@@ -357,6 +390,8 @@ class Trainer:
         self.optimizer.zero_grad()
     
     def init_deepspeed(self):
+        if self.deepspeed_inited: return
+        
         if self.deepspeed:
             engine, optimizer, _, _ = deepspeed.initialize(
                 args=self.cmd_args,
@@ -368,6 +403,8 @@ class Trainer:
             self.ds_optimizer = optimizer
         else:
             self.kd_model.to(self.device)
+        
+        self.deepspeed_inited = True
     
     def train_step(self, batch) -> Tuple[float, Dict[str, float]]:
         batch = batch_to(batch, self.device)
@@ -510,12 +547,12 @@ class Trainer:
                 'output_attentions': False,
             })
             if not self.deepspeed:
-                with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
-                    self.base_model(**batch)
+                # with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
+                #     self.base_model(**batch)
                 with torch.no_grad(), torch.autocast('cuda', BF_16, enabled=self.config.amp_enabled):
                     batch['teacher'] = self.base_model
                     output_student = self.model(**batch)
-                    student_loss = output_student.loss
+                    student_loss = output_student.loss.item()
             else:
                 with torch.no_grad():
                     # print('aa')
@@ -523,10 +560,15 @@ class Trainer:
                     # print('bb')
                     student_loss = loss_details['student_model_loss']
                     # print(student_loss)
-            neg_log_likelihood = student_loss * trg_len.item()
+            print(student_loss, trg_len)
+            neg_log_likelihood = student_loss * trg_len.float().mean().item()
+            
+            # torch.cuda.synchronize()
+            # gc.collect()
+            # torch.cuda.empty_cache()
             
             # nlls.append(neg_log_likelihood)
-            nll_sum += neg_log_likelihood.item()
+            nll_sum += neg_log_likelihood
             nll_count += batch['input_ids'].shape[-1]
 
             # for debugging
@@ -544,12 +586,24 @@ class Trainer:
         return ppl
     
     def checkpoint_path(self):
-        os.makedirs(f'./saves/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
-        path = f'./saves/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
+        os.makedirs(f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/', exist_ok=True)
+        path = f'{CHECKPOINT_REPOSITORY}/trainer/opt_trainer/{self.config.experiment_name}/checkpoint.pth'
+        if os.environ.get('FORCE_OPENWEBTEXT', '0') == '1':
+            path += 'owt.pth'
         return path
     
     def save(self, path=None):
-        if path is None: path = self.checkpoint_path()
+        if os.environ.get('NO_SAVE', '0') == '1':
+            print('skip saving')
+            return
+        
+        if path is None: 
+            path = self.checkpoint_path()
+        
+        save_prefix = os.environ.get('__SAVE_PREFIX', '')
+        if save_prefix != '':
+            path = path[:-4] + save_prefix + path[-4:]
+        
         if not self.deepspeed:
             torch.save({
                 'step': self.step,
@@ -569,31 +623,89 @@ class Trainer:
     
     def load(self, path=None):
         if path is None: path = self.checkpoint_path()
-        state = torch.load(path, map_location='cpu')
-        result = self.model.load_state_dict(state['model'], strict=False)
-        print(result)
-        if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
-        try:
-            self.optimizer.load_state_dict(state['optimizer'])
-        except Exception as ex:
-            traceback.print_exc()
-            print('error during load optimizer', ex)
-        step = state['step']
-        epoch = state['epoch']
-        epochs = state['config']['epochs']
-        del state
-        print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
+        
+        load_prefix = os.environ.get('__LOAD_PREFIX', '')
+        if load_prefix != '':
+            path = path[:-4] + load_prefix + path[-4:]
+        
+        if not self.deepspeed or not self.deepspeed_inited:
+            if os.path.exists(path):
+                print(f'load from {path}')
+                state = torch.load(path, map_location='cpu')
+                try:
+                    result = self.model.load_state_dict(state['model'], strict=False)
+                    print(result)
+                except RuntimeError as ex:
+                    print(ex)
+                if 'scaler' in state and len(state['scaler']) > 0: self.scaler.load_state_dict(state['scaler'])
+                try:
+                    self.optimizer.load_state_dict(state['optimizer'])
+                except Exception as ex:
+                    traceback.print_exc()
+                    print('error during load optimizer', ex)
+                if 'step' in state:
+                    step = state['step']
+                else:
+                    step = -1
+                if 'epoch' in state:
+                    epoch = state['epoch']
+                else:
+                    epoch = -1
+                if 'epochs' in state:
+                    epochs = state['config']['epochs']
+                else:
+                    epochs = -1
+                del state
+                print(f'loaded {path} ({step}@[{epoch}/{epochs}])')
+            else:
+                path = path[:-4]
+                print(f'try to load from {path}@{"deepspeed"}')
+                from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoint
+                try:
+                    try:
+                        state = get_fp32_state_dict_from_zero_checkpoint(path, tag='deepspeed')
+                    except FileNotFoundError:
+                        mp_state_path = os.path.join(path, 'deepspeed', 'mp_rank_00_model_states.pt')
+                        if not os.path.exists(mp_state_path):
+                            print('not found', mp_state_path)
+                            return
+                        state = torch.load(mp_state_path, map_location='cpu')['module']
+                except RuntimeError as ex:
+                    print(ex)
+                try:
+                    result = self.kd_model.load_state_dict(state, strict=False)
+                    print(result)
+                except RuntimeError as ex:
+                    print(ex)
+                del state
+                print(f'loaded {path}')
+        else:
+            path = path[:-4]
+            print(f'try to load from {path}@{"deepspeed"}')
+            if int(os.environ.get('DS_LOAD_OPTIM', '1')) == 1:
+                self.ds_engine.load_checkpoint(path, tag='deepspeed', load_module_strict=False)
+            else:
+                self.ds_engine.load_checkpoint(path, tag='deepspeed', load_optimizer_states=False, load_module_strict=False)
+            print(f'loaded {path} ({-1}@[{-1}/{-1}])')
     
     def main(self):
+        if os.environ.get('LAZY_DEEPSPEED', '0') == '1':
+            self.init_deepspeed()
+        
         torch.set_float32_matmul_precision('high')
         warnings.warn("using TF32 if available, so be caution...")
         
         from ..utils.secrets import WANDB_KEY, USER_NAME
         os.environ['WANDB_API_KEY'] = WANDB_KEY
         if self.local_rank == 0:
+            try:
+                config = asdict(self.config)
+            except Exception as ex:
+                print('failed to pickle')
+                config = {'oops': f'{ex}'}
             wandb.init(
                 project=f"[{USER_NAME}] perlin-opt" if USER_NAME is not None else "perlin-opt",
-                config=asdict(self.config)
+                config=config
             )
             self.wandb_inited = True
             print('save path', self.checkpoint_path())

@@ -1,34 +1,34 @@
 data = {
     'opt-125m': {
-        'none': 22.0,
-        'ours': 28.0,
-        'reformer': 97.0,
-        'performer': 132.0,
+        'none': 25.16,
+        'ours': 25.88,
+        'reformer': 73.747,
+        'performer': 49.791,
     },
     'opt-350m': {
-        'none': 20.0,
-        'ours': 20.7,
-        'reformer': 70.0,
-        'performer': 0.0,
+        'none': 18.64,
+        'ours': 19.99,
+        'reformer': 65.25,
+        'performer': 36.573,
     },
     'opt-1.3b': {
-        'none': 13.0,
+        'none': 13.29,
         'ours': 0.0,
-        'reformer': 0.0,
-        'performer': 0.0,
+        'reformer': 46.73,
+        'performer': 30.81,
     },
-    'opt-2.7b': {
-        'none': 12.0,
-        'ours': 0.0,
-        'reformer': 0.0,
-        'performer': 0.0,
-    },
-    'opt-6.7b': {
-        'none': 10.0,
-        'ours': 0.0,
-        'reformer': 0.0,
-        'performer': 0.0,
-    }
+    # 'opt-2.7b': {
+    #     'none': 12.0,
+    #     'ours': 0.0,
+    #     'reformer': 0.0,
+    #     'performer': 0.0,
+    # },
+    # 'opt-6.7b': {
+    #     'none': 10.0,
+    #     'ours': 0.0,
+    #     'reformer': 0.0,
+    #     'performer': 0.0,
+    # }
 }
 
 aliases = {
@@ -42,7 +42,7 @@ aliases = {
     'reformer': 'Reformer',
     'performer': 'Performer',
 }
-col_keys = ['opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b', 'opt-6.7b']
+col_keys = ['opt-125m', 'opt-350m', 'opt-1.3b', ]
 row_keys = ['none', 'ours', 'reformer', 'performer']
 
 cell_data = []

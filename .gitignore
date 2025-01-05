@@ -28,4 +28,7 @@ wandb/
 
 src/utils/secrets.*
 plots/
-debug/
+submission/
+submission*.zip
+
+hello.png

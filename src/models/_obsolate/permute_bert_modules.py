@@ -206,7 +206,7 @@ class LearnablePermutation(nn.Module):
             mask = (self.last_attention_mask > -1) * 1.0
             
             # p = p / (((p * p).sum(2, keepdim=True) + 1e-5).sqrt() + 1e-5)
-            # # TODO(HJ): Compare to minimize MSE(PxPt, I)
+            # # TODO(): Compare to minimize MSE(PxPt, I)
             # loss = (torch.bmm(p, p.transpose(1, 2)).square() * mask.unsqueeze(1) * mask.unsqueeze(2))
             # loss = loss * (1 - torch.eye(loss.shape[1], device=loss.device, dtype=loss.dtype).unsqueeze(0).expand(*loss.shape))
             # # print(loss)

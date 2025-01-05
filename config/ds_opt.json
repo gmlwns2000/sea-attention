@@ -9,6 +9,6 @@
         "loss_scale_window": 1000,
         "hysteresis": 2,
         "consecutive_hysteresis": false,
-        "min_loss_scale": 0.0001
+        "min_loss_scale": 0.0000000001
     }
 }

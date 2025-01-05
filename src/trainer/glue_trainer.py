@@ -62,7 +62,7 @@ def get_base_model(dataset, only_tokenizer=False):
         "bert": "bert-base-uncased",
     }[dataset]
 
-    # NOTE(HJ): this bert models has special hooks
+    # NOTE: this bert models has special hooks
     model = {
         "cola": berts.BertForSequenceClassification,
         "mnli": berts.BertForSequenceClassification,
@@ -250,7 +250,7 @@ class Trainer:
         
         self.scaler.scale(loss / self.gradient_accumulation_steps).backward()
         
-        print(loss, flush=True)
+        # print(loss, flush=True)
         
         if ((int(self.step) + 1) % self.gradient_accumulation_steps) == 0:
             self.scaler.unscale_(self.optimizer)
@@ -360,7 +360,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint_dummy.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
         return path
     
     def save(self):
