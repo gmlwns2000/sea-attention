@@ -330,7 +330,7 @@ class Trainer:
         if self.subset == 'bert':
             metric = load_metric('glue', 'cola')
         else:
-            metric = load_metric('glue', self.subset, cache_dir= '/d1/jinakim/.cache/huggingface/metrics')
+            metric = load_metric('glue', self.subset)
         
         loader = self.valid_loader
         if split == 'train':
@@ -360,7 +360,7 @@ class Trainer:
 
     def checkpoint_path(self):
         os.makedirs(f'./saves/trainer/bert_glue_trainer/{self.exp_name}/', exist_ok=True)
-        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/final.pth'
+        path = f'./saves/trainer/bert_glue_trainer/{self.exp_name}/checkpoint.pth'
         return path
     
     def save(self):
