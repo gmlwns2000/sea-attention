@@ -110,6 +110,7 @@ def main(baseline, canary, n, h, t_dst, hid, canary_i):
         dropout=config.attention_dropout,
         is_decoder=True,
         bias=config.enable_bias,
+        config=config
     )
     
     opt_attention.attention_method = baseline
