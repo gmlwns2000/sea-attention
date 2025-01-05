@@ -6,11 +6,11 @@ import json
 import os
 import warnings
 from typing import Optional
-from ....models.perlin_opt.perlin_opt import OPTAttention
+from ...models.perlin_opt.perlin_opt import OPTAttention
 
 os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
 import torch
-from ....utils import seed
+from ...utils import seed
 
 from torch import nn
 
@@ -79,7 +79,7 @@ def _prepare_decoder_attention_mask(attention_mask, input_shape, device, past_ke
 
         return combined_attention_mask
 
-from ....models.perlin_attention.self_attention import get_default_config
+from ...models.perlin_attention.self_attention import get_default_config
 
 def main(baseline, canary, n, h, t_dst, hid, canary_i):
     print(f'\033[93m=====================\033[0m')
