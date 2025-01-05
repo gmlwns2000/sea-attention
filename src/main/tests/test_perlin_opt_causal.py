@@ -3,7 +3,6 @@ import json
 import os, tqdm, gc
 import warnings
 from typing import Optional
-import flax
 
 os.environ['TF_CPP_MIN_LOG_LEVEL']="2"
 import numpy as np
@@ -406,7 +405,7 @@ if __name__ == '__main__':
 
     N = [1,] #  2, 8, 16, 
     H = [1, 7, 12, 16, 19, 25, 32, 64] # 1, 2, 4, 7, 12, 
-    T_DST = [1024] # 2048
+    T_DST = [512] # 2048
     HID = [32, 64, ]
 
     from itertools import product
