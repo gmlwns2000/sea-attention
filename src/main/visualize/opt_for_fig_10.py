@@ -9,11 +9,11 @@ from ...utils import batch_to
 from ...models import perlin_opt
 from ...trainer.perlin_trainer import OptTrainer, add_perlin_model_options, parse_perlin_model_options
 
-from .common_3 import (
+from .common_for_fig_10 import (
     gather_fixed_batch,
     process_batch_index,
 )
-from . import common_3
+from . import common_for_fig_10
 
 def main(
     dataset = 'wikitext2',
@@ -98,7 +98,7 @@ def main(
     for i in range(len(batch['input_ids'])):
         token_length = batch['input_ids'].shape[-1]
         # token_length = batch['input_ids'].shape[-1]
-        common_3.POOL = 8
+        common_for_fig_10.POOL = 8
         img = process_batch_index(attentions, i, token_length, gs=[0.2,0.2,0.2,0.2])
         layer_dir = f"./plots/visualize_opt/{dataset}_{i}"
         os.makedirs(layer_dir, exist_ok=True)
