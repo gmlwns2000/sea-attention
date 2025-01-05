@@ -351,7 +351,7 @@ class BertSelfAttention(nn.Module):
             dropout=config.attention_probs_dropout_prob,
             bucket_size=32,
             n_hashes=8,
-            return_attn=True,
+            return_attn=os.environ.get('REFORMER_ATTN', '0') == '1',
         )
         
         ### Cosformer
@@ -435,25 +435,26 @@ class BertSelfAttention(nn.Module):
             q = F.pad(q, pad_config).float()
             # k = F.pad(k, pad_config).float()
             v = F.pad(v, pad_config).float()
-            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            binary_mask = F.pad(binary_mask.expand(N, H, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().reshape(N*H, TP, TP)
             assert q.shape == (N, H, T+to_pad, HID)
             # assert binary_mask.shape == (N, T+to_pad)
         else:
             q = q.float()
             # k = k.float()
             v = v.float()
-            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+            binary_mask = binary_mask.expand(N, H, TP, TP).bool().reshape(N*H, TP, TP)
         def merge_head(t: torch.Tensor):
             N, H, T, HID = t.shape
-            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            return t.contiguous().view(N*H, T, HID)
         q = merge_head(q)
         # k = merge_head(k)
         v = merge_head(v)
         self.perlin_reformer_atten.bucket_size = bucket_size
-        reformer_context_layer, attention_probs,_ = self.perlin_reformer_atten(
+        reformer_context_layer, reformer_attention_probs,_ = self.perlin_reformer_atten(
             # torch.cat([q, k], dim=-1), 
-            q, 
-            v, 
+            q,
+            v,
             input_attn_mask = binary_mask
         )
         #unpad
@@ -461,16 +462,22 @@ class BertSelfAttention(nn.Module):
             q = None
             k = None
             v = None
-            reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer.view(N, H, TP, HID)#.permute(0, 2, 1, 3)
             reformer_context_layer = reformer_context_layer[:, :, :T, :]
+            if reformer_attention_probs is not None and reformer_attention_probs.numel() > 1:
+                reformer_attention_probs = reformer_attention_probs[:, :T, :T]
         else:
-            reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer.view(N, H, T, HID)#.permute(0, 2, 1, 3)
             # reformer_context_layer = reformer_context_layer[:, :, :T, :]
         
-        # if not self.benchmarking:
-        #     attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
-        # else:
-        #     attention_probs = None
+        if not self.benchmarking:
+            if reformer_attention_probs is not None and reformer_attention_probs.numel() > 1:
+                print(reformer_attention_probs.shape)
+                attention_probs = reformer_attention_probs.reshape(N, H, T, T)
+            else:
+                attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+        else:
+            attention_probs = None
         
         reformer_context_layer = reformer_context_layer.permute(0, 2, 1, 3).contiguous()
         new_context_layer_shape = reformer_context_layer.size()[:-2] + (self.all_head_size,)
@@ -625,6 +632,10 @@ class BertSelfAttention(nn.Module):
                 v=value_layer, 
                 attention_mask=attention_mask
             )
+            self.last_perlin_partial_probs = attention_probs
+            
+            self.last_perlin_estimated_probs = attention_probs
+            self.last_perlin_dense_probs = attention_probs
             self.last_perlin_partial_probs = attention_probs
             
             self.last_loss = 0

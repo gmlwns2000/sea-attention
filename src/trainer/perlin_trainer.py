@@ -38,25 +38,25 @@ import deepspeed
 
 bool2int = lambda x: 1 if x else 0
 
-def add_perlin_model_options(parser):
+def add_perlin_model_options(parser, context_output_method='norm', predictor_length=128, k=7, nbf=1.0, epl=False):
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
     parser.add_argument('--enable-lora', action='store_true', default=False)
-    parser.add_argument('--k', default=7, type=int)
+    parser.add_argument('--k', default=k, type=int)
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--k-flatten-dim', default='batch', type=str)
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
-    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    parser.add_argument('--performer-nb-feature-factor', default=nbf, type=float)
     parser.add_argument('--random-lookup', action='store_true', default=False)
     parser.add_argument('--random-lookup-count', default=3, type=int)
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
-    parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--predictor-length', default=predictor_length, type=int)
     parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
-    parser.add_argument('--enc-per-layer', action='store_true', default=False)
-    parser.add_argument('--context-output-method', default='mix', type=str,  choices=['sparse', 'norm_sparse', 'mix', 'norm_mix', 'sea']) # norm for BERT, mix for OPT # NOTE default is different
+    parser.add_argument('--enc-per-layer', action='store_true', default=epl)
+    parser.add_argument('--context-output-method', default=context_output_method, type=str) # norm for BERT, mix for OPT
     parser.add_argument('--k-oversample', default=1, type=float)
     return parser
 
@@ -398,10 +398,6 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             num_steps = {
                 'wikitext2': 10000,
             }[subset]
-        
-        def on_model_init():
-            print('on model init')
-            self.apply_model_options(self.model)
             
         perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
@@ -425,13 +421,18 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
                 kd_checkpointing=kd_checkpointing,
-                on_model_init=on_model_init,
+                on_model_init=self.on_model_init,
+                batch_size=int(os.environ.get('BATCH_SIZE', '1')),
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,
             cmd_args=cmd_args,
         )
         
+        self.apply_model_options(self.model)
+    
+    def on_model_init(self):
+        print('on model init')
         self.apply_model_options(self.model)
 
 OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b']
@@ -564,6 +565,12 @@ if __name__ == '__main__':
         
         print('context length is adjusted')
     
+    if args.load_checkpoint is not None and os.environ.get('LOAD_AFTER_RESIZE', '0') == '1':
+        if args.load_checkpoint in ['auto', 'defualt', '']: 
+            trainer.load()
+        else:
+            trainer.load(args.load_checkpoint)
+    
     if not args.eval:
         trainer.main()
     else:
@@ -575,8 +582,9 @@ if __name__ == '__main__':
         
         eval_job = os.environ.get('EVAL_JOB', 'PPL').upper()
         if eval_job == 'PPL':
-            trainer.evaluate()
-        elif eval_job == 'EXPPL':
-            trainer.evaluate()
+            ppl = trainer.evaluate()
+            os.makedirs('./cache/perlin_trainer', exist_ok=True)
+            with open('./cache/perlin_trainer/last_ppl.txt', 'w') as f:
+                f.write(f'{ppl}\n')
         else:
             raise Exception()

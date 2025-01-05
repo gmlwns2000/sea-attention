@@ -30,6 +30,5 @@ src/utils/secrets.*
 plots/
 submission/
 submission*.zip
-debug/
-fast-transformers/
-xformers/
+
+hello.png

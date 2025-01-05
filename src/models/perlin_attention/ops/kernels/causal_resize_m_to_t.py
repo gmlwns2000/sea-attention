@@ -478,16 +478,18 @@ def __scan_col_3_compute(
             mask=(tl.arange(0, MAX_INTERP)[None, :] < col_len[:, None]) and (ms_mask[:, None])
         )
 
-@triton.autotune(configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
-    ],
-    key=['TARGET_WIDTH_MAX', 'MAX_INTER_PADDED', 'BLOCK_N_ZERO']
-)
+# DBG
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=[],
+#     # key=['TARGET_WIDTH_MAX', 'MAX_INTER_PADDED', 'BLOCK_N_ZERO']
+# )
 @triton.jit
 def __scan_col_4_compute(
     NON_ZERO_PIXELS,
@@ -501,7 +503,7 @@ def __scan_col_4_compute(
     COL_INDICES,
     stride_col_n, stride_col_z,
     N, M, H, T_M, 
-    TARGET_WIDTH_MAX: tl.constexpr, MAX_INTER_PADDED: tl.constexpr, MAX_INTERP,
+    TARGET_WIDTH_MAX, MAX_INTER_PADDED: tl.constexpr, MAX_INTERP,
     NZR_N, NZR_D, BLOCK_N_ZERO: tl.constexpr,
 ):
     pid_nzp = tl.program_id(0)

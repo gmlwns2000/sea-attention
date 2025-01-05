@@ -69,7 +69,7 @@ master_port = os.environ.get('MASTER_PORT', 32042)
 deepspeed_config = {
     'opt-125m': { 'wikitext2': { # zero0 by default
         'none': './config/ds_opt_125.json',
-        'perlin': './config/ds_opt_125.json',
+        'perlin': './config/ds_opt_125.json' if os.environ.get('B8', '0') == '0' else './config/ds_opt_125_b8.json',
         'performer': './config/ds_opt_125.json',
         'reformer': './config/ds_opt_125.json',
         'sinkhorn': './config/ds_opt_125.json',

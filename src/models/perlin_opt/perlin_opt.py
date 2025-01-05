@@ -15,6 +15,7 @@
 """ PyTorch OPT model."""
 import gc
 import os
+import random
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
@@ -72,6 +73,7 @@ OPT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # See all OPT models at https://huggingface.co/models?filter=opt
 ]
 
+timer = lambda name: get_bench().region(name)
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
 def _make_causal_mask(
@@ -262,7 +264,7 @@ class OPTAttention(nn.Module):
         # if self.layer_id == 0:
         #     print(f'attention(q={q.shape}, kv={v.shape}, m={attention_mask.shape})')
         
-        if self.attention_method == 'none':
+        if self.attention_method == "none":
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
             if attn_weights.size() != (N * H, T_DST, T_SRC):
@@ -288,15 +290,6 @@ class OPTAttention(nn.Module):
             else:
                 attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
-            # if layer_head_mask is not None:
-            #     if layer_head_mask.size() != (self.num_heads,):
-            #         raise ValueError(
-            #             f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-            #             f" {layer_head_mask.size()}"
-            #         )
-            #     attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            #     attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
             if True:
                 # this operation is a bit awkward, but it's required to
                 # make sure that attn_weights keeps its gradient.
@@ -310,12 +303,6 @@ class OPTAttention(nn.Module):
             attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
             attn_output = torch.bmm(attn_probs, v)
-
-            # if attn_output.size() != (N * self.num_heads, T_DST, self.head_dim):
-            #     raise ValueError(
-            #         f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-            #         f" {attn_output.size()}"
-            #     )
 
             attn_output = attn_output.view(N, H, T_DST, HID)
             attn_output = attn_output.transpose(1, 2)
@@ -347,15 +334,16 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = F.pad(q, (0,0,0,to_pad_dst)).float()
                 v = F.pad(v, (0,0,0,to_pad_src)).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().view(N, TP_DST, TP_SRC)
+                binary_mask = F.pad(binary_mask.expand(N, H, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().reshape(N*H, TP_DST, TP_SRC)
                 assert q.shape == (N, H, T_DST + to_pad_dst, HID)
             else:
                 q = q.float()
                 v = v.float()
-                binary_mask = binary_mask.expand(N, 1, T_DST, T_SRC).bool().view(N, T_DST, T_SRC)
+                binary_mask = binary_mask.expand(N, H, T_DST, T_SRC).bool().reshape(N*H, T_DST, T_SRC)
             def merge_head(t: torch.Tensor):
                 N, H, T, HID = t.shape
-                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                return t.permute(0, 1, 2, 3).contiguous().view(N*H, T, HID)
             q = merge_head(q)
             v = merge_head(v)
             self.perlin_reformer_atten.bucket_size = bucket_size
@@ -369,10 +357,10 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
                 v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, TP_DST, HID)#.permute(0, 2, 1, 3)
                 reformer_context_layer = reformer_context_layer[:, :, :T_DST, :]
             else:
-                reformer_context_layer = reformer_context_layer.view(N, T_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, T_DST, HID)#.permute(0, 2, 1, 3)
             
             if not self.benchmarking:
                 attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
@@ -1220,14 +1208,24 @@ class OPTDecoder(OPTPreTrainedModel):
                 #         print('leak obj', strify(t), t.element_size()*t.numel())
                 #         print('refs', [type(i) for i in r])
             else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_attention_mask,
-                    layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                    past_key_value=past_key_value,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                )
+                with timer('opt.layer'):
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # start_mem = torch.cuda.max_memory_allocated()
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_attention_mask,
+                        layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                        past_key_value=past_key_value,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                    )
+                    # end_mem = torch.cuda.max_memory_allocated()
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # print((end_mem - start_mem) / 1024 / 1024)
 
             hidden_states = layer_outputs[0]
 
@@ -1509,6 +1507,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+            
         outputs = self.model.decoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1520,6 +1519,15 @@ class OPTForCausalLM(OPTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        
+        # if random.random() < 1/10 and not get_bench().disabled:
+        #     print(get_bench().format_tracetree())
+        # else:
+        #     print('forward', input_ids.shape)
+        
+        if not get_bench().disabled:
+            print(get_bench().format_tracetree(), flush=True)
+            input()
 
         logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 

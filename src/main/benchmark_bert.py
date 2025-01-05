@@ -269,6 +269,7 @@ def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem
             return q.get()
 
 # BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+# BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
 HAS_FLASH = os.environ.get('FLASH', '0') == '1'
 if HAS_FLASH:
@@ -457,6 +458,7 @@ def load_and_plot():
         )
         
         for iy, ys in enumerate(baselines):
+            if 'scatter' in NAMES[baseline_methods[iy]].lower(): continue
             ax.plot(
                 ts, 
                 ys, 
@@ -537,7 +539,7 @@ def load_and_plot():
     print('saved', path)
 
 def main_plot():
-    measure_and_dump()
+    # measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':

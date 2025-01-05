@@ -33,17 +33,18 @@ def __flat_csr_sdbmm_py(
                 
                 # too complicate in python
 
-
-@triton.autotune(configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
-    ],
-    key=['BLOCK_H',]
-)
+# DBG
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=[],
+#     # key=['BLOCK_H',]
+# )
 @triton.jit
 def __flat_csr_sdbmm_tch_compute(
     CROW_INDICES,
@@ -125,17 +126,18 @@ def __flat_csr_sdbmm_tch_compute(
             mask=(tl.arange(0, BLOCK_H) < H) & ir_mask
         )
 
-
-@triton.autotune(configs=[
-        triton.Config({}, num_warps=1),
-        triton.Config({}, num_warps=2),
-        triton.Config({}, num_warps=4),
-        triton.Config({}, num_warps=8),
-        triton.Config({}, num_warps=16),
-        triton.Config({}, num_warps=32),
-    ],
-    key=['BLOCK_HID', 'MAX_ROW_Z', 'MAX_ROW_T']
-)
+# DBG
+# @triton.autotune(configs=[
+#         triton.Config({}, num_warps=1),
+#         triton.Config({}, num_warps=2),
+#         triton.Config({}, num_warps=4),
+#         triton.Config({}, num_warps=8),
+#         triton.Config({}, num_warps=16),
+#         triton.Config({}, num_warps=32),
+#     ],
+#     key=[],
+#     # key=['BLOCK_HID', 'MAX_ROW_Z', 'MAX_ROW_T']
+# )
 @triton.jit
 def __flat_csr_sdbmm_compute(
     CROW_INDICES,
@@ -374,8 +376,8 @@ def flat_csr_sdbmm(scores: torch.Tensor, value_layer: torch.Tensor, T_M: int, ma
             else:
                 BLOCK_R = 8
             BLOCK_H = triton.next_power_of_2(H)
-            # BLOCK_HID = 64
-            BLOCK_HID = triton.next_power_of_2(HID)
+            BLOCK_HID = 32
+            # BLOCK_HID = triton.next_power_of_2(HID)
             MAX_ROW_Z = triton.next_power_of_2(max_z_per_row)
             MAX_ROW_T = min(
                 MAX_ROW_Z,

@@ -1,6 +1,7 @@
 import copy
 import math
 import os
+import time
 import warnings
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -105,15 +106,19 @@ class PerlinAttentionOutput(NamedTuple):
         )
 
 class ModuleBenchmark(nn.Module):
-    def __init__(self, name, module):
+    def __init__(self, name, module, disabled=False):
         super().__init__()
         
         self.name = name
         self.module = module
+        self.disabled = disabled
     
     def forward(self, x):
-        with timer(self.name):
+        if self.disabled:
             return self.module(x)
+        else:
+            with timer(self.name):
+                return self.module(x)
 
 class ChannelSplit(nn.Module):
     def __init__(self, split):
@@ -189,6 +194,7 @@ class PerlinAttention(nn.Module):
             nn.LayerNorm(self.attention_head_size*2),
             nn.GELU(),
         )
+        COMPILE_CNN = os.environ.get('PERLIN_COMPILE', '0') == '1'
         N_H = self.num_attention_heads
         if not self.pconfig.causal:
             self.attention_predictor_dec_row_down_scale = 2
@@ -258,27 +264,26 @@ class PerlinAttention(nn.Module):
                 )
             else:
                 self.attention_predictor_cnn = nn.Sequential(
-                    ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale)),
+                    ModuleBenchmark('cnn.lnorm1', nn.LayerNorm(self.pconfig.attention_predictor_length // self.attention_predictor_dec_row_down_scale), disabled=COMPILE_CNN),
                     ModuleBenchmark('cnn.keepres', KeepRes(
                         # ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(N_H, inner_ch*N_H, 5, padding=2, stride=(1, 4), causal=is_causal)),
                         # nn.ReLU(),
-                        ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        ModuleBenchmark('cnn.keepres.conv1', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal), disabled=COMPILE_CNN),
                         nn.ReLU(),
-                        ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal)),
+                        ModuleBenchmark('cnn.keepres.conv2', CausalConv2d(inner_ch*N_H, inner_ch*N_H, 3, padding=2, dilation=2, stride=(1, 1), causal=is_causal), disabled=COMPILE_CNN),
                         nn.ReLU(),
-                        ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16)),
-                        ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal)),
+                        ModuleBenchmark('cnn.keepres.upsam', UpsampleFP32((1, 4), torch.float16), disabled=COMPILE_CNN),
+                        ModuleBenchmark('cnn.keepres.conv4', CausalConv2d(inner_ch*N_H, N_H, 1, padding=1, causal=is_causal), disabled=COMPILE_CNN),
                         output_width=self.pconfig.attention_predictor_length
-                    )),
+                    ), disabled=COMPILE_CNN),
                     # this prevent model explode within causal setting...
-                    ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length))
+                    ModuleBenchmark('cnn.lnorm2', nn.LayerNorm(self.pconfig.attention_predictor_length), disabled=COMPILE_CNN)
                 )
             # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, mode='reduce-overhead')
         # self.attention_predictor_cnn = nn.Identity()
         
-        COMPILE_CNN = os.environ.get('PERLIN_COMPILE', '0') == '1'
         if COMPILE_CNN:
-            # self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn, backend='cudagraphs')
+            self.attention_predictor_cnn = torch.compile(self.attention_predictor_cnn)
             pass
         
         self.attention_predictor_dec_scaler = nn.Sequential(
@@ -340,6 +345,11 @@ class PerlinAttention(nn.Module):
         context_layer_truth: torch.Tensor,
         last_state: PerlinAttentionState = None,
     ):
+        dynamic_k = int(os.environ.get('DYNAMIC_K', '0'))
+        if dynamic_k > 0:
+            warnings.warn(f'dynamic k {dynamic_k}')
+            self.pconfig.k = dynamic_k
+        
         if len(self._warning_messages) > 0:
             print(self._warning_messages)
             self._warning_messages = ''
@@ -356,6 +366,15 @@ class PerlinAttention(nn.Module):
                     attention_scores_truth = attention_scores_truth()
             if attention_scores_truth.device != q.device:
                 attention_scores_truth = attention_scores_truth.to(q.device, non_blocking=True)
+        
+        if os.environ.get('KD_SELF_TEACHER', '0') == '1' and self.training:
+            context_layer_truth = None
+            N, H, TSRC, D = k.shape
+            N, H, TDST, D = q.shape
+            score = torch.bmm(q.detach().view(N*H, TDST, D), k.detach().view(N*H, TSRC, D).transpose(-1, -2)).view(N, H, TDST, TSRC)
+            score = score + attention_mask
+            # score = torch.softmax(score, dim=-1)
+            attention_scores_truth = score
         
         DUMMY_OUTPUT = PerlinAttentionOutput(
             loss=None,
@@ -396,12 +415,15 @@ class PerlinAttention(nn.Module):
                 assert T_DST == _T_DST
                 assert T_SRC == _T_SRC
                 assert _HID_Q == _HID_K
+                assert _N == N
+                
+                # attention_mask = attention_mask[0:1]
                 
                 causal_attention_mask = attention_mask
                 attention_mask = causal_attention_mask[:, :, -1:, :]
                 
-                assert attention_mask.shape == (1, 1, 1, T_SRC)
-                assert causal_attention_mask.shape == (1, 1, T_DST, T_SRC)
+                assert attention_mask.shape == (N, 1, 1, T_SRC)
+                assert causal_attention_mask.shape == (N, 1, T_DST, T_SRC)
         
         # return DUMMY_OUTPUT #0
         
@@ -533,7 +555,7 @@ class PerlinAttention(nn.Module):
                     # print('pcl', strify(performer_context_layer), strify(q), strify(k), strify(v))
                 else:
                     # TODO: fix numerical stability...
-                    if os.environ.get("PERLIN_HOTFIX_STATEFUL", "0") == "1":
+                    if os.environ.get("PERLIN_HOTFIX_STATEFUL", "1") == "1":
                         last_state, performer_context_layer = PerlinAttentionState.stateful_performer(
                             last_state,
                             "performer->performer_context_layer",
@@ -573,7 +595,7 @@ class PerlinAttention(nn.Module):
             with timer("predictor"):
                 if self.pconfig.attention_predictor_method == 'mlp':
                     # I came up this dark magic from my head during rebuttal...
-                    query_skips = 1
+                    query_skips = int(os.environ.get('QUERY_SKIPS', '1'))
                     with timer("predictor.enc"):
                         raise_if_nan(performer_value)
                         # ENC_PER_LAYER = False
@@ -603,6 +625,8 @@ class PerlinAttention(nn.Module):
                         raise_if_nan(estimated_attention_score)
                     
                     with timer("predictor.cnn"):
+                        # torch.cuda.synchronize()
+                        # t = time.time()
                         last_state, estimated_attention_score = PerlinAttentionState.stateful_causal_cnn_op(
                             last_state,
                             "attention_predictor_cnn->estimated_attention_score",
@@ -610,6 +634,8 @@ class PerlinAttention(nn.Module):
                             estimated_attention_score,
                             q.shape[-2],
                         )
+                        # torch.cuda.synchronize()
+                        # print(time.time() - t)
                         
                         if query_skips > 1:
                             _N, _H, _T, _D = estimated_attention_score.shape
@@ -1178,35 +1204,50 @@ class PerlinAttention(nn.Module):
                                 partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
                         
                 # return DUMMY_OUTPUT #2782
-                if self.pconfig.context_output_method not in ['sparse', 'norm_sprase']:
-                    with timer("attention.avg_pool"):
-                        if not self.pconfig.causal:
-                            average_context_layer = (
-                                v *\
-                                (dst_attention_mask > -1).to(v.dtype) *\
-                                resize_from_m_to_t(
-                                    estimated_attention_probs.mean(-2, keepdim=True), 
-                                    masked_fill_value=0, 
-                                    target_width=T, 
-                                    handle_oversample=False
-                                ).transpose(-1, -2)
-                            ).sum(-2, keepdim=True).to(v.dtype)
-                        else:
-                            # TODO imporve this when causal
+                
+                with timer("attention.avg_pool"):
+                    if not self.pconfig.causal:
+                        average_context_layer = (
+                            v *\
+                            (dst_attention_mask > -1).to(v.dtype) *\
+                            resize_from_m_to_t(
+                                estimated_attention_probs.mean(-2, keepdim=True), 
+                                masked_fill_value=0, 
+                                target_width=T, 
+                                handle_oversample=False
+                            ).transpose(-1, -2)
+                        ).sum(-2, keepdim=True).to(v.dtype)
+                    else:
+                        # TODO imporve this when causal
+                        if not self.benchmarking:
                             avg_v = v * (dst_attention_mask > -1)
                             average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1)
                             average_context_layer = average_context_layer.to(v.dtype)
                             if average_context_layer.shape[-2] > q.shape[-2]:
                                 average_context_layer = average_context_layer[...,-q.shape[-2]:,:]
-                            # return DUMMY_OUTPUT #2978
-                        average_scale = torch.sigmoid(estimated_scales[..., 1:2])
-                        partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
-                        get_bench().register_temp_buffer('estimated_scales', estimated_scales)
-                        get_bench().register_temp_buffer('average_scale', average_scale)
-                        if not self.pconfig.causal:
-                            get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T, handle_oversample=False).transpose(-1, -2))
-                        get_bench().register_temp_buffer('average_context_layer', average_context_layer)
-                        get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
+                        else:
+                            if use_cache:
+                                last_state, average_context_layer = PerlinAttentionState.stateful_cumavg(
+                                    last_state,
+                                    "output->cumavg",
+                                    v,
+                                    q.shape[-2],
+                                )
+                            else:
+                                avg_v = v * (dst_attention_mask > -1)
+                                average_context_layer = avg_v.cumsum(-2) / torch.arange(1, avg_v.shape[-2]+1, device=avg_v.device).view(1, 1, -1, 1)
+                                average_context_layer = average_context_layer.to(v.dtype)
+                                if average_context_layer.shape[-2] > q.shape[-2]:
+                                    average_context_layer = average_context_layer[...,-q.shape[-2]:,:]
+                        # return DUMMY_OUTPUT #2978
+                    average_scale = torch.sigmoid(estimated_scales[..., 1:2])
+                    partial_context_layer = partial_context_layer * average_scale + (1-average_scale) * average_context_layer
+                    get_bench().register_temp_buffer('estimated_scales', estimated_scales)
+                    get_bench().register_temp_buffer('average_scale', average_scale)
+                    if not self.pconfig.causal:
+                        get_bench().register_temp_buffer('estimated_attention_probs_t', None, lazy=lambda: resize_from_m_to_t(estimated_attention_probs.mean(-2, keepdim=True), 0, T, handle_oversample=False).transpose(-1, -2))
+                    get_bench().register_temp_buffer('average_context_layer', average_context_layer)
+                    get_bench().register_temp_buffer('partial_context_layer_2', partial_context_layer)
             
             # return DUMMY_OUTPUT #2978
             

@@ -1,4 +1,5 @@
 import math
+import time
 import warnings
 from typing import Dict, List, Optional, Tuple
 
@@ -155,6 +156,9 @@ class CausalConv2d(nn.Module):
                 dilation=self.dilation, 
                 groups=1
             )
+        
+        # print(input.shape, weight.shape, weight.device, input.device, bias is None)
+        
         return F.conv2d(
             input=input, 
             weight=weight, 
@@ -166,8 +170,23 @@ class CausalConv2d(nn.Module):
         )
     
     def forward(self, x: torch.Tensor):
-        return self._conv_forward(
+        w = self.weight.masked_fill(self.weight_mask == 0, 0) if self.causal else self.weight
+        
+        # if w.shape[0] == w.shape[1]:
+        #     return x
+        # if w.shape[0] < w.shape[1]:
+        #     return x[:, :w.shape[0], ...]
+        
+        # torch.cuda.synchronize()
+        # t = time.time()
+        
+        y = self._conv_forward(
             input=x,
-            weight=self.weight.masked_fill(self.weight_mask == 0, 0) if self.causal else self.weight,
+            weight=w,
             bias=self.bias,
         )
+        
+        # torch.cuda.synchronize()
+        # print(time.time()-t)
+        
+        return y
