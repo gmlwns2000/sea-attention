@@ -358,3 +358,4 @@ class PerlinAttentionState:
         new.max_seq_length = self.max_seq_length
         new.states = {k: v for k, v in self.states.items()}
         return new
+
