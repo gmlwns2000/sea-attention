@@ -1,9 +1,3 @@
-# load k13
-
-# k 3~65 stepping with 3 increased
-
-# 1. get accuracy
-    
 import warnings
 from ...models import perlin_bert
 from transformers import AutoConfig, AutoTokenizer
