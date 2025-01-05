@@ -288,7 +288,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
             subset=subset,
             model_cls=perlin_bert.BertForSequenceClassification,
             amp_enabled=not disable_amp,
-            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}', model='bert'),
+            trainer_name=self.format_exp('glue' if subset == 'mnli' else f'glue_{subset}'),
             using_kd=not self.perlin_layerwise,
             using_loss=not self.perlin_layerwise,
             eval_steps=2000,
@@ -407,7 +407,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
-                experiment_name=self.format_exp(f'{model}_{subset}', model='opt'),
+                experiment_name=self.format_exp(f'{model}_{subset}'),
                 model_cls=perlin_opt.OPTForCausalLM,
                 model_config=model_config,
                 amp_enabled=not disable_amp,

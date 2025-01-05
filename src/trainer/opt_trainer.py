@@ -247,8 +247,8 @@ class Trainer:
     
     def init_model(self):
         teacher = self.config.teacher_model_cls.from_pretrained(
-            self.config.model_config, 
-        ).eval() # cache_dir='/d1/jinakim/.cache/huggingface/metrics'
+            self.config.model_config
+        ).eval()
         
         student = self.config.model_cls(teacher.config)
         try:
