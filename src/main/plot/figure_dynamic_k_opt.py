@@ -8,27 +8,25 @@ import matplotlib
 plt.style.use('seaborn-bright')
 matplotlib.rcParams['font.family'] = 'Noto Sans, DejaVu Sans'
 
-model = 'bert'
-if model=='bert':
-    trained_k = [7, 13, 25]
-elif 'opt' in model:
-    trained_k = [32, 64, 128]
+trained_k = [32, 64, 128]
     
 def main():
     data = {}
     for k in trained_k:
-        os.makedirs('./plots/main/figure_dynamic_k', exist_ok=True)
+        os.makedirs('./plots/main/figure_dynamic_k_opt', exist_ok=True)
         
-        path = f'./plots/main/figure_dynamic_k/k_{k}.pth'
+        path = f'./plots/main/figure_dynamic_k_opt/k_{k}.pth'
         state = torch.load(path, map_location='cpu')
         k_acc_dict = state['k_acc_bucket']
         
         data[k] = k_acc_dict
     
-    COLORS = {7:'magenta', 13:'purple', 25:'blue'}
-    BASELINE = {7:0.81844, 13:0.834946, 25:0.842893}
-    for k in trained_k:
-        data[k][k] = BASELINE[k]*100
+    print(data)
+    
+    # BASELINE = {7:0.8211, 13:0.8388, 25:0.8424}
+    COLORS = {32:'magenta', 64:'purple', 128:'blue'}
+    # for k in trained_k:
+    #     data[k][k] = BASELINE[k]*100
     
     plt.figure(figsize=(3.5,3.0))
     for k in trained_k:
@@ -48,7 +46,7 @@ def main():
     
     for k in trained_k:
         k_acc_dict = data[k]
-        xs = [min(k_acc_dict.keys()), max(k_acc_dict.keys())]
+        xs = [0, max(k_acc_dict.keys())]
         ys = [k_acc_dict[k], ] * 2
         
         plt.plot(
@@ -58,35 +56,34 @@ def main():
             color=COLORS[k]
         )
         
-        if k < 25:
-            if k < 10:
-                plt.annotate(f"k={k}", (52, ys[0] + 0.1), fontweight=500, color='#444')
-            else:
-                plt.annotate(f"k={k}", (52, ys[0] - 0.3), fontweight=500, color='#444')
+        if k == 32:
+            plt.annotate(f"k={k}", (220, ys[0] - 0.8), fontweight=500, color='#444')
+        elif k == 64:
+            plt.annotate(f"k={k}", (5, ys[0] + 0.3), fontweight=500, color='#444')
         else:
-            plt.annotate(f"k={k}", (4, ys[0] + 0.1), fontweight=500, color='#444')
+            plt.annotate(f"k={k}", (5, ys[0] + 0.3), fontweight=500, color='#444')
         
     plt.title(
-        f'Accuracy After Adjusting $k$', 
+        f'Perplexity After Adjusting $k$', 
         fontsize=12,
         fontweight=500,
         pad=8,
     )
     # plt.subplots_adjust(hspace=0.2)
     plt.xlabel(f'$k$', fontsize=10,  fontweight=500)
-    plt.ylabel(f'Acc. ↑', fontsize=10, fontweight=500)
-    plt.ylim(80, 85.2)
-    plt.xlim(3, 60)
+    plt.ylabel(f'PPL. ↓', fontsize=10, fontweight=500)
+    plt.ylim(22, 33)
+    plt.xlim(0, 260)
     plt.grid()
     plt.legend(fontsize=9)
     
-    root = f'./plots/main/figure_dynamic_k/'
+    root = f'./plots/main/figure_dynamic_k_opt/'
     os.makedirs(root, exist_ok=True)
     
-    path = os.path.join(root, f'plot_dynamic_k.png')
+    path = os.path.join(root, f'plot_dynamic_k_opt.png')
     plt.savefig(path, bbox_inches='tight')
     print('saved', path)
-    path = os.path.join(root, f'plot_dynamic_k.pdf')
+    path = os.path.join(root, f'plot_dynamic_k_opt.pdf')
     plt.savefig(path, bbox_inches='tight')
     print('saved', path)
 

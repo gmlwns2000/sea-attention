@@ -351,7 +351,7 @@ class BertSelfAttention(nn.Module):
             dropout=config.attention_probs_dropout_prob,
             bucket_size=32,
             n_hashes=8,
-            return_attn=False,
+            return_attn=os.environ.get('REFORMER_ATTN', '0') == '1',
         )
         
         ### Cosformer
@@ -435,25 +435,26 @@ class BertSelfAttention(nn.Module):
             q = F.pad(q, pad_config).float()
             # k = F.pad(k, pad_config).float()
             v = F.pad(v, pad_config).float()
-            binary_mask = F.pad(binary_mask.expand(N, 1, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().view(N, TP, TP)
+            binary_mask = F.pad(binary_mask.expand(N, H, T, T), (0,to_pad, 0,to_pad), value=0.0).bool().reshape(N*H, TP, TP)
             assert q.shape == (N, H, T+to_pad, HID)
             # assert binary_mask.shape == (N, T+to_pad)
         else:
             q = q.float()
             # k = k.float()
             v = v.float()
-            binary_mask = binary_mask.expand(N, 1, TP, TP).bool().view(N, TP, TP)
+            binary_mask = binary_mask.expand(N, H, TP, TP).bool().reshape(N*H, TP, TP)
         def merge_head(t: torch.Tensor):
             N, H, T, HID = t.shape
-            return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+            return t.contiguous().view(N*H, T, HID)
         q = merge_head(q)
         # k = merge_head(k)
         v = merge_head(v)
         self.perlin_reformer_atten.bucket_size = bucket_size
-        reformer_context_layer, _,_ = self.perlin_reformer_atten(
+        reformer_context_layer, reformer_attention_probs,_ = self.perlin_reformer_atten(
             # torch.cat([q, k], dim=-1), 
-            q, 
-            v, 
+            q,
+            v,
             input_attn_mask = binary_mask
         )
         #unpad
@@ -461,14 +462,20 @@ class BertSelfAttention(nn.Module):
             q = None
             k = None
             v = None
-            reformer_context_layer = reformer_context_layer.view(N, TP, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer.view(N, H, TP, HID)#.permute(0, 2, 1, 3)
             reformer_context_layer = reformer_context_layer[:, :, :T, :]
+            if reformer_attention_probs is not None and reformer_attention_probs.numel() > 1:
+                reformer_attention_probs = reformer_attention_probs[:, :T, :T]
         else:
-            reformer_context_layer = reformer_context_layer.view(N, T, H, HID).permute(0, 2, 1, 3)
+            reformer_context_layer = reformer_context_layer.view(N, H, T, HID)#.permute(0, 2, 1, 3)
             # reformer_context_layer = reformer_context_layer[:, :, :T, :]
         
         if not self.benchmarking:
-            attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
+            if reformer_attention_probs is not None and reformer_attention_probs.numel() > 1:
+                print(reformer_attention_probs.shape)
+                attention_probs = reformer_attention_probs.reshape(N, H, T, T)
+            else:
+                attention_probs = torch.zeros((N, H, T, T), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
         else:
             attention_probs = None
         
@@ -626,6 +633,10 @@ class BertSelfAttention(nn.Module):
                 attention_mask=attention_mask
             )
             
+            self.last_perlin_estimated_probs = attention_probs
+            self.last_perlin_dense_probs = attention_probs
+            self.last_perlin_partial_probs = attention_probs
+            
             self.last_loss = 0
         elif self.attention_method == 'scatterbrain':
             reformer_context_layer, reformer_attention_probs = self.forward_reformer(
@@ -712,6 +723,86 @@ class BertSelfAttention(nn.Module):
                 attention_probs = attention_probs * head_mask
 
             context_layer = torch.matmul(attention_probs, value_layer)
+
+            context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
+            new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
+            context_layer = context_layer.view(new_context_layer_shape)
+            
+            self.perlin_token_merging_key_layer = key_layer
+            self.perlin_token_merging_attention_probs = attention_probs
+            
+            self.last_loss = 0
+        elif self.attention_method == 'flash':
+            use_cache = past_key_value is not None
+            if self.is_decoder:
+                # if cross_attention save Tuple(torch.Tensor, torch.Tensor) of all cross attention key/value_states.
+                # Further calls to cross_attention layer can then reuse all cross-attention
+                # key/value_states (first "if" case)
+                # if uni-directional self-attention (decoder) save Tuple(torch.Tensor, torch.Tensor) of
+                # all previous decoder key/value_states. Further calls to uni-directional self-attention
+                # can concat previous decoder key/value_states to current projected key/value_states (third "elif" case)
+                # if encoder bi-directional self-attention `past_key_value` is always `None`
+                past_key_value = (key_layer, value_layer)
+
+            # Take the dot product between "query" and "key" to get the raw attention scores.
+            # attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
+
+            # if self.position_embedding_type == "relative_key" or self.position_embedding_type == "relative_key_query":
+            #     query_length, key_length = query_layer.shape[2], key_layer.shape[2]
+            #     if use_cache:
+            #         position_ids_l = torch.tensor(key_length - 1, dtype=torch.long, device=hidden_states.device).view(
+            #             -1, 1
+            #         )
+            #     else:
+            #         position_ids_l = torch.arange(query_length, dtype=torch.long, device=hidden_states.device).view(-1, 1)
+            #     position_ids_r = torch.arange(key_length, dtype=torch.long, device=hidden_states.device).view(1, -1)
+            #     distance = position_ids_l - position_ids_r
+
+            #     positional_embedding = self.distance_embedding(distance + self.max_position_embeddings - 1)
+            #     positional_embedding = positional_embedding.to(dtype=query_layer.dtype)  # fp16 compatibility
+
+            #     if self.position_embedding_type == "relative_key":
+            #         relative_position_scores = torch.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
+            #         attention_scores = attention_scores + relative_position_scores
+            #     elif self.position_embedding_type == "relative_key_query":
+            #         relative_position_scores_query = torch.einsum("bhld,lrd->bhlr", query_layer, positional_embedding)
+            #         relative_position_scores_key = torch.einsum("bhrd,lrd->bhlr", key_layer, positional_embedding)
+            #         attention_scores = attention_scores + relative_position_scores_query + relative_position_scores_key
+
+            # attention_scores = attention_scores / math.sqrt(self.attention_head_size)
+            # if attention_mask is not None:
+            #     # Apply the attention mask is (precomputed for all layers in BertModel forward() function)
+            #     attention_scores = attention_scores + attention_mask
+
+            # # Normalize the attention scores to probabilities.
+            # attention_probs = nn.functional.softmax(attention_scores, dim=-1)
+
+            # # This is actually dropping out entire tokens to attend to, which might
+            # # seem a bit unusual, but is taken from the original Transformer paper.
+            # attention_probs = self.dropout(attention_probs)
+
+            # # Mask heads if we want to
+            # if head_mask is not None:
+            #     attention_probs = attention_probs * head_mask
+
+            # context_layer = torch.matmul(attention_probs, value_layer)
+            
+            from flash_attn import flash_attn_qkvpacked_func, flash_attn_func
+
+            attention_probs = None
+            # torch implementation, working on lab server
+            context_layer = F.scaled_dot_product_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                is_causal=False,
+            )
+            # not working with our gpus...
+            # context_layer = flash_attn_func(
+            #     q=query_layer.permute(0, 2, 1, 3),
+            #     k=key_layer.permute(0, 2, 1, 3),
+            #     v=value_layer.permute(0, 2, 1, 3),
+            # ).permute(0, 2, 1, 3).contiguous()
 
             context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
             new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
