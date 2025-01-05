@@ -81,14 +81,8 @@ def main(
         for module in student.modules():
             if isinstance(module, perlin_opt.OPTAttention):
                 teacher_attn = torch.softmax(module.teacher_attention_scores, dim=-1).cpu()
-                # estimated_attn = module.last_perlin_output.estimated_attention_probs.cpu()
-                # dense_attn = module.last_perlin_output.dense_attention_probs.cpu()
-                # partial_attn = module.last_perlin_output.partial_attention_probs.cpu()
                 mini_attentions.append({
                     'teacher_attn': teacher_attn,
-                    # 'estimated_attn': estimated_attn,
-                    # 'dense_attn': dense_attn,
-                    # 'partial_attn': partial_attn,
                 })
         
         if len(attentions) == 0:

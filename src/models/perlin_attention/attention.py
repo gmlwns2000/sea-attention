@@ -1289,7 +1289,7 @@ class PerlinAttention(nn.Module):
             get_bench().register_temp_buffer('partial_context_layer_sparse', partial_context_layer)
             
             if self.pconfig.context_output_method == 'norm':
-                raise Exception("if needed, please comment this")
+                # raise Exception("if needed, please comment this")
                 with timer("out"):
                     if not self.pconfig.random_lookup:
                         normalized_partial_context_layer = self.norm_partial(partial_context_layer)
