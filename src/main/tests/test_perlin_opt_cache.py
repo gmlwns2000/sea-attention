@@ -118,7 +118,7 @@ def main():
     
     # sample dense
     with torch.no_grad():
-        output = model(input_ids) # use_cache settled to true
+        output = model(input_ids)
     
     buffers_truth = {}
     for name in TRACKING_BUFFERS:

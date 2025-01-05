@@ -241,7 +241,7 @@ class PerlinAttentionState:
             self.num_heads = parent.num_attention_heads
             self.head_dim = parent.attention_head_size
             self.embd_dim = parent.all_head_size
-        self.max_seq_length = 768 # JJ need to be changed
+        self.max_seq_length = 768
         
         self.states = {}
     

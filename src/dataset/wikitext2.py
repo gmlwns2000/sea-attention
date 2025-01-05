@@ -39,7 +39,7 @@ class ChunkedIterator:
                 self.ichunk += 1
                 return chunk
 
-class Wikitext2Dataset(Dataset): # WHY I think stride should be max_seq_len//2, with max_seq_len%2==0
+class Wikitext2Dataset(Dataset):
     def __init__(self, subset, tokenizer, stride=2048, max_length=None, strided_indexing=None):
         super().__init__()
         
@@ -175,7 +175,7 @@ class Wikitext2Dataset(Dataset): # WHY I think stride should be max_seq_len//2, 
         
         input_ids = self.encodings[:, begin_loc:end_loc]
         target_ids = input_ids.clone()
-        target_ids[:, :-trg_len] = -100 # WHY not working properly
+        target_ids[:, :-trg_len] = -100
         
         if self.check_last_shape:
             if self.last_shape is not None:
