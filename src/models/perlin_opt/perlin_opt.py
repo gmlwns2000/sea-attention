@@ -15,6 +15,7 @@
 """ PyTorch OPT model."""
 import gc
 import os
+import random
 from turtle import hideturtle
 import warnings
 from ..perlin_attention import get_default_config, PerlinAttentionOutput
@@ -72,6 +73,7 @@ OPT_PRETRAINED_MODEL_ARCHIVE_LIST = [
     # See all OPT models at https://huggingface.co/models?filter=opt
 ]
 
+timer = lambda name: get_bench().region(name)
 
 # Copied from transformers.models.bart.modeling_bart._make_causal_mask
 def _make_causal_mask(
@@ -128,6 +130,9 @@ class OPTLearnedPositionalEmbedding(nn.Embedding):
 
         return super().forward(positions + self.offset)
 
+DEFAULT_METHOD = 'none'
+
+from ..common.lora import LoraLinear, lora_forward
 
 class OPTAttention(nn.Module):
     _counter = 0
@@ -140,6 +145,7 @@ class OPTAttention(nn.Module):
         dropout: float = 0.0,
         is_decoder: bool = False,
         bias: bool = True,
+        config: OPTConfig = None,
     ):
         super().__init__()
         
@@ -167,47 +173,53 @@ class OPTAttention(nn.Module):
         # for project
         self.checkout_intermediates = False
         self.benchmarking = False
-        self.attention_method = 'none'
+        self.attention_method = DEFAULT_METHOD
         
         from ..perlin_attention import PerlinSelfAttention, get_default_config
         pconfig = get_default_config()
         
+        if pconfig.lora_enabled:
+            self.perlin_out_lora = LoraLinear(embed_dim, embed_dim, pconfig.lora_r)
+        
         ### sinkhorn
         from sinkhorn_transformer.sinkhorn_transformer import SinkhornCausalAttention
-        if os.environ.get("PERLIN_IGNORE_SINKHORN", "0") == "0":
-            self.perlin_sinkhorn_atten = SinkhornCausalAttention(
-                bucket_size=pconfig.k,
-                dim=self.embed_dim,
-                dim_heads=self.head_dim,
-                heads=self.num_heads,
-                max_seq_len=2048,
-                dropout=dropout,
-            )
-        else:
-            warnings.warn("sinkhorn ignored")
+        if self.attention_method == 'sinkhorn' or DEFAULT_METHOD == 'any':
+            if os.environ.get("PERLIN_IGNORE_SINKHORN", "0") == "0":
+                self.perlin_sinkhorn_atten = SinkhornCausalAttention(
+                    bucket_size=pconfig.k,
+                    dim=self.embed_dim,
+                    dim_heads=self.head_dim,
+                    heads=self.num_heads,
+                    max_seq_len=2048,
+                    dropout=dropout,
+                )
+            else:
+                warnings.warn("sinkhorn ignored")
             
         ### cosformer
         from ..cosformer import CosformerAttention
-        if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
-            self.perlin_cosformer_atten = CosformerAttention(
-                embed_dim=self.embed_dim,
-                num_heads=self.num_heads,
-                has_outproj=False,
-                causal=True,
-            )
-        else:
-            warnings.warn("cosformer ignored")
+        if self.attention_method == 'cosformer' or DEFAULT_METHOD == 'any':
+            if os.environ.get("PERLIN_IGNORE_COSFORMER", "0") == "0":
+                self.perlin_cosformer_atten = CosformerAttention(
+                    embed_dim=self.embed_dim,
+                    num_heads=self.num_heads,
+                    has_outproj=False,
+                    causal=True,
+                )
+            else:
+                warnings.warn("cosformer ignored")
         
         ### reformer
         from reformer_pytorch.reformer_pytorch import LSHAttention
         
-        self.perlin_reformer_atten = LSHAttention(
-            dropout=dropout,
-            bucket_size=32, # this will re adjust atomatically
-            n_hashes=pconfig.reformer_n_hashs,
-            return_attn=False,
-            causal=True,
-        )
+        if self.attention_method == 'reformer' or DEFAULT_METHOD == 'any':
+            self.perlin_reformer_atten = LSHAttention(
+                dropout=dropout,
+                bucket_size=32, # this will re adjust atomatically
+                n_hashes=pconfig.reformer_n_hashs,
+                return_attn=False,
+                causal=True,
+            )
         
         ### perlin
         from transformers.models.bert.configuration_bert import BertConfig
@@ -222,7 +234,7 @@ class OPTAttention(nn.Module):
         self.teacher_attention_scores = None
         self.teacher_context_layer = None
         self.perlin_self_attention = PerlinSelfAttention(
-            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads),
+            BertConfig(hidden_size=embed_dim, num_attention_heads=num_heads, max_position_embeddings=config.max_position_embeddings),
             perlin_config=self.pconfig,
         )
         self.last_loss = None
@@ -252,7 +264,7 @@ class OPTAttention(nn.Module):
         # if self.layer_id == 0:
         #     print(f'attention(q={q.shape}, kv={v.shape}, m={attention_mask.shape})')
         
-        if self.attention_method == 'none':
+        if self.attention_method == "none":
             attn_weights = torch.bmm(q, k.transpose(1, 2))
 
             if attn_weights.size() != (N * H, T_DST, T_SRC):
@@ -278,15 +290,6 @@ class OPTAttention(nn.Module):
             else:
                 attn_weights = nn.functional.softmax(attn_weights, dim=-1)
 
-            # if layer_head_mask is not None:
-            #     if layer_head_mask.size() != (self.num_heads,):
-            #         raise ValueError(
-            #             f"Head mask for a single layer should be of size {(self.num_heads,)}, but is"
-            #             f" {layer_head_mask.size()}"
-            #         )
-            #     attn_weights = layer_head_mask.view(1, -1, 1, 1) * attn_weights.view(bsz, self.num_heads, tgt_len, src_len)
-            #     attn_weights = attn_weights.view(bsz * self.num_heads, tgt_len, src_len)
-
             if True:
                 # this operation is a bit awkward, but it's required to
                 # make sure that attn_weights keeps its gradient.
@@ -300,12 +303,6 @@ class OPTAttention(nn.Module):
             attn_probs = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
 
             attn_output = torch.bmm(attn_probs, v)
-
-            # if attn_output.size() != (N * self.num_heads, T_DST, self.head_dim):
-            #     raise ValueError(
-            #         f"`attn_output` should be of size {(bsz, self.num_heads, tgt_len, self.head_dim)}, but is"
-            #         f" {attn_output.size()}"
-            #     )
 
             attn_output = attn_output.view(N, H, T_DST, HID)
             attn_output = attn_output.transpose(1, 2)
@@ -337,15 +334,16 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = F.pad(q, (0,0,0,to_pad_dst)).float()
                 v = F.pad(v, (0,0,0,to_pad_src)).float()
-                binary_mask = F.pad(binary_mask.expand(N, 1, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().view(N, TP_DST, TP_SRC)
+                binary_mask = F.pad(binary_mask.expand(N, H, T_DST, T_SRC), (0,to_pad_src, 0,to_pad_dst), value=0.0).bool().reshape(N*H, TP_DST, TP_SRC)
                 assert q.shape == (N, H, T_DST + to_pad_dst, HID)
             else:
                 q = q.float()
                 v = v.float()
-                binary_mask = binary_mask.expand(N, 1, T_DST, T_SRC).bool().view(N, T_DST, T_SRC)
+                binary_mask = binary_mask.expand(N, H, T_DST, T_SRC).bool().reshape(N*H, T_DST, T_SRC)
             def merge_head(t: torch.Tensor):
                 N, H, T, HID = t.shape
-                return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                # return t.permute(0, 2, 1, 3).contiguous().view(N, T, H*HID)
+                return t.permute(0, 1, 2, 3).contiguous().view(N*H, T, HID)
             q = merge_head(q)
             v = merge_head(v)
             self.perlin_reformer_atten.bucket_size = bucket_size
@@ -359,10 +357,10 @@ class OPTAttention(nn.Module):
             if to_pad_src != 0 or to_pad_dst != 0:
                 q = None
                 v = None
-                reformer_context_layer = reformer_context_layer.view(N, TP_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, TP_DST, HID)#.permute(0, 2, 1, 3)
                 reformer_context_layer = reformer_context_layer[:, :, :T_DST, :]
             else:
-                reformer_context_layer = reformer_context_layer.view(N, T_DST, H, HID).permute(0, 2, 1, 3)
+                reformer_context_layer = reformer_context_layer.reshape(N, H, T_DST, HID)#.permute(0, 2, 1, 3)
             
             if not self.benchmarking:
                 attention_probs = torch.zeros((N, H, T_DST, T_SRC), device=reformer_context_layer.device, dtype=reformer_context_layer.dtype)
@@ -438,6 +436,21 @@ class OPTAttention(nn.Module):
             k = k.view(N, H, T_SRC, HID)
             v = v.view(N, H, T_SRC, HID)
             
+            if callable(self.teacher_context_layer):
+                context_layer_truth = lambda: self.teacher_context_layer()\
+                        .view(N, H, T_DST, HID)\
+                        .transpose(1, 2)\
+                        .reshape(N, T_DST, H*HID) \
+                    if self.teacher_context_layer is not None \
+                    else None
+            else:
+                context_layer_truth = self.teacher_context_layer\
+                        .view(N, H, T_DST, HID)\
+                        .transpose(1, 2)\
+                        .reshape(N, T_DST, H*HID) \
+                    if self.teacher_context_layer is not None \
+                    else None
+            
             output = self.perlin_self_attention(
                 query = self.q_proj,
                 key = self.k_proj,
@@ -448,15 +461,10 @@ class OPTAttention(nn.Module):
                 value_layer = v,
                 attention_mask = attention_mask,
                 attention_scores_truth = self.teacher_attention_scores,
-                context_layer_truth = \
-                    self.teacher_context_layer\
-                        .view(N, H, T_DST, HID)\
-                        .transpose(1, 2)\
-                        .reshape(N, T_DST, H*HID) \
-                    if self.teacher_context_layer is not None \
-                    else None,
+                context_layer_truth = context_layer_truth,
                 last_state = last_state,
             ) #type: PerlinAttentionOutput
+            # return q, None, None #TODO REMOVE
             self.last_loss = output.loss
             if not self.benchmarking and self.checkout_perlin_output:
                 warnings.warn("you are checking-out LARGE buffers!!")
@@ -541,17 +549,19 @@ class OPTAttention(nn.Module):
         
         # deepspeed fp32 support, convert fp32
         op_dtype = torch.float16 if self.q_proj.weight.dtype == torch.float16 else hidden_states.dtype
-        if op_dtype != hidden_states:
+        if op_dtype != hidden_states.dtype:
             hidden_states = hidden_states.to(op_dtype)
-        if op_dtype != attention_mask and attention_mask is not None:
+        if attention_mask is not None and op_dtype != attention_mask.dtype:
             attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
-        if op_dtype != layer_head_mask and layer_head_mask is not None:
+        if layer_head_mask is not None and op_dtype != layer_head_mask.dtype:
             layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
 
         bsz, tgt_len, _ = hidden_states.size()
 
         # get query proj
         query_states = self.q_proj(hidden_states) * torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
+        self.q_proj.scaling = torch.tensor(self.scaling, dtype=op_dtype, device=hidden_states.device)
+        
         past_state = None
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -607,6 +617,9 @@ class OPTAttention(nn.Module):
         elif len(outputs) == 3:
             attn_output, attn_weights_reshaped, attn_state = outputs
         else: raise Exception()
+        
+        if not output_attentions:
+            attn_weights_reshaped = None
 
         if attn_output.dtype != op_dtype:
             attn_output = attn_output.to(op_dtype)
@@ -614,7 +627,10 @@ class OPTAttention(nn.Module):
         if attn_state is not None:
             past_key_value = (*past_key_value, attn_state)
 
-        attn_output = self.out_proj(attn_output)
+        if self.pconfig.lora_enabled:
+            attn_output = lora_forward(self.out_proj, self.perlin_out_lora, attn_output, True)
+        else:
+            attn_output = self.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
 
@@ -622,6 +638,7 @@ class OPTAttention(nn.Module):
 class OPTDecoderLayer(nn.Module):
     def __init__(self, config: OPTConfig):
         super().__init__()
+        
         self.embed_dim = config.hidden_size
         self.self_attn = OPTAttention(
             embed_dim=self.embed_dim,
@@ -629,6 +646,7 @@ class OPTDecoderLayer(nn.Module):
             dropout=config.attention_dropout,
             is_decoder=True,
             bias=config.enable_bias,
+            config=config
         )
         self.do_layer_norm_before = config.do_layer_norm_before
         self.dropout = config.dropout
@@ -654,6 +672,7 @@ class OPTDecoderLayer(nn.Module):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
+    
         """
         Args:
             hidden_states (`torch.FloatTensor`): input to the layer of shape `(batch, seq_len, embed_dim)`
@@ -674,16 +693,16 @@ class OPTDecoderLayer(nn.Module):
         device = attention_mask.device
         if device != hidden_states.device:
             hidden_states = batch_to(hidden_states, device)
-            
+        
         # deepspeed fp32 support, convert fp32
         op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
-        if op_dtype != hidden_states:
+        if op_dtype != hidden_states.dtype:
             hidden_states = hidden_states.to(op_dtype)
-        if op_dtype != attention_mask and attention_mask is not None:
+        if attention_mask is not None and op_dtype != attention_mask.dtype:
             attention_mask = torch.clamp_min(attention_mask, torch.finfo(op_dtype).min).to(op_dtype)
-        if op_dtype != layer_head_mask and layer_head_mask is not None:
+        if layer_head_mask is not None and op_dtype != layer_head_mask.dtype:
             layer_head_mask = torch.clamp_min(layer_head_mask, torch.finfo(op_dtype).min).to(op_dtype)
-
+        
         # if layerwise, detach!
         if self.train_layerwise:
             if hidden_states.requires_grad:
@@ -706,7 +725,7 @@ class OPTDecoderLayer(nn.Module):
                 hidden_states = checkpoint.checkpoint(before_self_atten, hidden_states, preserve_rng_state=True)
             else:
                 hidden_states = before_self_atten(hidden_states)
-
+    
         # Self Attention
         hidden_states, self_attn_weights, present_key_value = self.self_attn(
             hidden_states=hidden_states,
@@ -717,10 +736,12 @@ class OPTDecoderLayer(nn.Module):
             use_cache=use_cache,
         )
         
+        # return
+        
         def after_self_atten(residual, hidden_states):
             # deepspeed fp32 support, convert fp32
             op_dtype = torch.float16 if self.fc1.weight.dtype == torch.float16 else hidden_states.dtype
-            if op_dtype != hidden_states:
+            if op_dtype != hidden_states.dtype:
                 hidden_states = hidden_states.to(op_dtype)
             
             hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -901,6 +922,8 @@ class OPTDecoder(OPTPreTrainedModel):
         self.embed_tokens = nn.Embedding(config.vocab_size, config.word_embed_proj_dim, self.padding_idx)
         self.embed_positions = OPTLearnedPositionalEmbedding(config.max_position_embeddings, config.hidden_size)
 
+        # print(config)
+        
         if config.word_embed_proj_dim != config.hidden_size:
             self.project_out = nn.Linear(config.hidden_size, config.word_embed_proj_dim, bias=False)
         else:
@@ -1185,14 +1208,24 @@ class OPTDecoder(OPTPreTrainedModel):
                 #         print('leak obj', strify(t), t.element_size()*t.numel())
                 #         print('refs', [type(i) for i in r])
             else:
-                layer_outputs = decoder_layer(
-                    hidden_states,
-                    attention_mask=causal_attention_mask,
-                    layer_head_mask=(head_mask[idx] if head_mask is not None else None),
-                    past_key_value=past_key_value,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                )
+                with timer('opt.layer'):
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # start_mem = torch.cuda.max_memory_allocated()
+                    layer_outputs = decoder_layer(
+                        hidden_states,
+                        attention_mask=causal_attention_mask,
+                        layer_head_mask=(head_mask[idx] if head_mask is not None else None),
+                        past_key_value=past_key_value,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                    )
+                    # end_mem = torch.cuda.max_memory_allocated()
+                    # torch.cuda.synchronize()
+                    # gc.collect()
+                    # torch.cuda.empty_cache()
+                    # print((end_mem - start_mem) / 1024 / 1024)
 
             hidden_states = layer_outputs[0]
 
@@ -1474,6 +1507,7 @@ class OPTForCausalLM(OPTPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+            
         outputs = self.model.decoder(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1485,6 +1519,15 @@ class OPTForCausalLM(OPTPreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+        
+        # if random.random() < 1/10 and not get_bench().disabled:
+        #     print(get_bench().format_tracetree())
+        # else:
+        #     print('forward', input_ids.shape)
+        
+        if not get_bench().disabled:
+            print(get_bench().format_tracetree(), flush=True)
+            input()
 
         logits = self.lm_head(outputs[0].to(torch.float16 if self.lm_head.weight.dtype == torch.float16 else outputs[0].dtype)).contiguous()
 
