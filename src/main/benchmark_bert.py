@@ -1,4 +1,6 @@
+import copy
 from dataclasses import dataclass
+import math
 from matplotlib import pyplot as plt
 import torch.multiprocessing as mp
 import os, tqdm, gc
@@ -17,8 +19,15 @@ from ..models.perlin_opt import OPTModel, OPTAttention, OPTDecoderLayer
 from ..utils import seed, get_bench
 from torch import nn
 import json
+from ..models import perlin_opt
+
+perlin_opt.perlin_opt.DEFAULT_METHOD = 'any'
+
+os.environ['PERLIN_COMPILE'] = '1'
+torch.set_float32_matmul_precision('high')
 
 plt.style.use('seaborn-bright')
+plt.rcParams['font.family'] = 'Noto Sans, Dejavu Sans'
 
 @dataclass
 class BenchConfig:
@@ -30,10 +39,12 @@ class BenchConfig:
     seq_len: int = 4096
     k: int = 64
     w: int = None
-    nbf: float = 1
+    nbf: float = 8
     trace: bool = True
     causal: bool = False
     n_hash: int = 8
+    opt_model: str = 'facebook/opt-125m'
+    small_head: bool = False
 
 def bench(name, fn, config: BenchConfig, on_warmup=None):
     sample_count = 0
@@ -41,16 +52,20 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         torch.cuda.synchronize()
         print(f'[{name}] warmup... ', end = '', flush=True)
         t = time.time()
+        sample_count = 0
         while True:
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
+            sample_count += 1
             if time.time() - t > config.t_warmup:
+                break
+            if sample_count > 5:
                 break
         if on_warmup is not None:
             on_warmup()
         torch.cuda.synchronize()
-        gc.collect()
-        torch.cuda.empty_cache()
+        # gc.collect()
+        # torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         start_mem = torch.cuda.max_memory_allocated()
         torch.cuda.synchronize()
@@ -58,16 +73,16 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
         elapsed = 0
         last_report = time.time()
         t = time.time()
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        sample_count = 0
         while True:
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            
-            start.record()
             with torch.no_grad(), torch.autocast('cuda', config.precision):
                 fn()
-            end.record()
-            torch.cuda.synchronize()
-            elapsed += start.elapsed_time(end) / 1000
+            # torch.cuda.synchronize()
+            # elapsed += start.elapsed_time(end) / 1000
+            # samples.append((start, end))
             
             sample_count += 1
             if time.time() - t > config.t_sample:
@@ -75,7 +90,12 @@ def bench(name, fn, config: BenchConfig, on_warmup=None):
             if time.time() - last_report > 0.5:
                 last_report = time.time()
                 print('.', end='', flush=True)
+            if config.method in ['flash', 'none'] and sample_count > min(max((((2**17)**2) / (config.seq_len**2)), 10), 200):
+                break
+        end.record()
         torch.cuda.synchronize()
+        # elapsed = sum(s.elapsed_time(e) / 1000 for s, e in samples)
+        elapsed = start.elapsed_time(end) / 1000
         mem = torch.cuda.max_memory_allocated() - start_mem
     except torch.cuda.OutOfMemoryError as ex: # type: ignore
         mem = 0
@@ -99,36 +119,45 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     method = bench_config.method
     
     device = torch.device('cuda')
+    
+    # print(SEQ_LEN)
 
     if bench_config.w is None:
         pred_len = 128
-        if bench_config.seq_len >= 2048:
-            pred_len = 256
-        elif bench_config.seq_len >= 4096:
-            pred_len = 256
-        elif bench_config.seq_len >= 8192:
-            pred_len = 512
-        elif bench_config.seq_len >= 16384:
-            pred_len = 1024
+        # pred_len = 64
+        # if bench_config.seq_len >= 2048:
+        #     pred_len = 128
+        # elif bench_config.seq_len >= 4096:
+        #     pred_len = 256
+        # elif bench_config.seq_len >= 8192:
+        #     pred_len = 256
+        # elif bench_config.seq_len >= 16384:
+        #     pred_len = 256
     else:
         pred_len = bench_config.w
 
     register_default_config(PerlinAttentionConfig(
-        performer_nb_factor=bench_config.nbf if method == 'perlin' or (method == 'performer' and bench_config.causal) else 1,
-        lora_enabed=False,
+        performer_nb_factor=bench_config.nbf if (method in ['perlin', 'performer']) else 1,
+        lora_enabled=False,
         lora_in_approx_enabled=False,
         partial_attention_scaler=True,
         k_flatten=True,
         k=bench_config.k,
-        attention_predictor_length=pred_len
+        attention_predictor_length=pred_len,
+        causal=bench_config.causal,
     ))
     if not bench_config.causal:
         config = AutoConfig.from_pretrained('bert-base-uncased')
         config.max_position_embeddings = SEQ_LEN
+        if bench_config.small_head:
+            config.num_attention_heads = 1
+            config.num_hidden_layers = 1
+            config.hidden_size = 128
         perlin = BertModel(config).eval()
     else:
-        config = AutoConfig.from_pretrained('facebook/opt-125m')
-        # config.max_position_embeddings = SEQ_LEN
+        config = AutoConfig.from_pretrained(bench_config.opt_model)
+        config.max_position_embeddings = SEQ_LEN
+        # print(config)
         perlin = OPTModel(config).eval()
     for module in perlin.modules():
         if isinstance(module, BertSelfAttention):
@@ -161,6 +190,8 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
         attention_mask = (torch.arange(0, SEQ_LEN).view(SEQ_LEN, 1) >= torch.arange(0, SEQ_LEN).view(1, SEQ_LEN)) * 1.0
         hidden_states = torch.randn((BSIZE, SEQ_LEN, config.hidden_size), device=device, dtype=BENCH_PRECISION)
         attention_mask_expand = attention_mask.to(device).view(1, 1, SEQ_LEN, SEQ_LEN)
+        attention_mask_expand = (1-attention_mask_expand)*(-32000)
+        attention_mask_expand = attention_mask_expand.expand(BSIZE, 1, SEQ_LEN, SEQ_LEN)
         
         layer = perlin.decoder.layers[0] # type: OPTDecoderLayer
         fc1 = nn.Identity()
@@ -195,7 +226,11 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     get_bench().disabled = True
     get_bench().synchronize = False
     
-    result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}', test_layer, bench_config)
+    # torch.cuda.synchronize()
+    # gc.collect()
+    # torch.cuda.empty_cache()
+    
+    result_interval, result_mem = bench(f'{method},{bench_config.seq_len}{f",{bench_config.k}" if method == "perlin" else ""}{f",{bench_config.nbf}" if method == "perlin" else ""}{f",{bench_config.w}" if method == "perlin" else ""}', test_layer, bench_config)
     # print(result_interval, BSIZE)
     result_interval = result_interval / BSIZE
     result_mem = result_mem / BSIZE
@@ -203,30 +238,65 @@ def exam(bench_config: BenchConfig, return_queue: mp.Queue):
     if return_queue is not None:
         return_queue.put((result_interval, result_mem))
 
-def exam_config(config: BenchConfig):
-    q = mp.Queue()
-    proc = mp.Process(target=exam, args=(config, q), daemon=True)
-    proc.start()
-    proc.join()
-    return q.get()
+def exam_config(config: BenchConfig, using_mp=False, find_bsize=True, target_mem=6000):
+    if (find_bsize and config.seq_len <= 81920):
+        find_config = copy.deepcopy(config)
+        find_config.t_warmup = 0
+        find_config.t_sample = 0
+        _, mem = exam_config(find_config, using_mp=using_mp, find_bsize=False)
+        if mem == 0:
+            return 0, 0
+        mem = mem / 1024 / 1024
+        bsize = max(1, min(128, math.floor(target_mem / mem)))
+        if config.method == 'flash':
+            bsize = min(bsize, max(1, int((16384**2)/(config.seq_len**2))))
+        print('found bsize', bsize)
+        config.bsize = bsize
+        return exam_config(config, using_mp=using_mp, find_bsize=False)
+    else:
+        if not using_mp:
+            q = mp.Queue()
+            exam(config, q)
+            torch.cuda.synchronize()
+            gc.collect()
+            torch.cuda.empty_cache()
+            return q.get()
+        else:
+            q = mp.Queue()
+            proc = mp.Process(target=exam, args=(config, q), daemon=True)
+            proc.start()
+            proc.join()
+            return q.get()
 
-BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+# BASELINES = ['none', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+# BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+BASELINES = ['none', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+HAS_FLASH = os.environ.get('FLASH', '0') == '1'
+if HAS_FLASH:
+    BASELINES = ['none', 'flash', 'cosformer', 'performer', 'reformer', 'scatterbrain', 'sinkhorn', 'synthesizer']
+# BASELINES = ['none',]
 
 def main_methods():
     for method in BASELINES:
         exam_config(BenchConfig(
-            method=method
+            method=method,
+            small_head=True,
         ))
     
 def measure_and_dump():
+    TRACE = False
     precision = torch.float32
     
     baseline_methods = BASELINES
     ts = [2**x for x in range(10, 16)]
-    ks = [2**x for x in range(3, 8)]
-    ks = [32,64,128,]
-    # ts = [2048]
-    # ks = [8]
+    if HAS_FLASH:
+        ts = [2**x for x in range(12, 18)]
+        # ts = [2**17]
+    # ks = [2**x for x in range(3, 8)]
+    ks = [32, 64, 128,]
+    # ks = [32]
+    # ts = [1024*32]
+    # ks = [32]
     # ts = [2**x for x in range(13, 13)]
     # ks = [2**x for x in range(5, 7)]
     
@@ -236,7 +306,9 @@ def measure_and_dump():
                 precision=precision,
                 method='perlin',
                 seq_len=t,
-                k=k
+                k=k,
+                trace=TRACE,
+                small_head=True,
             ))
             for t in ts
         ]
@@ -249,6 +321,8 @@ def measure_and_dump():
                 precision=precision,
                 method=method,
                 seq_len=t,
+                trace=False,
+                small_head=True,
             ))
             for t in ts
         ]
@@ -284,7 +358,7 @@ def measure_and_dump():
             'baseline_methods': baseline_methods,
             'ts': ts,
             'ks': ks,
-        }, f)
+        }, f, indent=2)
 
 def load_and_plot():
     baseline_methods = BASELINES
@@ -300,71 +374,172 @@ def load_and_plot():
     ts = data['ts']
     ks = data['ks']
     
-    def plot(filename, title, ylabel, baselines, perlins, ts, ks):
-        plt.clf()
+    def plot(ax, filename, title, ylabel, baselines, perlins, ts, ks):
+        NAMES = {
+            'none': 'None',
+            'flash': 'FlashAttention',
+            'cosformer': 'Cosformer',
+            'performer': 'Performer',
+            'reformer': 'Reformer',
+            'scatterbrain': 'ScatterBrain',
+            'sinkhorn': 'Sinkhorn',
+            'synthesizer': 'Synthesizer',
+        }
+        
+        LINESTYLE = {
+            'none': '--',
+            'flash': '--',
+            'cosformer': ':',
+            'performer': ':',
+            'reformer': ':',
+            'scatterbrain': ':',
+            'sinkhorn': ':',
+            'synthesizer': ':',
+            'perlin': '-',
+        }
         
         MARKERS = {
             'none': '>',
+            'flash': '<',
+            'cosformer': '+',
             'performer': 'v',
             'reformer': '^',
             'scatterbrain': 'x',
             'sinkhorn': 'h',
-            'synthesizer': '.',
+            'synthesizer': 'd',
         }
         
+        MARKER_SIZE = {
+            'none': 5,
+            'flash': 5,
+            'cosformer': 5,
+            'performer': 5,
+            'reformer': 5,
+            'scatterbrain': 5,
+            'sinkhorn': 5,
+            'synthesizer': 3,
+            'perlin': 7,
+        }
+        
+        COLORS = {
+            'none': 'mediumslateblue',
+            'flash': '#a7a',
+            'cosformer': 'gray',
+            'performer': 'lightcoral',
+            'reformer': '#788bfa',
+            'scatterbrain': '#3debc2',
+            'sinkhorn': 'lightskyblue',
+            'synthesizer': 'gold',
+            'perlin_0': 'red',
+            'perlin_1': 'darkorange',
+            'perlin_2': 'limegreen',
+        }
+        
+        xs_est = ts
+        ys_est = copy.deepcopy(baselines[BASELINES.index('none')])
+        y_slope = ys_est[1] / ys_est[0]
+        y_last = ys_est[1]
+        assert not math.isnan(y_last)
+        for i in range(2, len(ys_est)):
+            if math.isnan(ys_est[i]):
+                ys_est[i] = ys_est[i-1] * y_slope
+            y_slope = ys_est[i] / y_last
+            y_last = ys_est[i]
+        
+        ax.plot(
+            xs_est, 
+            ys_est, 
+            linestyle=':', 
+            linewidth=0.5,
+            label='None (Trend)',
+            marker='4',
+            markersize = MARKER_SIZE['none'],
+            color=COLORS['none'],
+        )
+        
         for iy, ys in enumerate(baselines):
-            plt.plot(
+            if 'scatter' in NAMES[baseline_methods[iy]].lower(): continue
+            ax.plot(
                 ts, 
                 ys, 
-                label=baseline_methods[iy], 
-                linestyle='--', 
+                label=NAMES[baseline_methods[iy]], 
+                linestyle=LINESTYLE[baseline_methods[iy]], 
                 linewidth=0.75,
                 marker=MARKERS[baseline_methods[iy]],
+                markersize=MARKER_SIZE[baseline_methods[iy]],
+                color=COLORS[baseline_methods[iy]],
             )
         for ik, k in enumerate(ks):
-            plt.plot(
+            ax.plot(
                 ts, 
                 perlins[ik], 
-                label=f'Ours (k={k})', 
-                linewidth=0.75,
+                label=f'Ours ($k$={k})', 
+                linewidth=1.0,
                 marker='*',
+                markersize=MARKER_SIZE['perlin'],
+                color=COLORS[f'perlin_{ik}'],
             )
         
-        plt.title(f'{title}')
-        plt.xlabel(f'tokens')
-        plt.ylabel(f'{ylabel}')
-        plt.yscale('log', base=2)
-        plt.xscale('log', base=2)
-        plt.grid()
-        plt.legend(fontsize=8)
+        ax.set_title(f'{title}', fontweight=500)
+        ax.set_xlabel(f'Sequence Length', fontweight=500)
+        ax.set_ylabel(f'{ylabel}', fontweight=500)
+        ax.set_yscale('log', base=2)
+        ax.set_xscale('log', base=2)
+        ax.grid(True)
+        ax.set_xticks(ts)
+        # plt.legend(fontsize=6, ncols=2)
         
-        path = os.path.join(root, f'{filename}.png')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
-        path = os.path.join(root, f'{filename}.pdf')
-        plt.savefig(path, dpi=300, bbox_inches='tight')
-        print('saved', path)
+        # path = os.path.join(root, f'{filename}.png')
+        # plt.savefig(path, dpi=300, bbox_inches='tight')
+        # print('saved', path)
+        # path = os.path.join(root, f'{filename}.pdf')
+        # plt.savefig(path, dpi=300, bbox_inches='tight')
+        # print('saved', path)
+    
+    nrows = 1
+    ncols = 2
+    fig, axs = plt.subplots(nrows, ncols)
+    if not HAS_FLASH:
+        fig.set_figwidth(3.2*ncols+1.2)
+        fig.set_figheight(2.4)
+    else:
+        fig.set_figwidth(4*ncols+1.5)
+        fig.set_figheight(3)
     
     plot(
+        axs[1],
         'exp_latency', 
-        'Latency Comparison', 'ms/it', 
+        'Latency', 'ms ↓', 
         latencies_baseline, 
         latencies_perlin, 
         ts, 
         ks
     )
+    
+    fig.legend(fontsize=8, ncols=1, loc='center right', bbox_to_anchor=(1, 0.5))
+    
     plot(
+        axs[0],
         'exp_vram', 
-        'Peak VRAM Usage Comparison', 
-        'MB', 
+        'Peak VRAM Usage', 
+        'MB ↓', 
         vram_baseline, 
         vram_perlin, 
         ts, 
         ks
     )
+    
+    fig.subplots_adjust(wspace=0.27, right=0.83)
+    
+    path = os.path.join(root, f'exp_latency_memory.png')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
+    path = os.path.join(root, f'exp_latency_memory.pdf')
+    plt.savefig(path, bbox_inches='tight')
+    print('saved', path)
 
 def main_plot():
-    measure_and_dump()
+    # measure_and_dump()
     load_and_plot()
 
 if __name__ == '__main__':

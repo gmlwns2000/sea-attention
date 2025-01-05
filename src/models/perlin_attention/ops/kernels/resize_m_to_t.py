@@ -10,6 +10,8 @@ def resize_from_m_to_t(
     target_width: int=None, 
     training=False,
     is_causal=True,
+    k=None,
+    oversampled=None,
 ):
     assert masked_fill_value is not None
     N, H, T1, T_M = x.shape
@@ -35,11 +37,12 @@ def resize_from_m_to_t(
     mask_cs = mask.cumsum(-1)
     token_length = mask_cs[:, :, :, -1].unsqueeze(-1) 
     if training:
-        mask_cs = torch.clamp(
-            mask_cs + (torch.rand_like(mask_cs) * 4 - 2), 
-            torch.ones((1,1,1,1,), device=x.device), 
-            mask_cs.max(dim=-1, keepdim=True)[1]
-        )
+        if random.random() < 0.1:
+            mask_cs = torch.clamp(
+                mask_cs + (torch.rand_like(mask_cs) * 1.5 - 0.75), 
+                torch.ones((1,1,1,1,), device=x.device), 
+                mask_cs.max(dim=-1, keepdim=True)[1]
+            )
     token_index_x = torch.floor(((mask_cs - 1) + 0.5) / token_length * T_M - 1e-4).to(torch.long) + ((1 - mask) * T_M).to(torch.long)
     token_index_x = torch.clamp(token_index_x, 0, T_M)
     token_index_x = token_index_x.expand(N, H, T1, T2)
@@ -47,6 +50,26 @@ def resize_from_m_to_t(
     grid_input = F.pad(x, pad=(0, 1), value=masked_fill_value)
     assert grid_input.shape[-1] == (T_M + 1)
     output = grid_input.gather(dim=-1, index=token_index_x)
+    
+    if oversampled is not None:
+        # if oversampled in compressed one, we should undersample on uncompressed one.
+        # so mask out some pixels in perticular X index.
+        assert isinstance(oversampled, (float, int))
+        assert isinstance(k, (int, float))
+        
+        N, H, T1, T2 = output.shape
+        
+        xs = torch.arange(0, T2, device=token_length.device).view(1, 1, 1, T2)
+        ws = token_length # current width
+        ps = torch.clamp_min(torch.round(token_length / oversampled), 1) # how many total pixels
+        
+        # rounding error is smaller than ws pixel in ps
+        oys = torch.clamp(token_length, round(k), round(k*oversampled)) / k
+        # print(oys)
+        mask = torch.abs(((xs + 1) / ws * ps) - torch.round((xs + 1) / ws * ps)) <= ((1 / oys) * 0.5 + 1e-4)
+        # print(mask)
+        output.masked_fill_(~mask, value=masked_fill_value)
+    
     return output
 
 def test_main():

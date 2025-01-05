@@ -1,4 +1,5 @@
 import math
+import time
 import warnings
 from typing import Dict, List, Optional, Tuple
 
@@ -6,19 +7,24 @@ import torch
 import torch.nn.functional as F
 from torch import nn, optim
 
+BENCHMARKING = False
+
 def interpolate(x: torch.Tensor, size, interp_mode: str = None):
     if x.shape[-2:] == size: return x
     
     interp_mode = ('bilinear' if size[-1] >= x.shape[-1] else 'area') if interp_mode is None else interp_mode
     
-    if torch.get_autocast_gpu_dtype() == torch.bfloat16: # F interpolate is not supported on bf16
-        original_dtype = x.dtype
-        with torch.autocast('cuda', torch.float32):
-            if x.dtype != torch.float32:
-                x = x.to(torch.float32)
+    if not BENCHMARKING:
+        if torch.get_autocast_gpu_dtype() == torch.bfloat16: # F interpolate is not supported on bf16
+            original_dtype = x.dtype
+            with torch.autocast('cuda', torch.float32):
+                if x.dtype != torch.float32:
+                    x = x.to(torch.float32)
+                x = F.interpolate(x, size, mode=interp_mode)
+            if x.dtype != original_dtype:
+                x = x.to(original_dtype)
+        else:
             x = F.interpolate(x, size, mode=interp_mode)
-        if x.dtype != original_dtype:
-            x = x.to(original_dtype)
     else:
         x = F.interpolate(x, size, mode=interp_mode)
     
@@ -76,11 +82,13 @@ class UpsampleFP32(nn.Module):
     
     def forward(self, x):
         x_type = x.dtype
-        if x.dtype != self.dtype and ((torch.get_autocast_gpu_dtype() == torch.bfloat16) or (x.dtype == torch.bfloat16)):
-            x = x.to(self.dtype)
+        if not BENCHMARKING:
+            if x.dtype != self.dtype and ((torch.get_autocast_gpu_dtype() == torch.bfloat16) or (x.dtype == torch.bfloat16)):
+                x = x.to(self.dtype)
         x = F.interpolate(x, scale_factor=self.scale, mode='nearest')
-        if x_type != x.dtype:
-            x = x.to(x_type)
+        if not BENCHMARKING:
+            if x_type != x.dtype:
+                x = x.to(x_type)
         return x
     
 CAUSAL_CONV_FORCE_NON_CAUSAL = False
@@ -148,6 +156,9 @@ class CausalConv2d(nn.Module):
                 dilation=self.dilation, 
                 groups=1
             )
+        
+        # print(input.shape, weight.shape, weight.device, input.device, bias is None)
+        
         return F.conv2d(
             input=input, 
             weight=weight, 
@@ -159,8 +170,23 @@ class CausalConv2d(nn.Module):
         )
     
     def forward(self, x: torch.Tensor):
-        return self._conv_forward(
+        w = self.weight.masked_fill(self.weight_mask == 0, 0) if self.causal else self.weight
+        
+        # if w.shape[0] == w.shape[1]:
+        #     return x
+        # if w.shape[0] < w.shape[1]:
+        #     return x[:, :w.shape[0], ...]
+        
+        # torch.cuda.synchronize()
+        # t = time.time()
+        
+        y = self._conv_forward(
             input=x,
-            weight=self.weight.masked_fill(self.weight_mask == 0, 0) if self.causal else self.weight,
+            weight=w,
             bias=self.bias,
         )
+        
+        # torch.cuda.synchronize()
+        # print(time.time()-t)
+        
+        return y

@@ -38,22 +38,26 @@ import deepspeed
 
 bool2int = lambda x: 1 if x else 0
 
-def add_perlin_model_options(parser):
+def add_perlin_model_options(parser, context_output_method='norm', predictor_length=128, k=7, nbf=1.0, epl=False):
     parser.add_argument('--method', default='perlin', type=str)
     parser.add_argument('--layerwise', action='store_true', default=False)
     parser.add_argument('--enable-lora', action='store_true', default=False)
-    parser.add_argument('--k', default=7, type=int)
+    parser.add_argument('--k', default=k, type=int)
     parser.add_argument('--k-colwise', action='store_true', default=False)
     parser.add_argument('--k-flatten-dim', default='batch', type=str)
     parser.add_argument('--attention-predictor-method', default='mlp', type=str)
-    parser.add_argument('--performer-nb-feature-factor', default=1, type=float)
+    parser.add_argument('--performer-nb-feature-factor', default=nbf, type=float)
     parser.add_argument('--random-lookup', action='store_true', default=False)
     parser.add_argument('--random-lookup-count', default=3, type=int)
     parser.add_argument('--token-merging', action='store_true', default=False)
     parser.add_argument('--token-merging-preserve', default=0.2, type=float)
     parser.add_argument('--token-merging-ratio', default=0.5, type=float)
-    parser.add_argument('--predictor-length', default=128, type=int)
+    parser.add_argument('--predictor-length', default=predictor_length, type=int)
+    parser.add_argument('--predictor-backend', type=str, default='performer')
     parser.add_argument('--n-hashs', default=8, type=int)
+    parser.add_argument('--enc-per-layer', action='store_true', default=epl)
+    parser.add_argument('--context-output-method', default=context_output_method, type=str) # norm for BERT, mix for OPT
+    parser.add_argument('--k-oversample', default=1, type=float)
     return parser
 
 def parse_perlin_model_options(args):
@@ -63,7 +67,7 @@ def parse_perlin_model_options(args):
         'perlin_k_flatten':not args.k_colwise,
         'perlin_k_flatten_dim': args.k_flatten_dim,
         'perlin_layerwise':args.layerwise,
-        # NOTE HJ now lora is disable by default
+        # NOTE now lora is disable by default
         # 'perlin_lora':not args.disable_lora, 
         'perlin_lora':args.enable_lora,
         'perlin_attention_predictor_method':args.attention_predictor_method,
@@ -74,7 +78,11 @@ def parse_perlin_model_options(args):
         'perlin_token_merging_preserve': args.token_merging_preserve,
         'perlin_token_merging_ratio': args.token_merging_ratio,
         'perlin_predictor_length': args.predictor_length,
+        'perlin_predictor_backend': args.predictor_backend,
         'perlin_n_hashs': args.n_hashs,
+        'perlin_enc_per_layer': args.enc_per_layer,
+        'perlin_context_output_method': args.context_output_method,
+        'perlin_k_oversample': args.k_oversample, 
     }
     return kwargs
 
@@ -95,7 +103,11 @@ class BaseTrainer:
         perlin_token_merging_preserve = 0.2,
         perlin_token_merging_ratio = 0.5,
         perlin_predictor_length = 128,
+        perlin_predictor_backend = 'performer',
         perlin_n_hashs = 8,
+        perlin_enc_per_layer = False,
+        perlin_context_output_method = 'mix',
+        perlin_k_oversample = 1,
         compile = False,
         **kwargs,
     ) -> None:
@@ -109,15 +121,19 @@ class BaseTrainer:
         self.perlin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_random_lookup = perlin_random_lookup
         self.perlin_random_lookup_count = perlin_random_lookup_count
+        self.perlin_enc_per_layer = perlin_enc_per_layer
         
         self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio
         self.perlin_predictor_length = perlin_predictor_length
+        self.perlin_predictor_backend = perlin_predictor_backend
         self.perlin_n_hashs = perlin_n_hashs
+        self.perlin_context_output_method = perlin_context_output_method
+        self.perlin_k_oversample = perlin_k_oversample
         
-        # NOTE HJ default setting is defined in PerlinAttentionConfig dataclass
+        # NOTE default setting is defined in PerlinAttentionConfig dataclass
         self.perlin_config = perlin_attention.PerlinAttentionConfig(
             reformer_n_hashs = perlin_n_hashs,
             performer_nb_factor = perlin_performer_nb_feature_factor,
@@ -128,9 +144,13 @@ class BaseTrainer:
             random_lookup_count = perlin_random_lookup_count,
             attention_predictor_method = perlin_attention_predictor_method,
             attention_predictor_length=perlin_predictor_length,
+            attention_predictor_backend=perlin_predictor_backend,
+            attention_predictor_enc_per_layer=perlin_enc_per_layer,
             layerwise = perlin_layerwise,
-            lora_enabed = perlin_lora,
+            lora_enabled = perlin_lora,
             compile = compile,
+            context_output_method=perlin_context_output_method,
+            k_oversample=perlin_k_oversample,
         )
         perlin_attention.register_default_config(self.perlin_config)
     
@@ -163,29 +183,61 @@ class BaseTrainer:
                 if isinstance(module, perlin_opt.OPTDecoderLayer):
                     module.train_layerwise = True
                     print('layerwise patch', type(module))
-            if self.perlin_lora:
-                for name, param in model.named_parameters():
-                    if 'perlin' in name:
-                        param.requires_grad = True
-                    else:
-                        param.requires_grad = False
-                    # print(name, param.requires_grad)
+        
+        if self.perlin_lora:
+            # for name, param in model.named_parameters():
+            #     if ('perlin' in name) or ('embed' in name):
+            #         param.requires_grad = True
+            #         print('[EXPERIMENTAL] lora: grad on', name)
+            #     else:
+            #         param.requires_grad = False
+            #         print('[EXPERIMENTAL] lora: grad off', name)
+            #     # print(name, param.requires_grad)
+            pass
         
         return model
 
     def format_exp(self, name: str):
-        name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
-        name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten_dim}' if self.perlin_k_flatten_dim != 'batch' else ''
-        name_lora = '_full' if not self.perlin_lora else ''
-        name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
-        name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
-        name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
-        name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
-        name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
-        name = f'{name}'\
-            f'_kf{bool2int(self.perlin_k_flatten)}'\
-            f'_lw{bool2int(self.perlin_layerwise)}'\
-            f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}'
+        postfixes = [
+            f'kf{bool2int(self.perlin_k_flatten)}',
+            f'lw{bool2int(self.perlin_layerwise)}',
+            f'{self.attention_method}',
+            f'k{self.perlin_k}' if self.perlin_k != 7 else '',
+            f'full' if not self.perlin_lora else '',
+            f'pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else '',
+            f'nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else '',
+            f'rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else '',
+            f'tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else '',
+            f'kdim_{self.perlin_k_flatten_dim}' if self.perlin_k_flatten_dim != 'batch' else '',
+            f'nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else '',
+            f'pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else '',
+            f'pbe{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else '',
+            f'epl' if self.perlin_enc_per_layer else '',
+            f'com_{self.perlin_context_output_method}' if self.perlin_context_output_method != 'norm' else '',
+            f'kover_{self.perlin_k_oversample}' if self.perlin_k_oversample != 1.0 else '',
+        ]
+        postfix = ''
+        for p in postfixes:
+            if len(p) > 0:
+                postfix += f'_{p}'
+        name = f'{name}{postfix}'
+        return name
+            
+        # name_k_window_size = f'_k{self.perlin_k}' if self.perlin_k != 7 else ''
+        # name_k_flatten_dim = f'_kdim_{self.perlin_k_flatten_dim}' if self.perlin_k_flatten_dim != 'batch' else ''
+        # name_lora = '_full' if not self.perlin_lora else ''
+        # name_predictor = f'_pred{self.perlin_attention_predictor_method}' if self.perlin_attention_predictor_method != 'mlp' else ''
+        # name_nbf = f'_nbf{self.perlin_performer_nb_feature_factor}' if self.perlin_performer_nb_feature_factor != 1 else ''
+        # name_random_lookup = f'_rl_c{self.perlin_random_lookup_count}' if self.perlin_random_lookup else ''
+        # name_tome = f'_tome_r{self.perlin_token_merging_ratio}_p{self.perlin_token_merging_preserve}' if self.perlin_token_merging else ''
+        # name_nhash = f'_nhash{self.perlin_n_hashs}' if self.perlin_n_hashs != 8 else ''
+        # name_predictor_length = f'_pw{self.perlin_predictor_length}' if self.perlin_predictor_length != 256 else ''
+        # name_predictor_backend = f'_pw{self.perlin_predictor_backend}' if self.perlin_predictor_backend != 'performer' else ''
+        # name_enc_per_layer = f'_epl' if self.perlin_enc_per_layer else ''
+        # name = f'{name}'\
+        #     f'_kf{bool2int(self.perlin_k_flatten)}'\
+        #     f'_lw{bool2int(self.perlin_layerwise)}'\
+        #     f'_{self.attention_method}{name_k_window_size}{name_lora}{name_predictor}{name_nbf}{name_random_lookup}{name_tome}{name_k_flatten_dim}{name_nhash}{name_predictor_length}{name_predictor_backend}{name_enc_per_layer}'
         return name
 
     def get_global_config(self):
@@ -205,7 +257,7 @@ class GlueTrainer(BaseGlueTrainer, BaseTrainer):
     ):
         BaseTrainer.__init__(self, **kwargs)
         
-        # NOTE HJ origimal batch sizes
+        # NOTE origimal batch sizes
         # task_to_batch_size = {
         #     "cola": 64,
         #     "mnli": 4,
@@ -309,7 +361,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
         
         model_config = {
             'opt-125m': {
-                'wikitext2': 'Aalaa/opt-125m-wikitext2'
+                'wikitext2': 'Aalaa/opt-125m-wikitext2' if os.environ.get('FORCE_OPENWEBTEXT', '0') == '0' else 'facebook/opt-125m'
             },
             'opt-350m': {
                 'wikitext2': 'lnair/opt-350m-wikitext2'
@@ -321,6 +373,7 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 'wikitext2': 'lnair/opt-2.7b-wikitext2'
             }
         }[model][subset]
+        print(model_config)
         
         if eval_steps is None:
             eval_steps = {
@@ -345,10 +398,12 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
             num_steps = {
                 'wikitext2': 10000,
             }[subset]
+            
+        perlin_opt.perlin_opt.DEFAULT_METHOD = self.attention_method
         
-        def on_model_init():
-            print('on model init')
-            self.apply_model_options(self.model)
+        lr_low_scale = {'opt-2.7b': 0.05}.get(model, 0.2) if self.attention_method == 'perlin' else 1.0
+        lr_high_scale = {'opt-2.7b': 0.5}.get(model, 10.0) if self.attention_method == 'perlin' else 10.0
+        print(f'PerlinTrainer: lr_high_scale = {lr_high_scale}, lr_low_scale = {lr_low_scale}')
         
         BaseOptTrainer.__init__(self, 
             OptTrainerConfig(
@@ -360,19 +415,24 @@ class OptTrainer(BaseOptTrainer, BaseTrainer):
                 gradient_accumulation_steps=gradient_accumulation_steps,
                 gradient_checkpointing=gradient_checkpointing,
                 max_seq_len=max_seq_len,
-                lr_high_scale=10.0 if self.attention_method == 'perlin' else 10.0,
-                lr_low_scale=0.2 if self.attention_method == 'perlin' else 1.0,
+                lr_high_scale=lr_high_scale,
+                lr_low_scale=lr_low_scale,
                 additional_config=perlin_attention.get_default_config().to_json(),
                 eval_steps=eval_steps,
                 wandb_steps=wandb_steps,
                 kd_checkpointing=kd_checkpointing,
-                on_model_init=on_model_init,
+                on_model_init=self.on_model_init,
+                batch_size=int(os.environ.get('BATCH_SIZE', '1')),
             ), 
             skip_init_loaders=kwargs.get('skip_init_loaders', False), 
             deepspeed=deepspeed,
             cmd_args=cmd_args,
         )
         
+        self.apply_model_options(self.model)
+    
+    def on_model_init(self):
+        print('on model init')
         self.apply_model_options(self.model)
 
 OPT_MODELS = ['opt', 'opt-125m', 'opt-350m', 'opt-1.3b', 'opt-2.7b']
@@ -399,6 +459,8 @@ if __name__ == '__main__':
     parser.add_argument('--eval-steps', default=None, type=int)
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--kd-checkpointing', action='store_true', default=False)
+    
+    parser.add_argument('--eval', action='store_true', default=False)
     
     add_perlin_model_options(parser)
     
@@ -453,7 +515,7 @@ if __name__ == '__main__':
         trainer = LraTrainer(**kwargs)
     elif args.model in OPT_MODELS:
         kwargs['gradient_accumulation_steps'] = default(kwargs['gradient_accumulation_steps'], 8)
-        assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
+        # assert kwargs['gradient_accumulation_steps'] >= 8, "OPT's batch size is always 1, therefore this should be larger than 8"
         kwargs['cmd_args'] = args
         trainer = OptTrainer(**kwargs)
     else:
@@ -468,4 +530,61 @@ if __name__ == '__main__':
     if args.load_only_additionals:
         trainer.load_state_from_base()
 
-    trainer.main()
+    if '__CONTEXT' in os.environ:
+        model = trainer.model
+        def resize_pos_embed(model: perlin_opt.OPTForCausalLM):
+            pos_embed = model.model.decoder.embed_positions # type: perlin_opt.OPTLearnedPositionalEmbedding
+            offset = pos_embed.offset
+            w = pos_embed.weight.data
+            new_context_window = int(os.environ.get('__CONTEXT', '8192'))
+            mode = os.environ.get('__IMODE', 'bilinear')
+            w_interp = torch.concat([
+                w[:offset], 
+                torch.nn.functional.interpolate(
+                    w[offset:].unsqueeze(0).unsqueeze(0), 
+                    size=(new_context_window, w.shape[-1]), 
+                    mode=mode, 
+                    align_corners=True,
+                ).squeeze(0).squeeze(0)
+            ], dim=0)
+            assert w_interp.shape[-1] == w.shape[-1]
+            pos_embed.weight.data = w_interp
+            model.config.max_position_embeddings = new_context_window
+            for m in model.modules():
+                if hasattr(m, 'v_eye_learned_causal'):
+                    t = m.v_eye_learned_causal
+                    m.v_eye_learned_causal.data = torch.nn.functional.interpolate(
+                        t, size=(new_context_window, t.shape[-1]), mode='nearest'#, align_corners=True
+                    )
+        resize_pos_embed(trainer.model)
+        resize_pos_embed(trainer.base_model)
+        
+        stride = int(os.environ.get('__STRIDE', '2048'))
+        trainer.valid_loader.dataset.max_length = trainer.valid_loader.dataset.stride = stride
+        trainer.train_loader.dataset.max_length = trainer.train_loader.dataset.stride = stride
+        
+        print('context length is adjusted')
+    
+    if args.load_checkpoint is not None and os.environ.get('LOAD_AFTER_RESIZE', '0') == '1':
+        if args.load_checkpoint in ['auto', 'defualt', '']: 
+            trainer.load()
+        else:
+            trainer.load(args.load_checkpoint)
+    
+    if not args.eval:
+        trainer.main()
+    else:
+        force_cpu = os.environ.get('FORCE_CPU', '0') == '1'
+        if force_cpu:
+            trainer.device = 'cpu'
+            trainer.model.to('cpu')
+            trainer.base_model.to('cpu')
+        
+        eval_job = os.environ.get('EVAL_JOB', 'PPL').upper()
+        if eval_job == 'PPL':
+            ppl = trainer.evaluate()
+            os.makedirs('./cache/perlin_trainer', exist_ok=True)
+            with open('./cache/perlin_trainer/last_ppl.txt', 'w') as f:
+                f.write(f'{ppl}\n')
+        else:
+            raise Exception()

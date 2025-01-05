@@ -1,3 +1,11 @@
+"""
+Check floating point precision error on FP16 FP32 BF16
+
+Usage: python -m src.main.tests.test_perlin_opt_precision --k 64 --predictor-length 256
+
+NOTE: this test script is not maintained anymore.
+"""
+
 import torch
 import cv2
 import os
