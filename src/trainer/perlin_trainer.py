@@ -123,7 +123,7 @@ class BaseTrainer:
         self.perlin_random_lookup_count = perlin_random_lookup_count
         self.perlin_enc_per_layer = perlin_enc_per_layer
         
-        self.perlin_output_method = perlin_output_method
+        self.pelrin_performer_nb_feature_factor = perlin_performer_nb_feature_factor
         self.perlin_token_merging = perlin_token_merging
         self.perlin_token_merging_preserve = perlin_token_merging_preserve
         self.perlin_token_merging_ratio = perlin_token_merging_ratio

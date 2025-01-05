@@ -1202,10 +1202,9 @@ class PerlinAttention(nn.Module):
                             with timer("attention.bmm"), mem("attention.bmm"):
                                 partial_context_layer = torch.bmm(partial_attention_probs, v.reshape(N*H, T, HEAD_H))
                                 partial_context_layer = partial_context_layer.view(N, H, T, HEAD_H)
-            
-            warnings.warn(f'final output_method method {self.pconfig.output_method}')
+                        
                 # return DUMMY_OUTPUT #2782
-            if self.pconfig.output_method!='corigin':
+                
                 with timer("attention.avg_pool"):
                     if not self.pconfig.causal:
                         average_context_layer = (
