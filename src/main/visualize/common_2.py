@@ -56,9 +56,6 @@ def process_layer(teacher: torch.Tensor, idx: int, gs = [0.2, 0.2, 0.2, 0.2]): #
     for i in range(H):
         stacks.append(np.concatenate([
             convert_to_colormap(teacher[i].cpu().numpy(), gs[0]),
-            # convert_to_colormap(est[i].cpu().numpy(), gs[1]),
-            # convert_to_colormap(dense[i].cpu().numpy(), gs[2]),
-            # convert_to_colormap(partial[i].cpu().numpy(), gs[3]),
         ], axis=0))
     stacks = np.concatenate(stacks, axis=1)
     
@@ -74,9 +71,6 @@ def job_main(args):
     i, T, ilayer, attn = args
     img = process_layer(
         teacher=attn['teacher_attn'][i][:, :T, :T],
-        # est=attn['estimated_attn'][i][:, :T, :T],
-        # dense=attn['dense_attn'][i][:, :T, :T],
-        # partial=attn['partial_attn'][i][:, :T, :T],
         idx=ilayer,
     )
     return img
@@ -86,18 +80,9 @@ def process_batch_index(attentions: List[torch.Tensor], i: int, T: int, gs = [0.
     for ilayer, attn in enumerate(tqdm.tqdm(attentions, dynamic_ncols=True, desc='render.layer')):
         img = process_layer(
             teacher=attn['teacher_attn'][i][:, :T, :T],
-            # est=attn['estimated_attn'][i][:, :T, :T],
-            # dense=attn['dense_attn'][i][:, :T, :T],
-            # partial=attn['partial_attn'][i][:, :T, :T],
             idx=ilayer,
             gs = gs
         )
         imgs.append(img)
-    
-    # with mp.Pool(12) as pool:
-    #     N = len(attentions)
-    #     iterator = pool.imap(job_main, zip([i,]*N, [T,]*N, range(N), attentions))
-    #     for img in tqdm.tqdm(iterator, dynamic_ncols=True, desc='render.layer', total=N):
-    #         imgs.append(img)
     
     return np.concatenate(imgs, axis=0)
