@@ -483,3 +483,4 @@ if __name__ == '__main__':
     # trainer.load_state_from_base()
     # trainer.load('./saves/trainer/kd_trainer/checkpoint_mnli.pth')
     trainer.main()
+
