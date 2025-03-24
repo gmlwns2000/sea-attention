@@ -9,11 +9,11 @@ from ...utils import batch_to
 from ...models import perlin_opt
 from ...trainer.perlin_trainer import OptTrainer, add_perlin_model_options, parse_perlin_model_options
 
-from .common import (
+from .common_for_fig_10 import (
     gather_fixed_batch,
     process_batch_index,
 )
-from . import common
+from . import common_for_fig_10
 
 def main(
     dataset = 'wikitext2',
@@ -27,7 +27,7 @@ def main(
         subset=dataset,
         **kwargs,
     )
-    trainer.load(path=checkpoint_path)
+    # trainer.load(path=checkpoint_path)
     
     if evaluate:
         class OnEvaluateStep:
@@ -81,14 +81,8 @@ def main(
         for module in student.modules():
             if isinstance(module, perlin_opt.OPTAttention):
                 teacher_attn = torch.softmax(module.teacher_attention_scores, dim=-1).cpu()
-                estimated_attn = module.last_perlin_output.estimated_attention_probs.cpu()
-                dense_attn = module.last_perlin_output.dense_attention_probs.cpu()
-                partial_attn = module.last_perlin_output.partial_attention_probs.cpu()
                 mini_attentions.append({
                     'teacher_attn': teacher_attn,
-                    'estimated_attn': estimated_attn,
-                    'dense_attn': dense_attn,
-                    'partial_attn': partial_attn,
                 })
         
         if len(attentions) == 0:
@@ -104,7 +98,7 @@ def main(
     for i in range(len(batch['input_ids'])):
         token_length = batch['input_ids'].shape[-1]
         # token_length = batch['input_ids'].shape[-1]
-        common.POOL = 8
+        common_for_fig_10.POOL = 8
         img = process_batch_index(attentions, i, token_length, gs=[0.2,0.2,0.2,0.2])
         layer_dir = f"./plots/visualize_opt/{dataset}_{i}"
         os.makedirs(layer_dir, exist_ok=True)
